@@ -1,0 +1,39 @@
+# 构建产物
+/build/
+*.exe
+*.dll
+*.lib
+*.pdb
+*.obj
+*.ilk
+*.exp
+*.idb
+
+# IDE / 编辑器
+.vs/
+.vscode/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# 本地工具/会话状态（不提交）
+.omo/
+.sisyphus/
+.codegraph/
+.agents/
+*.local.md
+
+# 日志与临时文件
+*.log
+stderr.txt
+stdout.txt
+*.tmp
+*.dmp
+
+# CMake 缓存
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake.in
