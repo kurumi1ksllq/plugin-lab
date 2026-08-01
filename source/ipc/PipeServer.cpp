@@ -22,10 +22,18 @@ void PipeServer::shutdown()
 {
     if (isThreadRunning())
     {
-        if (hPipe != nullptr)
         {
-            CloseHandle ((HANDLE) hPipe);
-            hPipe = nullptr;
+            const juce::ScopedLock sl (lock);
+            if (hPipe != nullptr)
+            {
+                // CancelIoEx completes a pending overlapped ConnectNamedPipe
+                // (or a synchronous ReadFile) so CloseHandle returns
+                // immediately instead of blocking. Closing the handle also
+                // wakes a synchronous ReadFile.
+                ::CancelIoEx ((HANDLE) hPipe, nullptr);
+                ::CloseHandle ((HANDLE) hPipe);
+                hPipe = nullptr;
+            }
         }
         stopThread (5000);
     }
@@ -41,7 +49,7 @@ void PipeServer::run()
     {
         HANDLE pipe = CreateNamedPipeA (
             "\\\\.\\pipe\\PluginLab",
-            PIPE_ACCESS_DUPLEX,
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
             PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
             PIPE_UNLIMITED_INSTANCES,
             bufferSize, bufferSize,
@@ -53,16 +61,51 @@ void PipeServer::run()
             continue;
         }
 
-        hPipe = pipe;
-
-        if (! ConnectNamedPipe (pipe, nullptr))
+        // Assign before ConnectNamedPipe so shutdown() can CancelIoEx/CloseHandle it.
         {
-            if (GetLastError() != ERROR_PIPE_CONNECTED)
+            const juce::ScopedLock sl (lock);
+            hPipe = pipe;
+        }
+
+        // Overlapped connect: unlike the synchronous ConnectNamedPipe, it can be
+        // interrupted by shutdown(), so window close stays responsive.
+        OVERLAPPED ov = {};
+        ov.hEvent = ::CreateEventW (nullptr, TRUE, FALSE, nullptr);
+
+        BOOL connected = ::ConnectNamedPipe (pipe, &ov);
+        DWORD connectError = ::GetLastError();
+        if (! connected && connectError == ERROR_IO_PENDING)
+        {
+            // Wait for the connection, polling shutdown()'s exit flag so a
+            // connect can never outlive shutdown (a fresh pipe created in the
+            // shutdown race window gets abandoned within 50ms).
+            while (! threadShouldExit())
             {
-                CloseHandle (pipe);
-                hPipe = nullptr;
-                continue;
+                if (::WaitForSingleObject (ov.hEvent, 50) == WAIT_OBJECT_0)
+                    break;
             }
+
+            if (! threadShouldExit())
+            {
+                DWORD bytes = 0;
+                connected = ::GetOverlappedResult (pipe, &ov, &bytes, FALSE);
+                connectError = ::GetLastError();
+            }
+        }
+
+        if (ov.hEvent != nullptr)
+            ::CloseHandle (ov.hEvent);
+
+        if (! connected && connectError != ERROR_PIPE_CONNECTED)
+        {
+            // Connection failed or was cancelled by shutdown() — close exactly
+            // once (shutdown() may have already closed the handle) and loop
+            // back; the loop condition picks up threadShouldExit().
+            const juce::ScopedLock sl (lock);
+            if (hPipe != nullptr)
+                ::CloseHandle (pipe);
+            hPipe = nullptr;
+            continue;
         }
 
         clientConnected = true;
@@ -93,8 +136,16 @@ void PipeServer::run()
         }
 
         clientConnected = false;
-        hPipe = nullptr;
-        DisconnectNamedPipe (pipe);
-        CloseHandle (pipe);
+        {
+            // Close exactly once: shutdown() may have already closed the
+            // handle to wake the synchronous ReadFile above.
+            const juce::ScopedLock sl (lock);
+            if (hPipe != nullptr)
+            {
+                DisconnectNamedPipe (pipe);
+                ::CloseHandle (pipe);
+                hPipe = nullptr;
+            }
+        }
     }
 }

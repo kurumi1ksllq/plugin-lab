@@ -21,10 +21,11 @@ target_sources(unit_tests PRIVATE
     ../source/analysis/CompressionCurve.cpp ../source/analysis/Export.cpp
     ../source/utils/FftHelper.cpp ../source/utils/MathUtils.cpp
     ../source/ipc/CommandParser.cpp
+    ../source/ipc/PipeServer.cpp
     ../source/host/PluginManager.cpp
     CommandParserStubs.cpp
     TestPlugin.h TestPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp FreqResponseTests.cpp ExportTests.cpp
-    CommandParserTests.cpp)
+    CommandParserTests.cpp PipeServerTests.cpp)
 target_link_libraries(unit_tests PRIVATE
     juce::juce_audio_basics juce::juce_audio_processors juce::juce_audio_utils juce::juce_dsp
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags
