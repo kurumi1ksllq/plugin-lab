@@ -5,6 +5,7 @@
 #include "utils/CrashLog.h"
 #include "ipc/PipeServer.h"
 #include "ipc/CommandParser.h"
+#include "ipc/Protocol.h"
 #include "capture/MeasurementSession.h"
 #include "analysis/FreqResponse.h"
 #include <atomic>
@@ -89,6 +90,30 @@ public:
         phasePlot->setAutoFitY (true);
         addAndMakeVisible (phasePlot.get());
 
+        // Measurement control row (right panel, above the plots).
+        // Frequency response is wired end-to-end; harmonic/compression are
+        // placeholders until phase 2 (they only report "not wired yet").
+        measureFreqButton.reset (new juce::TextButton ("Freq Response"));
+        measureFreqButton->onClick = [this]
+        {
+            startMeasurement (juce::String (Protocol::MeasureType::freq));
+        };
+        addAndMakeVisible (measureFreqButton.get());
+
+        measureHarmonicButton.reset (new juce::TextButton ("Harmonic"));
+        measureHarmonicButton->onClick = [this]
+        {
+            startMeasurement (juce::String (Protocol::MeasureType::harmonic));
+        };
+        addAndMakeVisible (measureHarmonicButton.get());
+
+        measureCompressionButton.reset (new juce::TextButton ("Compression"));
+        measureCompressionButton->onClick = [this]
+        {
+            startMeasurement (juce::String (Protocol::MeasureType::compression));
+        };
+        addAndMakeVisible (measureCompressionButton.get());
+
         pluginManager.reset (new PluginManager());
         threadPool = std::make_unique<juce::ThreadPool> (2);
 
@@ -163,8 +188,20 @@ public:
             pluginListBox->setBounds (leftPanel);
         }
 
-        // Right panel: magnitude plot on top (~65%), phase plot below (~35%).
+        // Right panel: measurement control row on top (~30 px), then the
+        // magnitude plot (~65%) and phase plot (~35%) below.
         auto plotArea = area;
+        auto measureRow = plotArea.removeFromTop (30).reduced (0, 2);
+        {
+            const int gap = 6;
+            const int btnW = (measureRow.getWidth() - 2 * gap) / 3;
+            measureFreqButton->setBounds (measureRow.removeFromLeft (btnW));
+            measureRow.removeFromLeft (gap);
+            measureHarmonicButton->setBounds (measureRow.removeFromLeft (btnW));
+            measureRow.removeFromLeft (gap);
+            measureCompressionButton->setBounds (measureRow);
+        }
+
         auto phaseArea = plotArea.removeFromBottom (juce::roundToInt (plotArea.getHeight() * 0.35f));
         magPlot->setBounds (plotArea);
         phasePlot->setBounds (phaseArea);
@@ -481,10 +518,55 @@ private:
     }
 
     //==============================================================================
+    /** Start a measurement from the GUI.  Runs on the message thread.
+     *
+     *  Frequency response is fully wired: handleCommand executes synchronously
+     *  here (the GUI freezes ~5 s — a known Pro-Q 4 thread-affinity
+     *  requirement), and the result is pushed to the plots via
+     *  measurementCompleteCallback → handleAsyncUpdate.
+     *
+     *  Harmonic/compression are placeholders until phase 2.
+     */
+    void startMeasurement (const juce::String& type)
+    {
+        if (! pluginLoaded)
+        {
+            statusLabel->setText ("Load a plugin first", juce::dontSendNotification);
+            return;
+        }
+
+        if (type != Protocol::MeasureType::freq)
+        {
+            statusLabel->setText ("Harmonic / compression analysis arrives in phase 2",
+                                  juce::dontSendNotification);
+            return;
+        }
+
+        statusLabel->setText ("Measuring...", juce::dontSendNotification);
+
+        // Synchronous on the message thread (no IPC involved from the GUI).
+        auto response = commandParser->handleCommand (
+            R"({"cmd":"measure","type":"frequency_response"})");
+
+        // Surface errors (e.g. "measurement failed").  Success is reported by
+        // handleAsyncUpdate once the result has been rendered to the plots.
+        if (auto* obj = juce::JSON::parse (response).getDynamicObject())
+        {
+            if (! (bool) obj->getProperty (Protocol::Status::ok))
+            {
+                statusLabel->setText ("Measure failed: "
+                    + obj->getProperty (Protocol::Status::error).toString(),
+                    juce::dontSendNotification);
+            }
+        }
+    }
+
+    //==============================================================================
     void openEditorWindowFor (std::unique_ptr<juce::AudioPluginInstance> instance,
                                const juce::String& name)
     {
         unloadCurrentPlugin();
+        pluginLoaded = false;
 
         if (!instance)
         {
@@ -522,6 +604,7 @@ private:
             auto* rawInstance = editorWindow->getPluginInstance();
             commandParser->setPluginInstance (rawInstance);
             measurementSession->setPluginInstance (rawInstance);
+            pluginLoaded = true;
 
             const bool isGeneric = dynamic_cast<juce::GenericAudioProcessorEditor*> (editor) != nullptr;
             CRASH_LOG_INFO (isGeneric ? "Editor ok (generic)" : "Editor ok", name + " "
@@ -541,6 +624,7 @@ private:
     void onPluginWindowClosed()
     {
         unloadCurrentPlugin();
+        pluginLoaded = false;
         commandParser->setPluginInstance (nullptr);
         measurementSession->setPluginInstance (nullptr);
         statusLabel->setText ("Ready", juce::dontSendNotification);
@@ -572,6 +656,12 @@ private:
     std::unique_ptr<juce::ListBox> pluginListBox;
     std::unique_ptr<juce::Label> statusLabel;
     std::unique_ptr<juce::TextButton> scanButton;
+
+    // Measurement control row (right panel, above the plots)
+    std::unique_ptr<juce::TextButton> measureFreqButton;
+    std::unique_ptr<juce::TextButton> measureHarmonicButton;
+    std::unique_ptr<juce::TextButton> measureCompressionButton;
+    bool pluginLoaded = false;
 
     // Right-panel frequency-response plots
     std::unique_ptr<PlotWidget> magPlot;
