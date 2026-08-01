@@ -26,7 +26,12 @@
 3. **use-after-free 崩溃（Debug 构建 + 点击触发 0xc0000005，minidump 定位 atomic::operator++）**：`scanPlugins()`/`loadPluginByDescription()` 用 `std::thread([this]).detach()` + `callAsync([this])`，组件析构（关主窗口）时后台线程仍访问已析构的 this → 原子引用计数自增崩溃。
    - **对策**：改为 JUCE 标准 **ThreadPool + AsyncUpdater**（`threadPool->addJob(ThreadPoolJob)` + `triggerAsyncUpdate()`/`handleAsyncUpdate()`；析构时 `threadPool = nullptr` join 所有任务 + `cancelPendingUpdate()`）。
    - 已验证：快速点击 + 加载中关主窗口 3 次试验全部干净退出（修复前必崩）；全量 77 插件 76 成功（98.7%）0 崩溃。
-4. **CLion 配置**：terminal-local.xml shellPath 多余引号致 MCP 终端报错——已修复；Debug 构建下 JUCE VST3 扫描对部分商业插件触发断言（环境限制，Release 正常）。
+4. **CLion 配置**：terminal-local.xml shellPath 多余引号致 MCP 终端报错——已修复。
+5. **Debug 构建点击加载崩溃（0xc0000005，atomic++ use-after-free）**：`getPluginDescription` 返回 KnownPluginList 内部指针，锁释放后指针悬垂 → `descCopy = *desc` 拷贝时引用计数自增崩溃（Debug 暴露，Release 侥幸）。
+   - **对策**：改为锁内返回 `PluginDescription` 拷贝（`bool getPluginDescription(int, PluginDescription&)`）。
+   - 另加 `JUCE_DISABLE_ASSERTIONS=1`（Debug）：JUCE 9 VST3 headless 扫描器对商业插件触发消息线程断言（Debug-only），关闭后 Debug 扫描正常。
+   - 已验证（Debug 构建）：UIA 加载 Auto-Key 2 / Auto-Tune Pro / AutoPitchK / Avalon / Melodyne 全部 Editor ok，无崩溃；快速点击+关主窗口干净退出。
+6. **CLion 使用**：CLion 默认 Debug 构建——修复后 Debug 可正常扫描+加载插件（此前点击必崩）。如需 Release，在 CLion Settings → Build → CMake 添加 Release profile。
 
 ## 构建 & 运行
 

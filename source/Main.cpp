@@ -300,12 +300,19 @@ private:
     std::unique_ptr<juce::AudioPluginInstance> pendingInstance;
     juce::String pendingName;
 
-    juce::PluginDescription* getPluginDescription (int index)
+    // Returns a COPY of the plugin description for the given row, guarded by
+    // listLock. Returning a copy (not a pointer into the list) is essential:
+    // the scan thread may re-enter the list after the lock is released, which
+    // would leave a returned raw pointer dangling (use-after-free).
+    bool getPluginDescription (int index, juce::PluginDescription& out)
     {
         std::lock_guard<std::mutex> lock (listLock);
         auto& list = pluginManager->getKnownPlugins();
         auto types = list.getTypes();
-        return juce::isPositiveAndBelow (index, types.size()) ? &types.getReference (index) : nullptr;
+        if (! juce::isPositiveAndBelow (index, types.size()))
+            return false;
+        out = types.getReference (index);
+        return true;
     }
 
     //==============================================================================
@@ -341,10 +348,11 @@ private:
     //==============================================================================
     void loadPlugin (int index)
     {
+        // Copy the description under the lock so the scan thread can't invalidate
+        // it between lookup and copy (use-after-free).
         juce::PluginDescription descCopy;
-        auto* desc = getPluginDescription (index);
-        if (!desc) return;
-        descCopy = *desc;
+        if (! getPluginDescription (index, descCopy))
+            return;
         loadPluginByDescription (descCopy);
     }
 

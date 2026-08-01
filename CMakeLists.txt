@@ -76,6 +76,16 @@ if(WIN32)
     )
 endif()
 
+# JUCE 9's VST3 headless scanner asserts that scanning happens on the message
+# thread (JUCE_ASSERT_MESSAGE_THREAD). Commercial VST3s routinely trigger this
+# in Debug builds (and the scan itself is safe on a worker thread — JUCE's own
+# AudioPluginHost scans on a ThreadPool). Disable assertions so Debug builds
+# behave like Release; this also avoids assertion-driven jassert breaks in the
+# debugger while scanning 90+ plugins.
+if(MSVC)
+    target_compile_definitions(PluginLab PRIVATE JUCE_DISABLE_ASSERTIONS=1)
+endif()
+
 # ── Tools ───────────────────────────────────────────────────────────────────
 add_subdirectory(tools)
 
