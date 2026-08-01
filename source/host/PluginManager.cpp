@@ -73,7 +73,9 @@ std::unique_ptr<juce::AudioPluginInstance> PluginManager::loadPlugin (
             CRASH_LOG_WARN ("Plugin load failed", desc.name + ": " + errorMessage);
             return nullptr;
         }
-        instance->prepareToPlay (sampleRate, blockSize);
+        // prepareToPlay is deferred to the measurement thread (SweepRunner::run)
+        // to ensure it and processBlock run on the same thread — required by some
+        // VST3 plugins (e.g. FabFilter Pro-Q 4).
         CRASH_LOG_INFO ("Plugin load ok", desc.name);
         return instance;
     }

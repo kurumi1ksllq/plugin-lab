@@ -60,6 +60,7 @@ private:
 
     bool running = false;
     std::atomic<bool> cancelled { false };
+    bool pluginPrepared = false;  // tracks our own prepareToPlay/releaseResources
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SweepRunner)
 };

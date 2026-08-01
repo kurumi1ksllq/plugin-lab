@@ -1,4 +1,5 @@
 #include "SweepRunner.h"
+#include "../utils/CrashLog.h"
 
 void SweepRunner::prepare (double sr, int bs)
 {
@@ -32,17 +33,32 @@ bool SweepRunner::run()
     cancelled = false;
     result.clear();
 
-    // Prepare generator and plugin
+    // Prepare generator.
     generator->prepare (sampleRate, blockSize);
     generator->reset();
+
+    // Call prepareToPlay on THIS thread (IPC thread) so that it and all
+    // subsequent processBlock calls share the same thread — required by some
+    // VST3 plugins that track thread affinity (e.g. FabFilter Pro-Q 4).
+    // (prepareToPlay was intentionally removed from PluginManager::loadPlugin
+    // because that ran on a different ThreadPool thread.)
+    if (pluginPrepared)
+        plugin->releaseResources();
+    plugin->setNonRealtime (true);
     plugin->prepareToPlay (sampleRate, blockSize);
+    pluginPrepared = true;
+
+    CRASH_LOG_INFO ("Sweep start", juce::String (sampleRate) + " Hz, "
+        + juce::String (blockSize) + " samples");
 
     int64_t totalLength = generator->getTotalLength();
     if (totalLength <= 0)
         totalLength = static_cast<int64_t> (sampleRate * 10);  // fallback 10s
 
-    juce::AudioBuffer<float> dryBlock (2, blockSize);
-    juce::AudioBuffer<float> wetBlock (2, blockSize);
+    int numInputChannels  = plugin->getTotalNumInputChannels();
+    int numOutputChannels = plugin->getTotalNumOutputChannels();
+    juce::AudioBuffer<float> dryBlock (numInputChannels, blockSize);
+    juce::AudioBuffer<float> wetBlock (numOutputChannels, blockSize);
     juce::MidiBuffer emptyMidi;
 
     int64_t samplesGenerated = 0;
@@ -80,7 +96,13 @@ bool SweepRunner::run()
         }
     }
 
-    plugin->releaseResources();
+    CRASH_LOG_INFO ("Sweep done", juce::String (samplesGenerated) + " samples generated");
+    if (pluginPrepared)
+    {
+        plugin->releaseResources();
+        pluginPrepared = false;
+    }
+    plugin->setNonRealtime (false);
     running = false;
 
     return ! cancelled;

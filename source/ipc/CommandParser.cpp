@@ -103,23 +103,32 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
         session->setPluginInstance (plugin);
 
+        // Determine export path (capture before dispatching)
+        auto path = obj->getProperty ("path").toString();
+        if (path.isEmpty())
+            path = juce::File::getCurrentWorkingDirectory()
+                       .getChildFile ("pluginlab_freq_response.json")
+                       .getFullPathName();
+
         if (statusCallback)
             juce::MessageManager::callAsync ([this] { statusCallback ("Measuring..."); });
 
-        bool ok = session->run();
-
-        if (ok)
+        // Body of the measurement: run, analyse, export, build response.
+        // Extracted as a reusable lambda so both the sync (message-thread)
+        // and async (IPC-thread → message-thread dispatch) paths share it.
+        auto runMeasurement = [&]() -> juce::String
         {
-            auto& r = session->getResult();
+            if (! session->run())
+                return Protocol::makeResponse (false, R"("error":"measurement failed")");
 
-            // Run frequency response analysis
+            auto& result = session->getResult();
+
             FreqResponse fr;
             fr.setLatencySamples (plugin->getLatencySamples());
-            auto frResult = fr.analyze (r.getDryBuffer(),
-                                        r.getWetBuffer(),
-                                        r.getSampleRate());
+            auto frResult = fr.analyze (result.getDryBuffer(),
+                                        result.getWetBuffer(),
+                                        result.getSampleRate());
 
-            // Build export context
             Export::Context ctx;
             ctx.pluginName = plugin->getName();
             {
@@ -132,34 +141,43 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             ctx.blockSize       = session->getBlockSize();
             ctx.paramSnapshot   = session->getParameterSnapshot();
 
-            // Determine export path
-            auto path = obj->getProperty ("path").toString();
-            if (path.isEmpty())
-                path = juce::File::getCurrentWorkingDirectory()
-                           .getChildFile ("pluginlab_freq_response.json")
-                           .getFullPathName();
-
-            // Export to file
             auto exportJson = Export::freqResponseToJSON (frResult, ctx);
             juce::File exportFile (path);
             Export::writeToFile (exportJson, exportFile);
 
-            // Fire callback on the message thread (the IPC thread never touches UI)
+            // measurementCompleteCallback is fired synchronously on the
+            // measurement thread — unit tests assert this timing.
             if (measurementCompleteCallback)
-            {
-                auto resultCopy = frResult;
-                juce::MessageManager::callAsync ([this, resultCopy]
-                {
-                    measurementCompleteCallback (resultCopy);
-                });
-            }
+                measurementCompleteCallback (frResult);
 
-            juce::String d = R"("samples":)" + juce::String (r.getNumRecordedSamples())
-                           + R"(,"rate":)"    + juce::String (r.getSampleRate())
+            juce::String d = R"("samples":)" + juce::String (result.getNumRecordedSamples())
+                           + R"(,"rate":)"    + juce::String (result.getSampleRate())
                            + R"(,"export_path":")" + path.quoted() + R"(")";
             return Protocol::makeResponse (true, d);
+        };
+
+        // Dispatch strategy:
+        //   - already on the message thread (unit tests, or when called from
+        //     within a message callback):  execute synchronously.
+        //   - any other thread (real IPC PipeServer thread):  dispatch via
+        //     callAsync + WaitableEvent so processBlock runs on the message
+        //     thread (required by Pro-Q 4 and similar VST3 plugins).
+        if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+        {
+            return runMeasurement();
         }
-        return Protocol::makeResponse (false, R"("error":"measurement failed")");
+
+        juce::WaitableEvent done;
+        juce::String response;
+
+        juce::MessageManager::callAsync ([&]
+        {
+            response = runMeasurement();
+            done.signal();
+        });
+
+        done.wait();
+        return response;
     }
 
     // --- stop ---
