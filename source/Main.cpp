@@ -1,6 +1,7 @@
 #include <JuceHeader.h>
 #include "host/PluginManager.h"
 #include "ui/PluginEditorWindow.h"
+#include "ui/PlotWidget.h"
 #include "utils/CrashLog.h"
 #include "ipc/PipeServer.h"
 #include "ipc/CommandParser.h"
@@ -75,6 +76,19 @@ public:
         scanButton->onClick = [this] { scanPlugins(); };
         addAndMakeVisible (scanButton.get());
 
+        // Right-panel frequency-response plots (magnitude on top, phase below).
+        magPlot.reset (new PlotWidget());
+        magPlot->setAxisLabels ("Frequency (Hz)", "Magnitude (dB)");
+        magPlot->setXAxisLog (true);
+        magPlot->setAutoFitY (true);
+        addAndMakeVisible (magPlot.get());
+
+        phasePlot.reset (new PlotWidget());
+        phasePlot->setAxisLabels ("Frequency (Hz)", "Phase (degrees)");
+        phasePlot->setXAxisLog (true);
+        phasePlot->setAutoFitY (true);
+        addAndMakeVisible (phasePlot.get());
+
         pluginManager.reset (new PluginManager());
         threadPool = std::make_unique<juce::ThreadPool> (2);
 
@@ -148,6 +162,12 @@ public:
             statusLabel->setBounds (header);
             pluginListBox->setBounds (leftPanel);
         }
+
+        // Right panel: magnitude plot on top (~65%), phase plot below (~35%).
+        auto plotArea = area;
+        auto phaseArea = plotArea.removeFromBottom (juce::roundToInt (plotArea.getHeight() * 0.35f));
+        magPlot->setBounds (plotArea);
+        phasePlot->setBounds (phaseArea);
     }
 
     //==============================================================================
@@ -246,13 +266,56 @@ public:
             }
         }
 
-        // Process measurement-complete notification (T6 will render the curve).
+        // Render the measurement result on the right-panel plots.
         if (hasMeasurement)
         {
             hasMeasurement = false;
+
+            // Empty-result guard: leave the plots untouched.
+            if (measurementResult.raw.empty())
+            {
+                statusLabel->setText ("Measurement complete (no data)",
+                                      juce::dontSendNotification);
+                return;
+            }
+
             statusLabel->setText ("Measurement complete: "
                 + juce::String (static_cast<int> (measurementResult.raw.size()))
                 + " frequency points", juce::dontSendNotification);
+
+            // Magnitude curve (cyan).
+            PlotWidget::Series magSeries;
+            magSeries.name = "Magnitude";
+            magSeries.colour = juce::Colours::cyan;
+            magSeries.lineWidth = 2.0f;
+            magSeries.x.reserve (measurementResult.raw.size());
+            magSeries.y.reserve (measurementResult.raw.size());
+            for (const auto& p : measurementResult.raw)
+            {
+                magSeries.x.push_back (static_cast<float> (p.frequency));
+                magSeries.y.push_back (static_cast<float> (p.magnitudeDB));
+            }
+
+            magPlot->clear();
+            magPlot->addSeries (std::move (magSeries));
+            magPlot->repaint();
+
+            // Phase curve (yellow).
+            PlotWidget::Series phaseSeries;
+            phaseSeries.name = "Phase";
+            phaseSeries.colour = juce::Colours::yellow;
+            phaseSeries.lineWidth = 2.0f;
+            phaseSeries.x.reserve (measurementResult.raw.size());
+            phaseSeries.y.reserve (measurementResult.raw.size());
+            for (const auto& p : measurementResult.raw)
+            {
+                phaseSeries.x.push_back (static_cast<float> (p.frequency));
+                phaseSeries.y.push_back (static_cast<float> (p.phaseDeg));
+            }
+
+            phasePlot->clear();
+            phasePlot->addSeries (std::move (phaseSeries));
+            phasePlot->repaint();
         }
     }
 
@@ -509,6 +572,10 @@ private:
     std::unique_ptr<juce::ListBox> pluginListBox;
     std::unique_ptr<juce::Label> statusLabel;
     std::unique_ptr<juce::TextButton> scanButton;
+
+    // Right-panel frequency-response plots
+    std::unique_ptr<PlotWidget> magPlot;
+    std::unique_ptr<PlotWidget> phasePlot;
 
     std::unique_ptr<PluginEditorWindow> editorWindow;
 

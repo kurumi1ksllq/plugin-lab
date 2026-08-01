@@ -1,5 +1,17 @@
 #include "PlotWidget.h"
 #include <cmath>
+#include <limits>
+
+namespace
+{
+    /** Format a frequency value as a compact decade label (e.g. "1k", "10k", "20"). */
+    juce::String formatFrequency (float f)
+    {
+        if (f >= 1.0e6f)  return juce::String (f / 1.0e6f, 2) + "M";
+        if (f >= 1.0e3f)  return juce::String (f / 1.0e3f, 2) + "k";
+        return juce::String (f, 0);
+    }
+}
 
 PlotWidget::PlotWidget()
 {
@@ -47,6 +59,12 @@ void PlotWidget::setYRange (float mn, float mx)
     repaint();
 }
 
+void PlotWidget::setXAxisLog (bool logXEnabled)
+{
+    logX = logXEnabled;
+    repaint();
+}
+
 juce::Rectangle<float> PlotWidget::getPlotArea() const
 {
     auto bounds = getLocalBounds().toFloat();
@@ -62,6 +80,10 @@ void PlotWidget::calcAutoFit()
     {
         for (size_t i = 0; i < s.x.size() && i < s.y.size(); ++i)
         {
+            // Points with non-positive X can't be shown on a log axis — skip them.
+            if (logX && s.x[i] <= 0.0f)
+                continue;
+
             if (first)
             {
                 if (autoFitX) { xMin = xMax = s.x[i]; }
@@ -76,12 +98,21 @@ void PlotWidget::calcAutoFit()
         }
     }
 
-    // Add 10% padding
+    // Add 10% padding (log axis pads by a factor so the decade span grows by 20%).
     if (autoFitX && xMax > xMin)
     {
-        float pad = (xMax - xMin) * 0.1f;
-        xMin -= pad;
-        xMax += pad;
+        if (logX && xMin > 0.0f)
+        {
+            float padFactor = std::pow (10.0f, std::log10 (xMax / xMin) * 0.1f);
+            xMin /= padFactor;
+            xMax *= padFactor;
+        }
+        else
+        {
+            float pad = (xMax - xMin) * 0.1f;
+            xMin -= pad;
+            xMax += pad;
+        }
     }
     if (autoFitY && yMax > yMin)
     {
@@ -101,7 +132,23 @@ void PlotWidget::calcAutoFit()
 juce::Point<float> PlotWidget::dataToScreen (float x, float y,
                                                juce::Rectangle<float> area) const
 {
-    float sx = area.getX() + (x - xMin) / (xMax - xMin) * area.getWidth();
+    float sx;
+    if (logX)
+    {
+        // Log mapping: clamp non-positive X to the (positive) range floor so
+        // degenerate points land on the left edge instead of producing NaN.
+        const float xMinSafe = std::max (xMin, std::numeric_limits<float>::epsilon());
+        const float xMaxSafe = std::max (xMax, xMinSafe);
+        const float xSafe    = std::max (x, xMinSafe);
+        const float logMin   = std::log10 (xMinSafe);
+        const float logSpan  = std::max (std::log10 (xMaxSafe) - logMin, 1.0e-6f);
+        sx = area.getX() + (std::log10 (xSafe) - logMin) / logSpan * area.getWidth();
+    }
+    else
+    {
+        sx = area.getX() + (x - xMin) / (xMax - xMin) * area.getWidth();
+    }
+
     float sy = area.getBottom() - (y - yMin) / (yMax - yMin) * area.getHeight();
     return { sx, sy };
 }
@@ -186,22 +233,54 @@ void PlotWidget::paint (juce::Graphics& g)
 
     // --- Tick labels ---
     g.setFont (juce::FontOptions (10.0f));
-    int numTicks = 6;
-    for (int i = 0; i <= numTicks; ++i)
+
+    if (logX)
     {
-        float t = (float) i / numTicks;
-        float xVal = xMin + t * (xMax - xMin);
+        // Decade ticks on a log axis (10/100/1k/10k ...), using original X values.
+        const float xMinSafe = std::max (xMin, std::numeric_limits<float>::epsilon());
+        const float logMin   = std::log10 (xMinSafe);
+        const float logSpan  = std::max (std::log10 (std::max (xMax, xMinSafe)) - logMin,
+                                         1.0e-6f);
+
+        int firstDecade = (int) std::ceil (logMin);
+        int lastDecade  = (int) std::floor (std::log10 (std::max (xMax, xMinSafe)));
+        const int maxDecades = 10;
+        int step = (lastDecade - firstDecade + 1 > maxDecades)
+                       ? (lastDecade - firstDecade + 1 + maxDecades - 1) / maxDecades
+                       : 1;
+
+        for (int d = firstDecade; d <= lastDecade; d += step)
+        {
+            float t = ((float) d - logMin) / logSpan;
+            float sx = plotArea.getX() + t * plotArea.getWidth();
+            g.drawText (formatFrequency (std::pow (10.0f, (float) d)),
+                        (int) sx - 25, (int) plotArea.getBottom() + 2, 50, 12,
+                        juce::Justification::centred);
+        }
+    }
+    else
+    {
+        int numTicks = 6;
+        for (int i = 0; i <= numTicks; ++i)
+        {
+            float t = (float) i / numTicks;
+            float xVal = xMin + t * (xMax - xMin);
+            float sx = plotArea.getX() + t * plotArea.getWidth();
+            g.drawText (juce::String (xVal, 1),
+                        (int) sx - 25, (int) plotArea.getBottom() + 2, 50, 12,
+                        juce::Justification::centred);
+        }
+    }
+
+    // Y ticks (always uniform — only X is log-scaled).
+    int numYTicks = 6;
+    for (int i = 0; i <= numYTicks; ++i)
+    {
+        float t = (float) i / numYTicks;
         float yVal = yMin + t * (yMax - yMin);
-
-        juce::String xStr = juce::String (xVal, 1);
-        juce::String yStr = juce::String (yVal, 1);
-
-        float sx = plotArea.getX() + t * plotArea.getWidth();
         float sy = plotArea.getY() + t * plotArea.getHeight();
-
-        g.drawText (xStr, (int) sx - 25, (int) plotArea.getBottom() + 2, 50, 12,
-                    juce::Justification::centred);
-        g.drawText (yStr, (int) plotArea.getX() - 52, (int) sy - 6, 48, 12,
+        g.drawText (juce::String (yVal, 1),
+                    (int) plotArea.getX() - 52, (int) sy - 6, 48, 12,
                     juce::Justification::centredRight);
     }
 

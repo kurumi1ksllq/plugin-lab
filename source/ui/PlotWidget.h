@@ -46,6 +46,9 @@ public:
     void setShowGrid (bool show)     { showGrid = show; }
     void setShowLegend (bool show)   { showLegend = show; }
 
+    /** Use a log-scale X axis (for frequency-domain plots). Linear by default. */
+    void setXAxisLog (bool logXEnabled);
+
     //==============================================================================
     void paint (juce::Graphics& g) override;
     void resized() override;
@@ -56,6 +59,7 @@ private:
     float yMin = 0, yMax = 0;
     bool autoFitX = true, autoFitY = true;
     bool showGrid = true, showLegend = true;
+    bool logX = false;
 
     std::vector<Series> seriesList;
 
