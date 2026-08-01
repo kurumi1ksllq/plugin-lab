@@ -55,6 +55,12 @@ public:
     /** Get the measurement type. */
     Type getType() const { return type; }
 
+    /** Get the configured sample rate. */
+    double getSampleRate() const { return sampleRate; }
+
+    /** Get the configured block size. */
+    int getBlockSize() const { return blockSize; }
+
     /** Get progress (0.0 - 1.0). */
     float getProgress() const { return lastProgress; }
 

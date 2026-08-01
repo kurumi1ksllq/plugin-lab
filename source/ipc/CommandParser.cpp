@@ -1,5 +1,6 @@
 #include "CommandParser.h"
 #include "Protocol.h"
+#include "../analysis/Export.h"
 
 juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 {
@@ -110,8 +111,52 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         if (ok)
         {
             auto& r = session->getResult();
+
+            // Run frequency response analysis
+            FreqResponse fr;
+            fr.setLatencySamples (plugin->getLatencySamples());
+            auto frResult = fr.analyze (r.getDryBuffer(),
+                                        r.getWetBuffer(),
+                                        r.getSampleRate());
+
+            // Build export context
+            Export::Context ctx;
+            ctx.pluginName = plugin->getName();
+            {
+                juce::PluginDescription desc;
+                plugin->fillInPluginDescription (desc);
+                ctx.classId = desc.fileOrIdentifier;
+            }
+            ctx.latencySamples = plugin->getLatencySamples();
+            ctx.sampleRate     = session->getSampleRate();
+            ctx.blockSize       = session->getBlockSize();
+            ctx.paramSnapshot   = session->getParameterSnapshot();
+
+            // Determine export path
+            auto path = obj->getProperty ("path").toString();
+            if (path.isEmpty())
+                path = juce::File::getCurrentWorkingDirectory()
+                           .getChildFile ("pluginlab_freq_response.json")
+                           .getFullPathName();
+
+            // Export to file
+            auto exportJson = Export::freqResponseToJSON (frResult, ctx);
+            juce::File exportFile (path);
+            Export::writeToFile (exportJson, exportFile);
+
+            // Fire callback on the message thread (the IPC thread never touches UI)
+            if (measurementCompleteCallback)
+            {
+                auto resultCopy = frResult;
+                juce::MessageManager::callAsync ([this, resultCopy]
+                {
+                    measurementCompleteCallback (resultCopy);
+                });
+            }
+
             juce::String d = R"("samples":)" + juce::String (r.getNumRecordedSamples())
-                           + R"(,"rate":)" + juce::String (r.getSampleRate());
+                           + R"(,"rate":)"    + juce::String (r.getSampleRate())
+                           + R"(,"export_path":")" + path.quoted() + R"(")";
             return Protocol::makeResponse (true, d);
         }
         return Protocol::makeResponse (false, R"("error":"measurement failed")");

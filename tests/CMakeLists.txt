@@ -21,11 +21,10 @@ target_sources(unit_tests PRIVATE
     ../source/analysis/CompressionCurve.cpp ../source/analysis/Export.cpp
     ../source/utils/FftHelper.cpp ../source/utils/MathUtils.cpp
     ../source/ipc/CommandParser.cpp
-    TestPlugin.h TestPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp FreqResponseTests.cpp ExportTests.cpp)
-# Note: source/host/PluginManager.cpp is intentionally NOT included in this
-# target. It compiles cleanly, but links against EditorCrashGuard (GUI) and
-# CrashLog, which are excluded from the test target by design. loadPlugin
-# unit tests are covered by the T8 end-to-end tests instead.
+    ../source/host/PluginManager.cpp
+    CommandParserStubs.cpp
+    TestPlugin.h TestPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp FreqResponseTests.cpp ExportTests.cpp
+    CommandParserTests.cpp)
 target_link_libraries(unit_tests PRIVATE
     juce::juce_audio_basics juce::juce_audio_processors juce::juce_audio_utils juce::juce_dsp
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags
@@ -35,6 +34,7 @@ if(MSVC)
 endif()
 if(WIN32)
     target_compile_definitions(unit_tests PRIVATE
-        JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_PLUGINHOST_VST3=1)
+        JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_PLUGINHOST_VST3=1
+        JUCE_MODAL_LOOPS_PERMITTED=1)
 endif()
 catch_discover_tests(unit_tests)

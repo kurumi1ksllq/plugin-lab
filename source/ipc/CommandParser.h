@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include "../host/PluginManager.h"
 #include "../capture/MeasurementSession.h"
+#include "../analysis/FreqResponse.h"
 
 /**
  * Parses incoming JSON commands and dispatches them to the
@@ -39,6 +40,13 @@ public:
         statusCallback = std::move (cb);
     }
 
+    /** Set a callback invoked on the message thread after measurement
+     *  completes (analysis + export finished). */
+    void setMeasurementCompleteCallback (std::function<void(const FreqResponse::Result&)> cb)
+    {
+        measurementCompleteCallback = std::move (cb);
+    }
+
     //==============================================================================
     /** Process a JSON command and return a JSON response. */
     juce::String handleCommand (const juce::String& jsonCommand);
@@ -50,6 +58,7 @@ private:
 
     std::function<void(const juce::PluginDescription&)> loadPluginCallback;
     std::function<void(const juce::String&)> statusCallback;
+    std::function<void(const FreqResponse::Result&)> measurementCompleteCallback;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CommandParser)
 };
