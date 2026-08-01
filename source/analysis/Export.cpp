@@ -8,14 +8,49 @@ static juce::String fmtDouble (double v, int precision = 2)
     return juce::String (v, precision);
 }
 
+/** Escape a string so it is safe to embed inside a JSON string literal. */
+static juce::String escapeJsonString (const juce::String& s)
+{
+    juce::String out;
+    out.preallocateBytes (s.getNumBytesAsUTF8() + 16);
+
+    for (auto c : s)
+    {
+        switch (c)
+        {
+            case '\\': out += "\\\\"; break;
+            case '"':  out += "\\\""; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (c < 32)
+                    out += juce::String::formatted ("\\u%04x", (int) c);
+                else
+                    out += c;
+        }
+    }
+
+    return out;
+}
+
 juce::String freqResponseToJSON (const FreqResponse::Result& result,
-                                  const juce::String& pluginName)
+                                  const Export::Context& context)
 {
     juce::String json;
     json += "{\n";
     json += "  \"type\": \"frequency_response\",\n";
-    json += "  \"plugin\": \"" + pluginName.quoted() + "\",\n";
-    json += "  \"sample_rate\": " + juce::String (result.sampleRate) + ",\n";
+    json += "  \"plugin\": \"" + escapeJsonString (context.pluginName) + "\",\n";
+    json += "  \"class_id\": \"" + escapeJsonString (context.classId) + "\",\n";
+    json += "  \"latency_samples\": " + juce::String (context.latencySamples) + ",\n";
+    json += "  \"sample_rate\": " + juce::String (context.sampleRate) + ",\n";
+    json += "  \"measurement\": {\n";
+    json += "    \"sample_rate\": " + juce::String (context.sampleRate) + ",\n";
+    json += "    \"block_size\": " + juce::String (context.blockSize) + "\n";
+    json += "  },\n";
+    // paramSnapshot is a JSON object string already; keep it valid even if empty.
+    json += "  \"parameter_snapshot\": "
+            + (context.paramSnapshot.isNotEmpty() ? context.paramSnapshot : juce::String ("{}")) + ",\n";
 
     auto writePoints = [&](const juce::String& name,
                             const std::vector<FreqResponse::Point>& points)
@@ -34,15 +69,21 @@ juce::String freqResponseToJSON (const FreqResponse::Result& result,
 
     writePoints ("raw", result.raw);
     writePoints ("smoothed_1_12", result.smoothed_1_12);
-    // Remove trailing comma for last item
+    writePoints ("smoothed_1_3", result.smoothed_1_3);
+
+    // Remove trailing comma of the last array, then close the object.
     json = json.dropLastCharacters (2);  // remove ",\n"
     json += "\n";
-    writePoints ("smoothed_1_3", result.smoothed_1_3);
-    json = json.dropLastCharacters (2);
-    json += "\n  }";
-
     json += "}\n";
     return json;
+}
+
+juce::String freqResponseToJSON (const FreqResponse::Result& result,
+                                  const juce::String& pluginName)
+{
+    Context context;
+    context.pluginName = pluginName;
+    return freqResponseToJSON (result, context);
 }
 
 juce::String harmonicAnalysisToJSON (const HarmonicAnalysis::Result& result,
@@ -51,7 +92,7 @@ juce::String harmonicAnalysisToJSON (const HarmonicAnalysis::Result& result,
     juce::String json;
     json += "{\n";
     json += "  \"type\": \"harmonic_analysis\",\n";
-    json += "  \"plugin\": \"" + pluginName.quoted() + "\",\n";
+    json += "  \"plugin\": \"" + escapeJsonString (pluginName) + "\",\n";
     json += "  \"sample_rate\": " + juce::String (result.sampleRate) + ",\n";
     json += "  \"tones\": [\n";
 
@@ -92,7 +133,7 @@ juce::String compressionCurveToJSON (const CompressionCurve::Result& result,
     juce::String json;
     json += "{\n";
     json += "  \"type\": \"compression_curve\",\n";
-    json += "  \"plugin\": \"" + pluginName.quoted() + "\",\n";
+    json += "  \"plugin\": \"" + escapeJsonString (pluginName) + "\",\n";
     json += "  \"curve\": [\n";
 
     for (size_t i = 0; i < result.curve.size(); ++i)

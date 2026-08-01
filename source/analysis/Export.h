@@ -13,9 +13,26 @@ namespace Export
 {
 
     //==============================================================================
+    /** Measurement context attached to an export so that the consumer can
+     *  reproduce the exact measurement setup. */
+    struct Context
+    {
+        juce::String pluginName;
+        juce::String classId;
+        int latencySamples = 0;
+        double sampleRate = 0.0;
+        int blockSize = 0;
+        juce::String paramSnapshot;  // JSON object string produced by MeasurementSession
+    };
+
+    //==============================================================================
     /** Export frequency response to JSON string. */
     juce::String freqResponseToJSON (const FreqResponse::Result& result,
                                       const juce::String& pluginName = "Unknown");
+
+    /** Export frequency response with full measurement context to JSON string. */
+    juce::String freqResponseToJSON (const FreqResponse::Result& result,
+                                      const Context& context);
 
     /** Export harmonic analysis to JSON string. */
     juce::String harmonicAnalysisToJSON (const HarmonicAnalysis::Result& result,

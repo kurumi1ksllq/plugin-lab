@@ -21,7 +21,7 @@ target_sources(unit_tests PRIVATE
     ../source/analysis/CompressionCurve.cpp ../source/analysis/Export.cpp
     ../source/utils/FftHelper.cpp ../source/utils/MathUtils.cpp
     ../source/ipc/CommandParser.cpp
-    TestPlugin.h TestPluginTests.cpp)
+    TestPlugin.h TestPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp FreqResponseTests.cpp ExportTests.cpp)
 # Note: source/host/PluginManager.cpp is intentionally NOT included in this
 # target. It compiles cleanly, but links against EditorCrashGuard (GUI) and
 # CrashLog, which are excluded from the test target by design. loadPlugin
