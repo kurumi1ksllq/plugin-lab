@@ -69,13 +69,32 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 ## 待办（下一步）
 
-- **T3 数据记录系统**（2026-08-02 定稿，详见 DESIGN.md §8）三阶段：
-  - 阶段 1：修复 4 个已知 bug（见下）+ 恢复 IPC → measure 三件套 + Bypass 对比 + 元数据/配置导出
-  - 阶段 2：FilePlayback（vocal 回放）+ AnalysisStrategy + ParameterTimeline + WAV 双轨导出
-  - 阶段 3：PlotWidget 接线 + GR 表头逐块回调
+- **T3 数据记录系统**（2026-08-02 定稿，详见 DESIGN.md §8）：
+  - **阶段 1 ✅ 已完成（2026-08-02）**：测试设施 + 4 bug 修复 + IPC 恢复 + EQ 测量接通 + 右面板曲线 + Pro-Q 4 验收通过（见下"阶段 1 完成记录"）
+  - 阶段 2：FilePlayback（vocal 回放）+ AnalysisStrategy + ParameterTimeline + WAV 双轨导出 + **CaptureBuffer 增量落盘（Bug4 移至此，依赖 WavExporter）**
+  - 阶段 3：GR 表头逐块回调 + 边测边画增量曲线
 - T2 稳定加固（EditorCrashGuard /EHa TU、Generic 编辑器兜底、观察者指针清理）— 当前已足够稳定，可按需实施
-- 测量引擎接入 UI（PlotWidget 已写好未接线）
-- signal/capture/analysis 模块已写好但未在 UI 中使用
+
+## 阶段 1 完成记录（2026-08-02）
+
+**验收（FabFilter Pro-Q 4 实测，四腿全过）**：
+
+- loadPlugin → `{"ok":true,"name":"Pro-Q 4"}`（路径 `C:\Program Files\Common Files\VST3\FabFilter\FabFilter Pro-Q 4.vst3`）
+- setParam → Band 1 激活 + Gain +6dB（@~1kHz）
+- measure → `{"ok":true,"samples":240128,"rate":48000,"export_path":...}`，右面板幅度/相位曲线渲染
+- JSON 反推（tools/verify_export.py）：**993.20 Hz（0.7% 误差）+ 6.00 dB（0 误差）** — 命中注入频点/增益
+
+**真机发现并修复 3 个 bug（T8 前所有测量从未真实跑过）**：
+
+| #   | Bug                                                                              | 修复                                                                                                                                    |
+| --- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `prepareToPlay` 双调用（loadPlugin 线程 + SweepRunner 线程不匹配）→ Pro-Q 4 崩溃 | prepareToPlay 统一移到 SweepRunner::run（测量线程），PluginManager::loadPlugin 不再调用；pluginPrepared 标志管理                        |
+| 2   | SweepRunner 硬编码 2 通道 → Pro-Q 4（4 进 4 出）processBlock 越界                | 用 getTotalNumInputChannels/getTotalNumOutputChannels 动态分配 dry/wet block                                                            |
+| 3   | processBlock 在 IPC 线程调用（Pro-Q 4 要求与编辑器同线程）                       | CommandParser measure 用 `WaitableEvent + MessageManager::callAsync` 派发到消息线程；已加 isThisTheMessageThread() 同步路径避免测试挂死 |
+
+**测试基础设施**：Catch2 v3.8.0 + `unit_tests` console target（tests/，含 TestPlugin 假插件），**29/29 全绿**。
+**新增工具**：`tools/ipc_client.ps1`（NamedPipe 客户端）、`tools/verify_export.py`（JSON 反推频点/Q/增益）。
+**提交**：feat/phase1-freq-response 分支 11 commits（5584f1a..0fe3626）。
 
 ## Oracle 架构审查（2026-08-02）
 
