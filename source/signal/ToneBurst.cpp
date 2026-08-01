@@ -26,9 +26,9 @@ void ToneBurst::setLevels (const std::vector<double>& amplitudes)
     levels = amplitudes;
 }
 
-void ToneBurst::setAmplitude (double amp)
+void ToneBurst::setMasterAmplitude (double scale)
 {
-    levels = { amp };
+    masterAmplitude = scale;
 }
 
 void ToneBurst::prepare (double sr, int bs)
@@ -71,7 +71,7 @@ void ToneBurst::generate (juce::AudioBuffer<float>& buffer,
                 // Active burst — generate sine tone at this level
                 double t = currentSample / sampleRate;
                 double phase = 2.0 * juce::MathConstants<double>::pi * frequency * t;
-                sample = static_cast<float> (levels[currentBurstIndex] * std::sin (phase));
+                sample = static_cast<float> (levels[currentBurstIndex] * masterAmplitude * std::sin (phase));
             }
             // else: in gap — sample stays 0
 

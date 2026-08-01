@@ -30,8 +30,8 @@ public:
     /** Set amplitude levels for each burst (0.0 - 1.0). */
     void setLevels (const std::vector<double>& amplitudes);
 
-    /** Set a single overall amplitude (one burst only). */
-    void setAmplitude (double amp);
+    /** Set a master amplitude multiplier applied to all burst levels. */
+    void setMasterAmplitude (double scale);
 
     //==============================================================================
     void prepare (double sampleRate, int blockSize) override;
@@ -46,6 +46,7 @@ private:
     double burstSamples = 0;
     double gapSamples = 0;
     std::vector<double> levels;
+    double masterAmplitude = 1.0;
 
     int currentBurstIndex = 0;
     int64_t positionInBurst = 0;
