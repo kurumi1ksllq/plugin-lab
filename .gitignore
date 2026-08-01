@@ -37,3 +37,7 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 *.cmake.in
+
+# IDE (CLion)
+.idea/
+cmake-build-*/

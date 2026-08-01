@@ -29,6 +29,7 @@ juce_generate_juce_header(PluginLab)
 target_sources(PluginLab PRIVATE
     source/Main.cpp
     source/host/PluginManager.cpp
+    source/host/EditorCrashGuard.cpp
     source/signal/SignalGenerator.cpp
     source/signal/SineSweep.cpp
     source/signal/MultiTone.cpp
@@ -80,6 +81,12 @@ add_subdirectory(tools)
 
 # PluginManager.cpp needs /EHa to catch hardware crashes from buggy VST3
 set_source_files_properties(source/host/PluginManager.cpp PROPERTIES
+    COMPILE_FLAGS "/EHa"
+)
+
+# EditorCrashGuard.cpp also touches plugin-DLL code paths (editor create/delete)
+# and needs /EHa for the same reason.
+set_source_files_properties(source/host/EditorCrashGuard.cpp PROPERTIES
     COMPILE_FLAGS "/EHa"
 )
 

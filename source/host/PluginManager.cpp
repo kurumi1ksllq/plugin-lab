@@ -1,4 +1,5 @@
 #include "PluginManager.h"
+#include "EditorCrashGuard.h"
 #include "../utils/CrashLog.h"
 
 PluginManager::PluginManager()
@@ -85,7 +86,5 @@ std::unique_ptr<juce::AudioPluginInstance> PluginManager::loadPlugin (
 
 juce::AudioProcessorEditor* PluginManager::createEditorSafe (juce::AudioPluginInstance* plugin)
 {
-    if (!plugin) return nullptr;
-    try { return plugin->createEditorAndMakeActive(); }
-    catch (...) { CRASH_LOG_ERR ("Editor crash", plugin->getName()); return nullptr; }
+    return EditorCrashGuard::createEditor (plugin);
 }

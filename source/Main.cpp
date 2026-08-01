@@ -52,7 +52,8 @@ struct CrashFilterInstaller
 
 //==============================================================================
 class MainContentComponent : public juce::Component,
-                             private juce::ListBoxModel
+                             private juce::ListBoxModel,
+                             private juce::AsyncUpdater
 {
 public:
     MainContentComponent()
@@ -71,6 +72,7 @@ public:
         addAndMakeVisible (scanButton.get());
 
         pluginManager.reset (new PluginManager());
+        threadPool = std::make_unique<juce::ThreadPool> (2);
         setSize (1400, 850);
 
         // Start initial scan on a background thread
@@ -80,6 +82,17 @@ public:
     ~MainContentComponent() override
     {
         unloadCurrentPlugin();
+
+        // CRITICAL: join all background tasks BEFORE any member destructors run.
+        // ThreadPool destructor blocks until every running/queued job completes,
+        // guaranteeing no ThreadPoolJob accesses this->* after this point.
+        threadPool = nullptr;
+
+        // Discard any handleAsyncUpdate that was triggered during job finalisation.
+        // cancelPendingUpdate() blocks if the callback is currently in-flight
+        // (cannot happen here — both destructor and handleAsyncUpdate run on the
+        // message thread, so they are mutually exclusive).
+        cancelPendingUpdate();
     }
 
     void resized() override
@@ -141,12 +154,151 @@ public:
         }
     }
 
+    //==============================================================================
+    /** Called on the message thread when a background job has finished and
+     *  called triggerAsyncUpdate().  Processes whichever update is pending:
+     *  scan completion or plugin-load completion.
+     */
+    void handleAsyncUpdate() override
+    {
+        // Process scan result — always first so the list is refreshed before a
+        // plugin-load tries to select the right row.
+        if (scanUpdatePending.exchange (false))
+        {
+            try
+            {
+                if (scanDone)
+                {
+                    statusLabel->setText (
+                        juce::String (scannedCount.load()) + " plugins found",
+                        juce::dontSendNotification);
+                }
+                else
+                {
+                    statusLabel->setText ("Scan error", juce::dontSendNotification);
+                }
+                pluginListBox->updateContent();
+                pluginListBox->repaint();
+                scanButton->setEnabled (true);
+            }
+            catch (...)
+            {
+                CRASH_LOG_ERR ("Scan UI update", "exception caught");
+            }
+        }
+
+        // Process plugin-load result.
+        if (loadUpdatePending.exchange (false))
+        {
+            try
+            {
+                auto inst = std::move (pendingInstance);
+                juce::String name = std::move (pendingName);
+                openEditorWindowFor (std::move (inst), name);
+            }
+            catch (...)
+            {
+                CRASH_LOG_ERR ("Load UI update", "exception caught");
+                loadingRunning = false;
+            }
+        }
+    }
+
 private:
+    //==============================================================================
+    // Background-thread job helpers — nested classes have access to all private
+    // members of MainContentComponent (C++11 implicit friend).
+
+    struct ScanJob final : public juce::ThreadPoolJob
+    {
+        MainContentComponent& owner;
+
+        ScanJob (MainContentComponent& o)
+            : ThreadPoolJob ("PluginScan"), owner (o) {}
+
+        JobStatus runJob() override
+        {
+            try
+            {
+                CRASH_LOG_INFO ("Scan start", {});
+                owner.pluginManager->scanSystemDirectories();
+
+                int count = 0;
+                {
+                    std::lock_guard<std::mutex> lock (owner.listLock);
+                    count = owner.pluginManager->getKnownPlugins().getNumTypes();
+                }
+
+                CRASH_LOG_INFO ("Scan done", juce::String (count) + " plugins");
+                owner.scanDone = true;
+                owner.scanRunning = false;
+                owner.scannedCount = count;
+            }
+            catch (...)
+            {
+                CRASH_LOG_ERR ("Scan thread", "exception caught");
+                owner.scanRunning = false;
+                // scanDone stays false → handleAsyncUpdate shows "Scan error"
+            }
+
+            owner.scanUpdatePending = true;
+            owner.triggerAsyncUpdate();
+            return jobHasFinished;
+        }
+    };
+
+    struct LoadJob final : public juce::ThreadPoolJob
+    {
+        MainContentComponent& owner;
+        juce::PluginDescription desc;
+        juce::String name;
+        double sampleRate;
+        int blockSize;
+
+        LoadJob (MainContentComponent& o,
+                 const juce::PluginDescription& d,
+                 juce::String n,
+                 double sr,
+                 int bs)
+            : ThreadPoolJob ("PluginLoad"),
+              owner (o), desc (d), name (std::move (n)),
+              sampleRate (sr), blockSize (bs) {}
+
+        JobStatus runJob() override
+        {
+            try
+            {
+                auto instance = owner.pluginManager->loadPlugin (desc, sampleRate, blockSize);
+                owner.pendingInstance = std::move (instance);
+                owner.pendingName = name;
+            }
+            catch (...)
+            {
+                CRASH_LOG_ERR ("Load thread", "exception caught for " + name);
+                owner.pendingInstance.reset();      // nullptr → openEditorWindowFor shows failure
+                owner.pendingName = name;
+            }
+
+            owner.loadUpdatePending = true;
+            owner.triggerAsyncUpdate();
+            return jobHasFinished;
+        }
+    };
+
     //==============================================================================
     std::atomic<bool> scanDone { false };
     std::atomic<bool> scanRunning { false };
     std::atomic<bool> loadingRunning { false };
     std::mutex listLock;
+
+    // IPC between background threads (write) and handleAsyncUpdate (read).
+    // Only one job per category runs at a time (scanRunning / loadingRunning
+    // gates), so a single slot per category is safe.
+    std::atomic<bool> scanUpdatePending { false };
+    std::atomic<bool> loadUpdatePending { false };
+    std::atomic<int>  scannedCount { 0 };
+    std::unique_ptr<juce::AudioPluginInstance> pendingInstance;
+    juce::String pendingName;
 
     juce::PluginDescription* getPluginDescription (int index)
     {
@@ -165,48 +317,8 @@ private:
         statusLabel->setText ("Scanning VST3 plugins...", juce::dontSendNotification);
         scanButton->setEnabled (false);
 
-        // Scan on background thread - UI stays responsive
-        std::thread ([this]
-        {
-            try
-            {
-                CRASH_LOG_INFO ("Scan start", {});
-
-                pluginManager->scanSystemDirectories();
-
-                int count = 0;
-                {
-                    std::lock_guard<std::mutex> lock (listLock);
-                    count = pluginManager->getKnownPlugins().getNumTypes();
-                }
-
-                CRASH_LOG_INFO ("Scan done", juce::String (count) + " plugins");
-                scanDone = true;
-                scanRunning = false;
-
-                // Update UI on message thread
-                juce::MessageManager::callAsync ([this, count]
-                {
-                    try
-                    {
-                        statusLabel->setText (juce::String (count) + " plugins found", juce::dontSendNotification);
-                        pluginListBox->updateContent();
-                        pluginListBox->repaint();
-                        scanButton->setEnabled (true);
-                    }
-                    catch (...)
-                    {
-                        CRASH_LOG_ERR ("Scan UI update", "exception caught");
-                    }
-                });
-            }
-            catch (...)
-            {
-                CRASH_LOG_ERR ("Scan thread", "exception caught");
-                scanRunning = false;
-                juce::MessageManager::callAsync ([this] { scanButton->setEnabled (true); });
-            }
-        }).detach();
+        // Ownership of the job transfers to the pool; job is auto-deleted after runJob().
+        threadPool->addJob (new ScanJob (*this), true);
     }
 
     //==============================================================================
@@ -222,44 +334,15 @@ private:
         constexpr double sr = 48000.0;
         constexpr int bs = 512;
 
-        // Background thread: only load the plugin instance.
-        // Editor creation MUST happen on the message thread (JUCE hard assert).
-        std::thread ([this, desc, safeName, sr, bs]
-        {
-            try
-            {
-                auto instance = pluginManager->loadPlugin (desc, sr, bs);
-
-                juce::MessageManager::callAsync ([this, instance = std::move (instance), safeName]() mutable
-                {
-                    try
-                    {
-                        openEditorWindowFor (std::move (instance), safeName);
-                    }
-                    catch (...)
-                    {
-                        CRASH_LOG_ERR ("Load UI update", "exception caught");
-                        loadingRunning = false;
-                    }
-                });
-            }
-            catch (...)
-            {
-                CRASH_LOG_ERR ("Load thread", "exception caught for " + safeName);
-                juce::MessageManager::callAsync ([this, safeName]
-                {
-                    statusLabel->setText ("Failed: " + safeName, juce::dontSendNotification);
-                    loadingRunning = false;
-                });
-            }
-        }).detach();
+        // Ownership of the job transfers to the pool; job is auto-deleted after runJob().
+        threadPool->addJob (new LoadJob (*this, desc, safeName, sr, bs), true);
     }
 
     //==============================================================================
     void loadPlugin (int index)
     {
         juce::PluginDescription descCopy;
-        auto* desc = getPluginDescription (index);   // getPluginDescription 内部已加锁,此处不要再锁(否则递归锁死)
+        auto* desc = getPluginDescription (index);
         if (!desc) return;
         descCopy = *desc;
         loadPluginByDescription (descCopy);
@@ -276,7 +359,7 @@ private:
 
     //==============================================================================
     void openEditorWindowFor (std::unique_ptr<juce::AudioPluginInstance> instance,
-                              const juce::String& name)
+                               const juce::String& name)
     {
         unloadCurrentPlugin();
 
@@ -290,13 +373,30 @@ private:
 
         auto* editor = PluginManager::createEditorSafe (instance.get());
 
+        // Fall back to the generic parameter editor when the plugin has no
+        // native GUI (createEditor returned null). The plugin is still fully
+        // usable: the generic editor shows all its parameters as sliders.
+        if (editor == nullptr)
+        {
+            try
+            {
+                editor = new juce::GenericAudioProcessorEditor (*instance);
+            }
+            catch (...)
+            {
+                CRASH_LOG_ERR ("Generic editor crash", name);
+                editor = nullptr;
+            }
+        }
+
         if (editor)
         {
             editorWindow = std::make_unique<PluginEditorWindow> (
                 std::move (instance), editor, name,
                 [this] { onPluginWindowClosed(); });
 
-            CRASH_LOG_INFO ("Editor ok", name + " "
+            const bool isGeneric = dynamic_cast<juce::GenericAudioProcessorEditor*> (editor) != nullptr;
+            CRASH_LOG_INFO (isGeneric ? "Editor ok (generic)" : "Editor ok", name + " "
                 + juce::String (editorWindow->getWidth()) + "x"
                 + juce::String (editorWindow->getHeight()));
             statusLabel->setText ("Loaded: " + name, juce::dontSendNotification);
@@ -318,7 +418,13 @@ private:
     }
 
     //==============================================================================
+    // Member destruction order = REVERSE declaration order:
+    //   threadPool is destroyed first → joins all background jobs,
+    //   then UI members, then pluginManager, then atomics / mutex.
+    // The explicit `threadPool = nullptr` in ~MainContentComponent makes this
+    // deterministic regardless of compiler-specific layout.
     std::unique_ptr<PluginManager> pluginManager;
+    std::unique_ptr<juce::ThreadPool> threadPool;
 
     std::unique_ptr<juce::ListBox> pluginListBox;
     std::unique_ptr<juce::Label> statusLabel;

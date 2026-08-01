@@ -1,4 +1,5 @@
 #include "PluginEditorWindow.h"
+#include "../host/EditorCrashGuard.h"
 #include "../utils/CrashLog.h"
 
 PluginEditorWindow::PluginEditorWindow (
@@ -20,7 +21,10 @@ PluginEditorWindow::PluginEditorWindow (
     // resizeToFitWhenContentChangesSize=true → childBoundsChanged
     // automatically resizes the window to content+border. With native
     // titlebar the border is 0, so window == editor native size.
-    setContentOwned (editor, true);
+    // The editor is NOT owned by the window: its deletion is routed through
+    // EditorCrashGuard::deleteEditor (an /EHa TU) in the destructor so that
+    // crashes inside the plugin's view teardown don't kill the host.
+    setContentNonOwned (editor, true);
 
     setResizable (false, false);
 
@@ -39,11 +43,16 @@ PluginEditorWindow::~PluginEditorWindow()
 {
     jassert (juce::MessageManager::existsAndIsCurrentThread());
 
-    // Must explicitly clear content before ~DocumentWindow/~ResizableWindow,
-    // because ~ResizableWindow deletes content AFTER derived members are
-    // destroyed. If the editor outlives pluginInstance, VST3 destruction
-    // may access a dead instance pointer (UB).
-    clearContentComponent();
+    // The editor is not owned by the window (setContentNonOwned). Detach it
+    // here so ~ResizableWindow doesn't touch it later, then destroy it via
+    // the crash-guarded path (editorBeingDeleted + delete) BEFORE the
+    // pluginInstance member dies — otherwise VST3 teardown may access a dead
+    // instance pointer (UB).
+    if (auto* editor = dynamic_cast<juce::AudioProcessorEditor*> (getContentComponent()))
+    {
+        clearContentComponent();
+        EditorCrashGuard::deleteEditor (pluginInstance.get(), editor);
+    }
 }
 
 void PluginEditorWindow::closeButtonPressed()
