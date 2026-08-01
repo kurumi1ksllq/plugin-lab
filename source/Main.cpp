@@ -2,6 +2,10 @@
 #include "host/PluginManager.h"
 #include "ui/PluginEditorWindow.h"
 #include "utils/CrashLog.h"
+#include "ipc/PipeServer.h"
+#include "ipc/CommandParser.h"
+#include "capture/MeasurementSession.h"
+#include "analysis/FreqResponse.h"
 #include <atomic>
 #include <mutex>
 
@@ -73,6 +77,36 @@ public:
 
         pluginManager.reset (new PluginManager());
         threadPool = std::make_unique<juce::ThreadPool> (2);
+
+        // --- IPC pipeline setup ---
+        measurementSession = std::make_unique<MeasurementSession>();
+        measurementSession->setSampleRate (48000.0);
+        measurementSession->setBlockSize (512);
+
+        commandParser = std::make_unique<CommandParser>();
+        commandParser->setPluginManager (pluginManager.get());
+        commandParser->setSession (measurementSession.get());
+        commandParser->setLoadPluginCallback ([this] (const juce::PluginDescription& d)
+        {
+            loadPluginByDescription (d);
+        });
+        commandParser->setStatusCallback ([this] (const juce::String& s)
+        {
+            statusLabel->setText (s, juce::dontSendNotification);
+        });
+        commandParser->setMeasurementCompleteCallback ([this] (const FreqResponse::Result& r)
+        {
+            measurementResult = r;
+            hasMeasurement = true;
+            triggerAsyncUpdate();
+        });
+
+        pipeServer = std::make_unique<PipeServer>();
+        pipeServer->setCommandHandler ([this] (const juce::String& cmd)
+        {
+            return commandParser->handleCommand (cmd);
+        });
+        pipeServer->startup();
         setSize (1400, 850);
 
         // Start initial scan on a background thread
@@ -81,11 +115,20 @@ public:
 
     ~MainContentComponent() override
     {
+        // 1. Cancel any in-progress measurement (returns within 1 block).
+        if (measurementSession)
+            measurementSession->cancel();
+
+        // 2. Unload current plugin + close editor window.
         unloadCurrentPlugin();
 
-        // CRITICAL: join all background tasks BEFORE any member destructors run.
-        // ThreadPool destructor blocks until every running/queued job completes,
-        // guaranteeing no ThreadPoolJob accesses this->* after this point.
+        // 3. Shut down the pipe server (joins IPC thread).
+        if (pipeServer)
+            pipeServer->shutdown();
+
+        // 4. Join all background jobs BEFORE member destructors run.
+        //    ThreadPool destructor blocks until every running/queued job completes,
+        //    guaranteeing no ThreadPoolJob accesses this->* after this point.
         threadPool = nullptr;
 
         // Discard any handleAsyncUpdate that was triggered during job finalisation.
@@ -201,6 +244,15 @@ public:
                 CRASH_LOG_ERR ("Load UI update", "exception caught");
                 loadingRunning = false;
             }
+        }
+
+        // Process measurement-complete notification (T6 will render the curve).
+        if (hasMeasurement)
+        {
+            hasMeasurement = false;
+            statusLabel->setText ("Measurement complete: "
+                + juce::String (static_cast<int> (measurementResult.raw.size()))
+                + " frequency points", juce::dontSendNotification);
         }
     }
 
@@ -403,6 +455,11 @@ private:
                 std::move (instance), editor, name,
                 [this] { onPluginWindowClosed(); });
 
+            // Wire the loaded plugin into the IPC pipeline
+            auto* rawInstance = editorWindow->getPluginInstance();
+            commandParser->setPluginInstance (rawInstance);
+            measurementSession->setPluginInstance (rawInstance);
+
             const bool isGeneric = dynamic_cast<juce::GenericAudioProcessorEditor*> (editor) != nullptr;
             CRASH_LOG_INFO (isGeneric ? "Editor ok (generic)" : "Editor ok", name + " "
                 + juce::String (editorWindow->getWidth()) + "x"
@@ -421,6 +478,8 @@ private:
     void onPluginWindowClosed()
     {
         unloadCurrentPlugin();
+        commandParser->setPluginInstance (nullptr);
+        measurementSession->setPluginInstance (nullptr);
         statusLabel->setText ("Ready", juce::dontSendNotification);
         CRASH_LOG_INFO ("Editor window closed", {});
     }
@@ -428,9 +487,22 @@ private:
     //==============================================================================
     // Member destruction order = REVERSE declaration order:
     //   threadPool is destroyed first → joins all background jobs,
-    //   then UI members, then pluginManager, then atomics / mutex.
-    // The explicit `threadPool = nullptr` in ~MainContentComponent makes this
-    // deterministic regardless of compiler-specific layout.
+    //   then UI members, then pluginManager, then IPC members,
+    //   then atomics / mutex.
+    // The explicit cleanup in ~MainContentComponent (cancel→shutdown→nullThreadPool)
+    // runs BEFORE natural destruction, so IPC members are guaranteed alive
+    // during shutdown.
+
+    // --- IPC pipeline (declared before pool/mgr for reverse-destruction order) ---
+    std::unique_ptr<MeasurementSession> measurementSession;
+    std::unique_ptr<CommandParser> commandParser;
+    std::unique_ptr<PipeServer> pipeServer;
+
+    // Measurement result held for UI rendering (T6)
+    FreqResponse::Result measurementResult;
+    bool hasMeasurement = false;
+
+    // --- Core ---
     std::unique_ptr<PluginManager> pluginManager;
     std::unique_ptr<juce::ThreadPool> threadPool;
 
