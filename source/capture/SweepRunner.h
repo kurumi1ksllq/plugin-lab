@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <atomic>
 #include "../signal/SignalGenerator.h"
 #include "AudioBuffer.h"
 
@@ -58,7 +59,7 @@ private:
     std::function<void(float)> progressCallback;
 
     bool running = false;
-    bool cancelled = false;
+    std::atomic<bool> cancelled { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SweepRunner)
 };
