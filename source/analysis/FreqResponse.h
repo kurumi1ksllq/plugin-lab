@@ -33,6 +33,12 @@ public:
     };
 
     //==============================================================================
+    /** Set the plugin latency in samples for phase compensation.
+     *  Must be called before analyze() to correct the linear phase ramp
+     *  caused by plugin delay (e.g., linear-phase EQ modes).
+     */
+    void setLatencySamples (int samples) { latencySamples = samples; }
+
     /** Analyze frequency response from dry/wet sweep recording.
      *  @param dry  Dry (input/reference) audio buffer
      *  @param wet  Wet (output/processed) audio buffer
@@ -52,4 +58,6 @@ private:
                          std::vector<Point>& points);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FreqResponse)
+
+    int latencySamples = 0;
 };

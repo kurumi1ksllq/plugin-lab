@@ -2,6 +2,7 @@
 #include "../utils/FftHelper.h"
 #include "../utils/MathUtils.h"
 #include <cmath>
+#include <complex>
 
 FreqResponse::Result FreqResponse::analyze (
     const juce::AudioBuffer<float>& dry,
@@ -84,82 +85,110 @@ void FreqResponse::processChannel (
     std::vector<float> wetWindow (fftSize);
     std::vector<float> dryReal (numBins), dryImag (numBins);
     std::vector<float> wetReal (numBins), wetImag (numBins);
-    std::vector<float> dryMag (numBins), wetMag (numBins);
-    std::vector<float> dryPhase (numBins), wetPhase (numBins);
+
+    // ── H1 accumulators ──
+    // Sxx = Σ |X|² (autospectrum of dry, real-valued)
+    // Sxy = Σ conj(X) * Y (cross-spectrum, complex-valued)
+    std::vector<double> sxx (numBins, 0.0);
+    std::vector<std::complex<double>> sxy (numBins, {0.0, 0.0});
+    int windowCount = 0;
 
     for (int pos = 0; pos + fftSize <= numSamples; pos += hopSize)
     {
+        // Copy samples into window buffers
         for (int i = 0; i < fftSize; ++i)
         {
             dryWindow[i] = dryData[pos + i];
             wetWindow[i] = wetData[pos + i];
         }
 
-        // Apply Hann window
+        // Apply Hann window (amplitude correction handled by H1 ratio)
         FftHelper::applyHannWindow (dryWindow.data(), fftSize);
         FftHelper::applyHannWindow (wetWindow.data(), fftSize);
 
-        // Forward FFT
+        // Forward FFT (window already applied, pass false)
         fft.forwardReal (dryWindow.data(), dryReal.data(), dryImag.data(), false);
         fft.forwardReal (wetWindow.data(), wetReal.data(), wetImag.data(), false);
 
-        FftHelper::getMagnitudes (dryMag.data(), dryReal.data(), dryImag.data(), numBins);
-        FftHelper::getMagnitudes (wetMag.data(), wetReal.data(), wetImag.data(), numBins);
-        FftHelper::getPhases (dryPhase.data(), dryReal.data(), dryImag.data(), numBins);
-        FftHelper::getPhases (wetPhase.data(), wetReal.data(), wetImag.data(), numBins);
-
-        for (int bin = 1; bin < numBins - 1; ++bin)
+        // Accumulate spectral densities
+        for (int bin = 0; bin < numBins; ++bin)
         {
-            double freq = bin * freqStep;
-            if (freq < 20.0 || freq > 20000.0)
-                continue;
+            const double Xr = static_cast<double> (dryReal[bin]);
+            const double Xi = static_cast<double> (dryImag[bin]);
+            const double Yr = static_cast<double> (wetReal[bin]);
+            const double Yi = static_cast<double> (wetImag[bin]);
 
-            // Only include bins with significant energy in the dry signal
-            if (dryMag[bin] < 0.001f)
-                continue;
+            // |X|² = Xr² + Xi²
+            sxx[bin] += Xr * Xr + Xi * Xi;
 
-            Point p;
-            p.frequency = freq;
-            p.magnitudeDB = MathUtils::amplitudeToDB (wetMag[bin] / dryMag[bin]);
-            
-            // Phase difference, unwrapped
-            double phaseDiff = wetPhase[bin] - dryPhase[bin];
-            // Normalize to -180..180
-            while (phaseDiff > juce::MathConstants<double>::pi) phaseDiff -= 2.0 * juce::MathConstants<double>::pi;
-            while (phaseDiff < -juce::MathConstants<double>::pi) phaseDiff += 2.0 * juce::MathConstants<double>::pi;
-            p.phaseDeg = phaseDiff * 180.0 / juce::MathConstants<double>::pi;
-
-            points.push_back (p);
+            // conj(X) * Y = (Xr - j·Xi) * (Yr + j·Yi)
+            //            = (Xr·Yr + Xi·Yi) + j·(Xr·Yi - Xi·Yr)
+            sxy[bin] += std::complex<double> (Xr * Yr + Xi * Yi,
+                                              Xr * Yi - Xi * Yr);
         }
+        ++windowCount;
     }
 
-    // Sort by frequency and remove duplicates (average overlapping bins)
-    std::sort (points.begin(), points.end(),
-               [](const Point& a, const Point& b) { return a.frequency < b.frequency; });
+    if (windowCount == 0)
+        return;
 
-    // Average overlapping frequency bins
-    std::vector<Point> merged;
-    for (size_t i = 0; i < points.size();)
+    // ── Compute H1 = Sxy / Sxx per bin ──
+    const double lowEnergyThreshold = static_cast<double> (windowCount) * 1e-8;
+
+    for (int bin = 0; bin < numBins; ++bin)
     {
-        double freq = points[i].frequency;
-        double sumMag = 0.0, sumPhase = 0.0;
-        int count = 0;
+        const double freq = bin * freqStep;
 
-        while (i < points.size() && std::abs (points[i].frequency - freq) < freqStep * 0.5)
-        {
-            double amp = std::pow (10.0, points[i].magnitudeDB / 20.0);
-            sumMag += amp;
-            sumPhase += points[i].phaseDeg;
-            count++;
-            i++;
-        }
+        // Frequency range constraint
+        if (freq < 20.0 || freq > 20000.0)
+            continue;
+
+        // Low-energy protection
+        if (sxx[bin] < lowEnergyThreshold)
+            continue;
+
+        const std::complex<double> H = sxy[bin] / sxx[bin];
 
         Point p;
-        p.frequency = freq;
-        p.magnitudeDB = 20.0 * std::log10 (sumMag / count);
-        p.phaseDeg = sumPhase / count;
-        merged.push_back (p);
+        p.frequency  = freq;
+        p.magnitudeDB = 20.0 * std::log10 (std::max (std::abs (H), 1e-15));
+        p.phaseDeg   = std::atan2 (H.imag(), H.real())
+                       * 180.0 / juce::MathConstants<double>::pi;
+
+        points.push_back (p);
     }
 
-    points = merged;
+    // ── Phase unwrapping across frequency ──
+    // atan2 wraps to [-π, π]; unwrap removes ±2π discontinuities
+    // so the phase curve is continuous across frequency bins.
+    if (points.size() >= 2)
+    {
+        double cumulativeOffset = 0.0;
+        double prevRaw = points[0].phaseDeg;  // wrapped reference
+        for (size_t i = 1; i < points.size(); ++i)
+        {
+            const double raw  = points[i].phaseDeg;
+            const double diff = raw - prevRaw;
+
+            if (diff > 180.0)
+                cumulativeOffset -= 360.0;
+            else if (diff < -180.0)
+                cumulativeOffset += 360.0;
+
+            points[i].phaseDeg = raw + cumulativeOffset;
+            prevRaw = raw;
+        }
+    }
+
+    // ── Latency compensation ──
+    // Plugin latency introduces a linear phase ramp:
+    //   φ_latency(f) = -2π · f · N / Fs
+    // where N = latency in samples, Fs = sample rate.
+    // Subtract it so the residual phase represents the filter alone.
+    if (latencySamples > 0)
+    {
+        const double coeff = 360.0 * static_cast<double> (latencySamples) / sampleRate;
+        for (auto& p : points)
+            p.phaseDeg += p.frequency * coeff;  // subtract negative = add
+    }
 }
