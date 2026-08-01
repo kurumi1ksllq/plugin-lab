@@ -70,15 +70,16 @@ source/ipc/
 
 ### 3.1 频率响应（EQ 类插件）—— 核心变化
 
-| 项目       | 方案                                                       |
-| ---------- | ---------------------------------------------------------- |
-| 信号       | 对数正弦扫描 20Hz ~ 20kHz                                  |
-| 录制       | 干路（原始） + 湿路（过插件）同时录制                      |
-| 分析       | 逐频点 FFT → 幅度比 + 相位差                               |
-| 绘图       | 曲线从左向右增量生长                                       |
-| **平滑**   | 提供多级平滑：原始 / 1/12 octave / 1/3 octave              |
-| **策略**   | **纯黑盒** — 不关心内部有几个频点/Q值/增益，一次扫完全频段 |
-| **非线性** | 可选：用不同信号电平（-20dB, -10dB, 0dB）扫多组，叠加显示  |
+| 项目       | 方案                                                                                                                     |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 信号       | 对数正弦扫描 20Hz ~ 20kHz                                                                                                |
+| 录制       | 干路（原始） + 湿路（过插件）同时录制                                                                                    |
+| 分析       | **Farina 去卷积法**：扫频数据 → 脉冲响应 → FFT → 幅度比 + 相位差（比直接 FFT 比值在低频/高频相位噪声更小，行业标准做法） |
+| 绘图       | 曲线从左向右增量生长                                                                                                     |
+| **平滑**   | 提供多级平滑：原始 / 1/12 octave / 1/3 octave                                                                            |
+| **策略**   | **纯黑盒** — 不关心内部有几个频点/Q值/增益，一次扫完全频段                                                               |
+| **非线性** | 可选：用不同信号电平（-20dB, -10dB, 0dB）扫多组，叠加显示                                                                |
+| **备选**   | `Impulse`（MLS 序列）可直接测脉冲响应 → FFT，EQ 线性测量可更快完成                                                       |
 
 **为什么黑盒方案足够：**
 
@@ -89,27 +90,31 @@ source/ipc/
 
 ### 3.2 谐波分析（饱和/失真类插件）
 
-| 项目 | 方案                                             |
-| ---- | ------------------------------------------------ |
-| 信号 | 单音正弦（如 1kHz），多电平（-20dB, -10dB, 0dB） |
-| 录制 | 湿路                                             |
-| 分析 | FFT → 基波 + 各次谐波能量                        |
-| 绘图 | 柱状图：基波 + H2 + H3 + H4 + H5                 |
-| 输出 | THD%、各次谐波百分比                             |
+| 项目     | 方案                                                                                                                     |
+| -------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 信号     | **单音正弦（如 1kHz），多电平（-20dB, -10dB, 0dB）测 THD**；**多音测 IMD（互调失真）**，两者分开                         |
+| 录制     | 湿路                                                                                                                     |
+| 分析     | FFT → 基波 + 各次谐波能量                                                                                                |
+| 绘图     | 柱状图：基波 + H2 + H3 + H4 + H5                                                                                         |
+| 输出     | THD%、各次谐波百分比                                                                                                     |
+| **注意** | MultiTone 各频点同时发声时谐波峰会互相交叠（如 2kHz 的 H2=4kHz 恰好落在 4kHz 基频上），故 THD 用单音、IMD 用多音，勿混用 |
 
 ### 3.3 压缩曲线（动态类插件）
 
-| 项目 | 方案                                        |
-| ---- | ------------------------------------------- |
-| 信号 | ToneBurst，从 -60dB 到 0dB 步进             |
-| 录制 | 干路 + 湿路                                 |
-| 分析 | 输入 dB vs 输出 dB → 算出压缩比、拐点、GR   |
-| 绘图 | XY 折线图，逐点生长                         |
-| 输出 | `{input_dB, output_dB, gr_dB}[]` + 拟合参数 |
+| 项目     | 方案                                                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------ |
+| 信号     | ToneBurst，从 -60dB 到 0dB 步进                                                                        |
+| **频率** | **至少 3 个频点：80Hz / 1kHz / 4kHz 各跑一轮**（现代人声压缩器多有频率依赖侧链，单测 1kHz 对低频无效） |
+| 录制     | 干路 + 湿路                                                                                            |
+| 分析     | 输入 dB vs 输出 dB → 算出压缩比、拐点、GR                                                              |
+| 绘图     | XY 折线图，逐点生长                                                                                    |
+| 输出     | `{input_dB, output_dB, gr_dB}[]` + 拟合参数                                                            |
 
 ---
 
 ## 四、数据导出格式（JSON）
+
+> 2026-08-02 Oracle 审查补充：必须包含 **插件元数据 / 测量配置 / Bypass 双路对比**，否则 AI 无法可靠复刻。
 
 ```json
 {
@@ -118,14 +123,37 @@ source/ipc/
     "plugin": {
       "name": "MyFavoriteComp",
       "path": "C:/VST/MyFavoriteComp.vst3",
-      "uid": "vendor123_comp_v1"
+      "uid": "vendor123_comp_v1",
+      "class_id": "FUID...",
+      "manufacturer": "Vendor",
+      "version": "1.0.0",
+      "latency_samples": 256
+    },
+    "measurement_config": {
+      "source_type": "test_signal | file_playback",
+      "generator": {
+        "type": "sine_sweep",
+        "freq_range": [20, 20000],
+        "duration_s": 5,
+        "level_dB": -12
+      },
+      "sample_rate": 48000,
+      "block_size": 512,
+      "analysis": {
+        "fft_size": 16384,
+        "smoothing": ["raw", "1_12_octave", "1_3_octave"]
+      }
     },
     "snapshot": {
       "description": "用户调到的喜欢的声音",
       "parameters": [
-        { "name": "Ratio", "index": 3, "normalized": 0.5, "value": 4.0 },
-        { "name": "Threshold", "index": 4, "normalized": 0.3, "value": -20.0 }
+        { "name": "Ratio", "index": 3, "normalized": 0.5, "value": 4.0 }
       ]
+    },
+    "bypass_reference": {
+      "dry": "bypass_dry.wav",
+      "wet": "bypass_wet.wav",
+      "note": "插件 bypass 状态跑一遍作为基准，隔离插件实际改动 vs 延迟/精度损耗"
     },
     "measurements": [
       {
@@ -133,17 +161,68 @@ source/ipc/
         "config": {
           "freq_range": [20, 20000],
           "sweep_duration_s": 5,
-          "input_level_dB": -12,
-          "output": "results/freq_sweep.json",
-          "smoothing": ["raw", "1_12_octave", "1_3_octave"]
+          "input_level_dB": -12
         },
-        "parameters": {
-          "sample_rate": 48000,
-          "fft_size": 2048
-        }
+        "parameters": { "sample_rate": 48000, "fft_size": 2048 }
       }
     ]
   }
+}
+```
+
+### 记录模式（vocal 回放）导出
+
+```json
+{
+  "session": {
+    "timestamp": "...",
+    "plugin": {
+      "name": "...",
+      "path": "...",
+      "class_id": "...",
+      "latency_samples": 256
+    },
+    "input_source": {
+      "type": "file",
+      "path": "vocal_dry.wav",
+      "duration_s": 12.4,
+      "channels": 2
+    },
+    "measurement_config": {
+      "source_type": "file_playback",
+      "sample_rate": 48000,
+      "block_size": 512
+    }
+  },
+  "audio": {
+    "dry": "session_dry.wav",
+    "wet": "session_wet.wav",
+    "bypass_dry": "bypass_dry.wav",
+    "bypass_wet": "bypass_wet.wav",
+    "sample_rate": 48000
+  },
+  "parameter_timeline": [
+    {
+      "t_ms": 1200,
+      "name": "Threshold",
+      "index": 4,
+      "old_normalized": 0.3,
+      "new_normalized": 0.2,
+      "old_value": -10.0,
+      "new_value": -18.5
+    }
+  ],
+  "block_statistics": [
+    {
+      "t_ms": 0,
+      "rms_in_db": -14.2,
+      "rms_out_db": -11.8,
+      "gr_db": 2.4,
+      "peak_in_db": -8.1,
+      "peak_out_db": -6.3
+    }
+  ],
+  "analysis_snapshots": [{ "t_ms": 1000, "type": "spectrum", "data": "..." }]
 }
 ```
 
@@ -201,12 +280,92 @@ source/ipc/
 
 ## 七、架构变更总结（相对 handoff）
 
-| 模块            | 变更                                                                |
-| --------------- | ------------------------------------------------------------------- |
-| **IPC**（新增） | `ipc/PipeServer.h/cpp`, `ipc/CommandParser.h/cpp`, `ipc/Protocol.h` |
-| **host/**       | 无实质变化，但控制路径从 UI 点击改为 IPC 命令驱动                   |
-| **signal/**     | 无实质变化                                                          |
-| **capture/**    | 新增"实时进度回调"，测量结果逐步推送到 UI                           |
-| **analysis/**   | 新增**平滑处理**功能（raw / 1/12 / 1/3 octave）                     |
-| **ui/**         | 重大变化：需嵌入 VST3 原生编辑器 UI；曲线改为增量绘制               |
-| **控制路径**    | 从 GUI 点击 → IPC 命令驱动，GUI 作为"显示器"                        |
+| 模块            | 变更                                                                                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **IPC**（新增） | `ipc/PipeServer.h/cpp`, `ipc/CommandParser.h/cpp`, `ipc/Protocol.h`                                                                                     |
+| **host/**       | 无实质变化，但控制路径从 UI 点击改为 IPC 命令驱动                                                                                                       |
+| **signal/**     | 无实质变化                                                                                                                                              |
+| **capture/**    | 新增"实时进度回调"，测量结果逐步推送到 UI                                                                                                               |
+| **analysis/**   | 新增**平滑处理**功能（raw / 1/12 / 1/3 octave）                                                                                                         |
+| **ui/**         | 重大变化：需嵌入 VST3 原生编辑器 UI；曲线改为增量绘制                                                                                                   |
+| **capture/**    | 新增 `RecorderEngine`（顶层协调）、`ParameterTimeline`（参数时间线）、`AnalysisStrategy`（分析分流）；`MeasurementSession` 扩展 sourceType/filePlayback |
+| **signal/**     | 新增 `FilePlayback`（实现 `SignalGenerator` 接口，vocal 音频回放 + 声道映射）                                                                           |
+| **analysis/**   | 新增 `WavExporter`（干/湿/基准多轨 WAV）；`Export` 扩展 `recordingToJSON`；JSON 改用 `juce::JSON::toString()` 转义                                      |
+| **控制路径**    | 从 GUI 点击 → IPC 命令驱动，GUI 作为"显示器"                                                                                                            |
+
+---
+
+## 八、数据记录系统（2026-08-02 定稿）
+
+> 目标：记录"插件处理声音时的数据"，支持两类输入（内部测试信号 / 真实 vocal 音频文件回放），
+> 详细数据给 AI（DSP 复刻/改进），直观图表给人看。
+> 本方案经 Oracle 架构审查验证后定稿（审查结论见 STATUS.md）。
+
+### 8.1 测量方法论（人声处理插件）
+
+| 插件类型                           | 测什么                                                        | 输入                                        | 分析                              |
+| ---------------------------------- | ------------------------------------------------------------- | ------------------------------------------- | --------------------------------- |
+| EQ（线性）                         | 频响曲线（幅度+相位）                                         | 扫频测试信号                                | Farina 去卷积 → FFT               |
+| 压缩（动态）                       | 静态曲线（比/拐点/GR）+ 动态行为（attack/release、GR 随时间） | ToneBurst 多电平（80/1k/4k Hz）+ 真实 vocal | CompressionCurve + 逐块 GR 时间线 |
+| 谐波染色（非线性）                 | 静态 THD/谐波结构 + 实际染色                                  | 单音多电平（THD）+ 多音（IMD）+ 真实 vocal  | HarmonicAnalysis + 频谱对比       |
+| 人声特有（去齿音/音高修正/共振峰） | 行为观察                                                      | **只能真实 vocal 触发**                     | 波形/RMS/频谱时间线对比           |
+
+**核心原则**：静态参数只能靠受控测试信号精确量化；动态行为必须有真实信号触发——两者互补，缺一不可。
+
+### 8.2 架构（模块边界）
+
+```
+RecorderEngine (新增, source/capture/RecorderEngine.h/cpp)   ← 顶层协调: 批量扫描/多轮对比/生命周期
+  ├─ MeasurementSession (扩展: + sourceType + setFilePlayback + AnalysisStrategy)
+  │    └─ SweepRunner (不动: 纯 I/O 管线 generate→process→capture)
+  ├─ ParameterTimeline (新增)     ← AudioProcessorParameter::addListener 记录参数变更
+  ├─ AnalysisStrategy (新增)      ← capture 之后按 sourceType 分流分析器
+  ├─ FilePlayback (新增, source/signal/FilePlayback.h/cpp)  ← 实现 SignalGenerator 接口, 含声道映射
+  ├─ WavExporter (新增, source/analysis/WavExporter.h/cpp)   ← JUCE WavAudioFormat 写干/湿/基准 多轨 WAV
+  └─ Export (扩展: recordingToJSON)
+```
+
+**边界原则**（Oracle 确认）：
+
+- `SweepRunner` 不感知"测量目的"，只负责 I/O 管线 → **不改**
+- `MeasurementSession` 感知"测什么"（type + sourceType）→ 扩展
+- `RecorderEngine` 感知"为什么测"（批量扫描/多轮对比），管理 session 生命周期 → 新增
+- 新组件就这三个（RecorderEngine / ParameterTimeline / AnalysisStrategy）+ 两个输入/导出扩展，**不做过度设计**
+
+### 8.3 FilePlayback 复用 SignalGenerator 接口
+
+```cpp
+class FilePlayback : public SignalGenerator {
+    // prepare: 打开文件读 header（采样率/长度/声道数）
+    // getTotalLength: 返回文件样本数
+    // generate: 读一块 + 声道映射（mono→双声道复制；立体声保持；多声道取 L/R）
+    // reset: seek 回文件头
+};
+```
+
+真实 vocal 与测试信号走同一条 SweepRunner 管线（generate→process→capture），零特判；
+分析阶段由 `AnalysisStrategy` 按 sourceType 分流。
+
+### 8.4 数据格式
+
+见 §四 两种 JSON 结构（测量模式 / 记录模式）。关键要求（Oracle）：
+
+- **Bypass 双路对比**：插件 bypass 状态跑一遍作为基准 → 隔离"插件实际改动"与"延迟/浮点精度损耗"
+- **插件元数据**：class_id (FUID)、厂商、版本、`latency_samples`（插件延迟必须记录才能对齐干湿）
+- **测量配置**：generator 类型+参数、采样率、block size、分析参数（保证可复现）
+- **参数自动化事件**：同时记录归一化值(0-1)与实际值
+
+### 8.5 可视化（离线处理下的"实时"）
+
+- 现有 PlotWidget 三种图（EQ 曲线 / 压缩曲线 / 谐波柱状图）+ **新增实时 GR 表头**
+- 实现：`progressCallback` 从 `void(float)` 扩展为传最新干/湿块 → 算 `GR = 20·log10(RMS_wet/RMS_dry)`
+- 通过 `AsyncUpdater` post 到 UI 线程，**每 ~50ms 刷新一次**（勿每块刷，避免堵塞消息线程）
+- 性能：48kHz/512 块 → ~94 次回调/秒，每次算 2 个 RMS 微秒级，不影响离线处理
+
+### 8.6 实施路线（三阶段）
+
+| 阶段                   | 内容                                                                                                                                                       | 前置   |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| **1. 加固 + 接通测量** | 修 4 个已知 bug（原子变量/中间落盘/ToneBurst/JSON 转义）；恢复 IPC → measure 三件套（扫频去卷积 + 单音 THD + 多频压缩）；Bypass 对比 + 元数据/配置纳入导出 | —      |
+| **2. vocal 回放记录**  | FilePlayback（声道映射）+ AnalysisStrategy 分流 + ParameterTimeline + WAV 双轨导出；vocal 专用分析器（RMS/GR 时间线、频谱对比）                            | 阶段 1 |
+| **3. UI 可视化**       | PlotWidget 接线 + GR 表头逐块回调                                                                                                                          | 阶段 2 |

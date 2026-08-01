@@ -69,10 +69,45 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 ## 待办（下一步）
 
+- **T3 数据记录系统**（2026-08-02 定稿，详见 DESIGN.md §8）三阶段：
+  - 阶段 1：修复 4 个已知 bug（见下）+ 恢复 IPC → measure 三件套 + Bypass 对比 + 元数据/配置导出
+  - 阶段 2：FilePlayback（vocal 回放）+ AnalysisStrategy + ParameterTimeline + WAV 双轨导出
+  - 阶段 3：PlotWidget 接线 + GR 表头逐块回调
 - T2 稳定加固（EditorCrashGuard /EHa TU、Generic 编辑器兜底、观察者指针清理）— 当前已足够稳定，可按需实施
-- 恢复 IPC 管道控制（当前注释掉）
 - 测量引擎接入 UI（PlotWidget 已写好未接线）
 - signal/capture/analysis 模块已写好但未在 UI 中使用
+
+## Oracle 架构审查（2026-08-02）
+
+数据记录系统方案经 Oracle 验证，核心方向正确，发现以下问题：
+
+### 待修 bug（现有代码，阶段 1 处理）
+
+| #   | 位置               | 问题                                                                                                       | 优先级 |
+| --- | ------------------ | ---------------------------------------------------------------------------------------------------------- | ------ |
+| 1   | `SweepRunner.h:61` | `bool cancelled` 非原子（UI 线程写/工作线程读）→ 改 `std::atomic<bool>`                                    | P0     |
+| 2   | `CaptureBuffer`    | 长时间录音数据全在内存，插件崩溃→全丢 → 需增量 WAV 写入（每 N 秒 flush）                                   | P0     |
+| 3   | `ToneBurst.cpp:31` | `setAmplitude()` 覆盖 `levels` 数组，与 `setLevels()` 语义冲突 → 拆为 `setMasterAmplitude(scale)`          | P0     |
+| 4   | `Export.cpp:16`    | `pluginName.quoted()` 不转义内部引号 → 改用 `juce::JSON::toString()`；`dropLastCharacters(2)` 逗号处理脆弱 | P0     |
+
+### 测量方法修正（已写入 DESIGN.md §3）
+
+- EQ：改用 **Farina 去卷积法**（扫频→IR→FFT），而非直接 FFT 比值（低频/高频相位噪声更小）
+- 压缩：ToneBurst 需 **80Hz/1kHz/4kHz 多频点**（现代压缩器有频率依赖侧链）
+- 谐波：**单音测 THD + 多音测 IMD 分开**（MultiTone 谐波峰交叠）
+
+### 架构决策（已写入 DESIGN.md §8）
+
+- 模块边界：SweepRunner 不动 / MeasurementSession 扩展 / RecorderEngine 新增顶层协调，**不做过度设计**
+- FilePlayback 复用 SignalGenerator 接口（需声道映射）；分析阶段由 AnalysisStrategy 按 sourceType 分流
+- 数据格式必须含：**Bypass 双路对比** + 插件元数据（class_id/latency_samples）+ 测量配置
+- 实时 GR 表头：progressCallback 扩展传干/湿块 → `AsyncUpdater` 每 ~50ms 刷新 UI
+
+### 可选改进（P2）
+
+- MultiTone 加随机初始相位（降峰值因子）
+- MeasurementSession 增加 `runMultiple(configurations)` 多轮参数扫描接口
+- `Impulse`（MLS）接入 EQ 线性测量（比扫频快）
 
 ## 目录结构
 
@@ -81,9 +116,9 @@ source/
 ├── Main.cpp              # 主窗口 + 后台线程扫描/加载 + 独立窗口管理
 ├── host/PluginManager    # VST3 扫描/加载（/EHa + 黑名单）
 ├── ui/PluginEditorWindow # 独立插件编辑器窗口（DocumentWindow 子类）
-├── signal/               # 信号生成器 (SineSweep/MultiTone/ToneBurst/Impulse)
-├── capture/              # 采集引擎 (CaptureBuffer/SweepRunner/MeasurementSession)
-├── analysis/             # 分析引擎 (FreqResponse/Harmonic/CompressionCurve/Export)
+├── signal/               # 信号生成器 (SineSweep/MultiTone/ToneBurst/Impulse + 规划 FilePlayback)
+├── capture/              # 采集引擎 (CaptureBuffer/SweepRunner/MeasurementSession + 规划 RecorderEngine/ParameterTimeline/AnalysisStrategy)
+├── analysis/             # 分析引擎 (FreqResponse/Harmonic/CompressionCurve/Export + 规划 WavExporter)
 ├── ipc/                  # Named Pipe 控制 (PipeServer/CommandParser/Protocol)
 ├── ui/PlotWidget         # 绘图组件
 └── utils/                # FftHelper/MathUtils/CrashLog
