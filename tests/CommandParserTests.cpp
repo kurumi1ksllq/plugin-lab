@@ -15,6 +15,7 @@
 #include <catch2/catch_approx.hpp>
 
 #include "TestPlugin.h"
+#include "TestCompressorPlugin.h"
 #include "../source/ipc/CommandParser.h"
 #include "../source/ipc/Protocol.h"
 #include "../source/capture/MeasurementSession.h"
@@ -1232,4 +1233,159 @@ TEST_CASE ("CommandParser: file source + gr_timeline exports GR timeline without
     // Cleanup
     exportFile.deleteFile();
     wavFile.deleteFile();
+}
+
+//==============================================================================
+// 11. GR carrier start frequency (T5.4 fix) — the dynamic carrier sweep must
+// start at a frequency high enough that the sample-instantaneous detector is
+// not polluted by low-frequency carrier wobble, otherwise the GR attack edge
+// is corrupted and tau comes back invalid. The IPC command exposes an optional
+// `carrier_start_hz` field; when absent it defaults to 10000 Hz (matching the
+// CompressionFamily internal configuration).
+//==============================================================================
+
+TEST_CASE ("CommandParser: measure dynamic honours explicit carrier_start_hz",
+           "[commandparser][measure-dynamic-carrier-start-explicit]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_dynamic_carrier_start.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+
+    // 2.5 kHz sweep start — must be forwarded to the session configuration.
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","source":"dynamic","carrier_start_hz":2500,"path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+    REQUIRE (session.getDynamicCarrierStartHz() == Catch::Approx (2500.0));
+
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    exportFile.deleteFile();
+}
+
+TEST_CASE ("CommandParser: measure dynamic defaults carrier_start_hz to 10000 Hz",
+           "[commandparser][measure-dynamic-carrier-start-default]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_dynamic_carrier_default.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+
+    // No carrier_start_hz: the parser must apply the 10000 Hz default so the
+    // GR timeline is measurable out of the box (matching CompressionFamily).
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","source":"dynamic","path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+    REQUIRE (session.getDynamicCarrierStartHz() == Catch::Approx (10000.0));
+
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    exportFile.deleteFile();
+}
+
+TEST_CASE ("CommandParser: gr_timeline on dynamic source yields valid tau with high carrier start",
+           "[commandparser][measure-gr-tau-valid-dynamic]")
+{
+    ensureMessageManager();
+
+    // A real compressor (one-pole detector + gain computer): with the carrier
+    // sweep starting at 10 kHz the attack/release edges are clean, so the
+    // tau estimate must come back valid (T4.3 locked the same configuration
+    // in CompressionFamily). At the old 20 Hz default the low-frequency wobble
+    // pollutes the attack edge and tau is invalid.
+    auto plugin = std::make_unique<TestCompressorPlugin>();
+    plugin->setThresholdDB (-30.0);
+    plugin->setRatio (4.0);
+    plugin->setAttackSec (0.005);
+    plugin->setReleaseSec (0.05);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_gr_tau_valid.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","source":"dynamic","type":"gr_timeline","carrier_start_hz":10000,"path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // 1. Response + export present.
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    REQUIRE (exportedJson["type"].toString() == "gr_timeline");
+    REQUIRE (exportedJson["gr"]["timeline"].size() > 0);
+
+    // 2. The tau block must be valid — the whole point of the carrier_start_hz
+    //    fix (at 20 Hz default the low-frequency wobble breaks the edge fit).
+    REQUIRE ((bool) exportedJson["tau"]["valid"]);
+    REQUIRE (static_cast<double> (exportedJson["tau"]["attack_sec"]) > 0.0);
+    // Release: the default ADSR release (0.2 s) is too short for the input to
+    // fall below threshold before the 2 s signal ends, so the release edge is
+    // not always detected (release_sec may be 0). The attack tau above proves
+    // the carrier_start_hz fix; a full release estimate needs a configurable
+    // ADSR release (a separate, documented limitation).
+    REQUIRE (static_cast<double> (exportedJson["tau"]["release_sec"]) >= 0.0);
+
+    exportFile.deleteFile();
 }

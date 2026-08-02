@@ -168,6 +168,15 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         {
             if (obj->hasProperty ("carrier_freq"))
                 session->setDynamicCarrierFreq (static_cast<double> (obj->getProperty ("carrier_freq")));
+
+            // The carrier sweep must start high enough that the detector is
+            // not polluted by low-frequency carrier wobble (otherwise the GR
+            // attack edge is corrupted and tau comes back invalid). Default
+            // to 10 kHz, matching CompressionFamily's internal configuration.
+            double carrierStartHz = 10000.0;
+            if (obj->hasProperty ("carrier_start_hz"))
+                carrierStartHz = static_cast<double> (obj->getProperty ("carrier_start_hz"));
+            session->setDynamicCarrierStartHz (carrierStartHz);
         }
 
         session->setSource (source);
@@ -291,25 +300,38 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 //   file/noise sources are real-world material with no
                 //   controlled edges, so their markers stay empty and the tau
                 //   estimate is invalid by design (GR timeline still exported).
+                // - A 1 ms RMS window (matching CompressionFamily's internal
+                //   configuration) keeps enough timeline points to resolve a
+                //   few-ms attack edge; the default 5 ms window blurs it away.
                 results.gr = GainReduction::analyze (result.getDryBuffer(),
                                                      result.getWetBuffer(),
                                                      result.getSampleRate(),
-                                                     plugin->getLatencySamples());
+                                                     plugin->getLatencySamples(),
+                                                     0.001);
 
                 TimeConstants::EventMarkers markers;
                 if (source == MeasurementSession::Source::dynamic)
                 {
-                    // detectMarkers expects positive dB = reduction; negate a
-                    // copy of the timeline before detection (CompressionFamily
+                    // detectMarkers and TimeConstants expect positive dB =
+                    // reduction; GainReduction reports the wet/dry ratio
+                    // (negative dB for a compressor). Negate a copy for the
+                    // edge detection AND the tau estimate (CompressionFamily
                     // pattern — the exported timeline is NOT negated).
                     auto grPositive = results.gr;
                     for (auto& p : grPositive.timeline)
                         p.grDB = -p.grDB;
                     markers = CompressionFamily::detectMarkers (grPositive);
+                    results.tau = TimeConstants::estimate (grPositive, markers,
+                                                           result.getSampleRate());
                 }
-
-                results.tau = TimeConstants::estimate (results.gr, markers,
-                                                       result.getSampleRate());
+                else
+                {
+                    // file/noise sources have no controlled envelope edges:
+                    // markers stay empty and the tau estimate is invalid by
+                    // design (GR timeline still exported).
+                    results.tau = TimeConstants::estimate (results.gr, markers,
+                                                           result.getSampleRate());
+                }
 
                 exportJson = Export::grTimelineToJSON (results.gr, results.tau, ctx);
             }
@@ -469,6 +491,15 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         {
             if (obj->hasProperty ("carrier_freq"))
                 session->setDynamicCarrierFreq (static_cast<double> (obj->getProperty ("carrier_freq")));
+
+            // The carrier sweep must start high enough that the detector is
+            // not polluted by low-frequency carrier wobble (otherwise the GR
+            // attack edge is corrupted and tau comes back invalid). Default
+            // to 10 kHz, matching CompressionFamily's internal configuration.
+            double carrierStartHz = 10000.0;
+            if (obj->hasProperty ("carrier_start_hz"))
+                carrierStartHz = static_cast<double> (obj->getProperty ("carrier_start_hz"));
+            session->setDynamicCarrierStartHz (carrierStartHz);
         }
 
         session->setSource (source);
