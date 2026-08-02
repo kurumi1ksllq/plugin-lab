@@ -106,6 +106,7 @@ bool SweepRunner::run()
     }
 
     CRASH_LOG_INFO ("Sweep done", juce::String (samplesGenerated) + " samples generated");
+    result.trim();  // shrink to recorded length so analyzers see real data
     if (pluginPrepared)
     {
         plugin->releaseResources();

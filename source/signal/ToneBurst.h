@@ -33,6 +33,9 @@ public:
     /** Set a master amplitude multiplier applied to all burst levels. */
     void setMasterAmplitude (double scale);
 
+    /** Get the amplitude levels used for each burst (read-only). */
+    const std::vector<double>& getLevels() const { return levels; }
+
     //==============================================================================
     void prepare (double sampleRate, int blockSize) override;
     void generate (juce::AudioBuffer<float>& buffer,

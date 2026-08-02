@@ -133,7 +133,7 @@ public:
         {
             statusLabel->setText (s, juce::dontSendNotification);
         });
-        commandParser->setMeasurementCompleteCallback ([this] (const FreqResponse::Result& r)
+        commandParser->setMeasurementCompleteCallback ([this] (const MeasurementResults& r)
         {
             measurementResult = r;
             hasMeasurement = true;
@@ -315,51 +315,18 @@ public:
             measureHarmonicButton->setEnabled (true);
             measureCompressionButton->setEnabled (true);
 
-            // Empty-result guard: leave the plots untouched.
-            if (measurementResult.raw.empty())
+            switch (measurementResult.type)
             {
-                statusLabel->setText ("Measurement complete (no data)",
-                                      juce::dontSendNotification);
-                return;
+                case MeasurementSession::Type::frequencyResponse:
+                    renderFrequencyResponse();
+                    break;
+                case MeasurementSession::Type::harmonicAnalysis:
+                    renderHarmonicAnalysis();
+                    break;
+                case MeasurementSession::Type::compressionCurve:
+                    renderCompressionCurve();
+                    break;
             }
-
-            statusLabel->setText ("Measurement complete: "
-                + juce::String (static_cast<int> (measurementResult.raw.size()))
-                + " frequency points", juce::dontSendNotification);
-
-            // Magnitude curve (cyan).
-            PlotWidget::Series magSeries;
-            magSeries.name = "Magnitude";
-            magSeries.colour = juce::Colours::cyan;
-            magSeries.lineWidth = 2.0f;
-            magSeries.x.reserve (measurementResult.raw.size());
-            magSeries.y.reserve (measurementResult.raw.size());
-            for (const auto& p : measurementResult.raw)
-            {
-                magSeries.x.push_back (static_cast<float> (p.frequency));
-                magSeries.y.push_back (static_cast<float> (p.magnitudeDB));
-            }
-
-            magPlot->clear();
-            magPlot->addSeries (std::move (magSeries));
-            magPlot->repaint();
-
-            // Phase curve (yellow).
-            PlotWidget::Series phaseSeries;
-            phaseSeries.name = "Phase";
-            phaseSeries.colour = juce::Colours::yellow;
-            phaseSeries.lineWidth = 2.0f;
-            phaseSeries.x.reserve (measurementResult.raw.size());
-            phaseSeries.y.reserve (measurementResult.raw.size());
-            for (const auto& p : measurementResult.raw)
-            {
-                phaseSeries.x.push_back (static_cast<float> (p.frequency));
-                phaseSeries.y.push_back (static_cast<float> (p.phaseDeg));
-            }
-
-            phasePlot->clear();
-            phasePlot->addSeries (std::move (phaseSeries));
-            phasePlot->repaint();
         }
     }
 
@@ -475,6 +442,157 @@ private:
     }
 
     //==============================================================================
+    // Measurement rendering — one renderer per measurement type. Each clears
+    // both plots and sets the axis labels before drawing, so switching between
+    // measurement types never mixes stale data or mismatched axes.
+
+    /** Frequency response: magnitude (top) + phase (bottom), log-X. */
+    void renderFrequencyResponse() const
+    {
+        magPlot->setAxisLabels ("Frequency (Hz)", "Magnitude (dB)");
+        magPlot->setXAxisLog (true);
+        phasePlot->setAxisLabels ("Frequency (Hz)", "Phase (degrees)");
+        phasePlot->setXAxisLog (true);
+
+        auto& raw = measurementResult.freq.raw;
+
+        // Empty-result guard: leave the plots untouched.
+        if (raw.empty())
+        {
+            statusLabel->setText ("Measurement complete (no data)",
+                                  juce::dontSendNotification);
+            return;
+        }
+
+        statusLabel->setText ("Measurement complete: "
+            + juce::String (static_cast<int> (raw.size()))
+            + " frequency points", juce::dontSendNotification);
+
+        // Magnitude curve (cyan).
+        PlotWidget::Series magSeries;
+        magSeries.name = "Magnitude";
+        magSeries.colour = juce::Colours::cyan;
+        magSeries.lineWidth = 2.0f;
+        magSeries.x.reserve (raw.size());
+        magSeries.y.reserve (raw.size());
+        for (const auto& p : raw)
+        {
+            magSeries.x.push_back (static_cast<float> (p.frequency));
+            magSeries.y.push_back (static_cast<float> (p.magnitudeDB));
+        }
+
+        magPlot->clear();
+        magPlot->addSeries (std::move (magSeries));
+        magPlot->repaint();
+
+        // Phase curve (yellow).
+        PlotWidget::Series phaseSeries;
+        phaseSeries.name = "Phase";
+        phaseSeries.colour = juce::Colours::yellow;
+        phaseSeries.lineWidth = 2.0f;
+        phaseSeries.x.reserve (raw.size());
+        phaseSeries.y.reserve (raw.size());
+        for (const auto& p : raw)
+        {
+            phaseSeries.x.push_back (static_cast<float> (p.frequency));
+            phaseSeries.y.push_back (static_cast<float> (p.phaseDeg));
+        }
+
+        phasePlot->clear();
+        phasePlot->addSeries (std::move (phaseSeries));
+        phasePlot->repaint();
+    }
+
+    /** Harmonic analysis: magnitudes of the first tone (order 1..N), THD in
+     *  the status label. Linear-X, bottom plot stays empty. */
+    void renderHarmonicAnalysis() const
+    {
+        magPlot->setAxisLabels ("Harmonic Order", "Magnitude (dB)");
+        magPlot->setXAxisLog (false);
+        phasePlot->setAxisLabels ("Harmonic Order", "Magnitude (dB)");
+        phasePlot->setXAxisLog (false);
+        phasePlot->clear();
+        phasePlot->repaint();
+
+        auto& tones = measurementResult.harmonic.tones;
+
+        // Empty-result guard: leave the plots untouched.
+        if (tones.empty())
+        {
+            statusLabel->setText ("Measurement complete (no data)",
+                                  juce::dontSendNotification);
+            return;
+        }
+
+        // Render the first tone's spectrum: fundamental as order 1, then each
+        // measured harmonic.
+        const auto& tone = tones[0];
+
+        PlotWidget::Series harmSeries;
+        harmSeries.name = "Harmonics";
+        harmSeries.colour = juce::Colours::cyan;
+        harmSeries.lineWidth = 2.0f;
+        harmSeries.x.push_back (1.0f);
+        harmSeries.y.push_back (static_cast<float> (tone.fundamentalDB));
+        for (const auto& h : tone.harmonics)
+        {
+            harmSeries.x.push_back (static_cast<float> (h.order));
+            harmSeries.y.push_back (static_cast<float> (h.magnitudeDB));
+        }
+
+        magPlot->clear();
+        magPlot->addSeries (std::move (harmSeries));
+        magPlot->repaint();
+
+        statusLabel->setText ("THD: " + juce::String (tone.thdPercent, 2)
+            + "% @ " + juce::String (tone.fundamentalFreq, 0)
+            + " Hz", juce::dontSendNotification);
+    }
+
+    /** Compression curve: input vs output level; fitted parameters in the
+     *  status label. Linear-X, bottom plot stays empty. */
+    void renderCompressionCurve() const
+    {
+        magPlot->setAxisLabels ("Input (dB)", "Output (dB)");
+        magPlot->setXAxisLog (false);
+        phasePlot->setAxisLabels ("Input (dB)", "Gain Reduction (dB)");
+        phasePlot->setXAxisLog (false);
+        phasePlot->clear();
+        phasePlot->repaint();
+
+        auto& curve = measurementResult.compression.curve;
+
+        // Empty-result guard: leave the plots untouched.
+        if (curve.empty())
+        {
+            statusLabel->setText ("Measurement complete (no data)",
+                                  juce::dontSendNotification);
+            return;
+        }
+
+        PlotWidget::Series curveSeries;
+        curveSeries.name = "Compression";
+        curveSeries.colour = juce::Colours::cyan;
+        curveSeries.lineWidth = 2.0f;
+        curveSeries.x.reserve (curve.size());
+        curveSeries.y.reserve (curve.size());
+        for (const auto& p : curve)
+        {
+            curveSeries.x.push_back (static_cast<float> (p.inputDB));
+            curveSeries.y.push_back (static_cast<float> (p.outputDB));
+        }
+
+        magPlot->clear();
+        magPlot->addSeries (std::move (curveSeries));
+        magPlot->repaint();
+
+        const auto& f = measurementResult.compression.fitted;
+        statusLabel->setText ("Ratio " + juce::String (f.ratio, 2) + ":1, threshold "
+            + juce::String (f.thresholdDB, 1) + " dB, knee "
+            + juce::String (f.kneeDB, 1) + " dB", juce::dontSendNotification);
+    }
+
+    //==============================================================================
     void scanPlugins()
     {
         if (scanDone || scanRunning.exchange (true))
@@ -527,12 +645,10 @@ private:
     //==============================================================================
     /** Start a measurement from the GUI.  Runs on the message thread.
      *
-     *  Frequency response is fully wired: handleCommand executes synchronously
-     *  here (the GUI freezes ~5 s — a known Pro-Q 4 thread-affinity
-     *  requirement), and the result is pushed to the plots via
-     *  measurementCompleteCallback → handleAsyncUpdate.
-     *
-     *  Harmonic/compression are placeholders until phase 2.
+     *  All three measurement types are wired end-to-end: handleCommand
+     *  executes synchronously here (the GUI freezes while measuring — a known
+     *  Pro-Q 4 thread-affinity requirement), and the result is pushed to the
+     *  plots via measurementCompleteCallback → handleAsyncUpdate.
      */
     void startMeasurement (const juce::String& type)
     {
@@ -542,15 +658,8 @@ private:
             return;
         }
 
-        if (type != Protocol::MeasureType::freq)
-        {
-            statusLabel->setText ("Harmonic / compression analysis arrives in phase 2",
-                                  juce::dontSendNotification);
-            return;
-        }
-
-        // Re-entry guard: the sweep runs synchronously on the message thread
-        // (~5 s).  With the message loop yielding during the sweep (SweepRunner)
+        // Re-entry guard: the measurement runs synchronously on the message
+        // thread.  With the message loop yielding during the sweep (SweepRunner)
         // the button stays clickable, so ignore a second click while running.
         if (measurementInProgress)
             return;
@@ -559,11 +668,11 @@ private:
         measureFreqButton->setEnabled (false);
         measureHarmonicButton->setEnabled (false);
         measureCompressionButton->setEnabled (false);
-        statusLabel->setText ("Measuring... (~5s)", juce::dontSendNotification);
+        statusLabel->setText ("Measuring...", juce::dontSendNotification);
 
         // Synchronous on the message thread (no IPC involved from the GUI).
         auto response = commandParser->handleCommand (
-            R"({"cmd":"measure","type":"frequency_response"})");
+            R"({"cmd":"measure","type":")" + type + R"("})");
 
         // Surface errors (e.g. "measurement failed").  Success is reported by
         // handleAsyncUpdate once the result has been rendered to the plots.
@@ -672,8 +781,8 @@ private:
     std::unique_ptr<CommandParser> commandParser;
     std::unique_ptr<PipeServer> pipeServer;
 
-    // Measurement result held for UI rendering (T6)
-    FreqResponse::Result measurementResult;
+    // Measurement result held for UI rendering (T6/T8: all three types)
+    MeasurementResults measurementResult;
     bool hasMeasurement = false;
 
     // --- Core ---

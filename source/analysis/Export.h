@@ -38,9 +38,17 @@ namespace Export
     juce::String harmonicAnalysisToJSON (const HarmonicAnalysis::Result& result,
                                           const juce::String& pluginName = "Unknown");
 
+    /** Export harmonic analysis with full measurement context to JSON string. */
+    juce::String harmonicAnalysisToJSON (const HarmonicAnalysis::Result& result,
+                                          const Context& context);
+
     /** Export compression curve to JSON string. */
     juce::String compressionCurveToJSON (const CompressionCurve::Result& result,
                                           const juce::String& pluginName = "Unknown");
+
+    /** Export compression curve with full measurement context to JSON string. */
+    juce::String compressionCurveToJSON (const CompressionCurve::Result& result,
+                                          const Context& context);
 
     /** Write a JSON string to a file. Returns true on success. */
     bool writeToFile (const juce::String& json,

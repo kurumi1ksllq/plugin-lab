@@ -87,13 +87,21 @@ juce::String freqResponseToJSON (const FreqResponse::Result& result,
 }
 
 juce::String harmonicAnalysisToJSON (const HarmonicAnalysis::Result& result,
-                                      const juce::String& pluginName)
+                                      const Export::Context& context)
 {
     juce::String json;
     json += "{\n";
     json += "  \"type\": \"harmonic_analysis\",\n";
-    json += "  \"plugin\": \"" + escapeJsonString (pluginName) + "\",\n";
-    json += "  \"sample_rate\": " + juce::String (result.sampleRate) + ",\n";
+    json += "  \"plugin\": \"" + escapeJsonString (context.pluginName) + "\",\n";
+    json += "  \"class_id\": \"" + escapeJsonString (context.classId) + "\",\n";
+    json += "  \"latency_samples\": " + juce::String (context.latencySamples) + ",\n";
+    json += "  \"sample_rate\": " + juce::String (context.sampleRate) + ",\n";
+    json += "  \"measurement\": {\n";
+    json += "    \"sample_rate\": " + juce::String (context.sampleRate) + ",\n";
+    json += "    \"block_size\": " + juce::String (context.blockSize) + "\n";
+    json += "  },\n";
+    json += "  \"parameter_snapshot\": "
+            + (context.paramSnapshot.isNotEmpty() ? context.paramSnapshot : juce::String ("{}")) + ",\n";
     json += "  \"tones\": [\n";
 
     for (size_t t = 0; t < result.tones.size(); ++t)
@@ -127,13 +135,30 @@ juce::String harmonicAnalysisToJSON (const HarmonicAnalysis::Result& result,
     return json;
 }
 
-juce::String compressionCurveToJSON (const CompressionCurve::Result& result,
+juce::String harmonicAnalysisToJSON (const HarmonicAnalysis::Result& result,
                                       const juce::String& pluginName)
+{
+    Context context;
+    context.pluginName = pluginName;
+    return harmonicAnalysisToJSON (result, context);
+}
+
+juce::String compressionCurveToJSON (const CompressionCurve::Result& result,
+                                      const Export::Context& context)
 {
     juce::String json;
     json += "{\n";
     json += "  \"type\": \"compression_curve\",\n";
-    json += "  \"plugin\": \"" + escapeJsonString (pluginName) + "\",\n";
+    json += "  \"plugin\": \"" + escapeJsonString (context.pluginName) + "\",\n";
+    json += "  \"class_id\": \"" + escapeJsonString (context.classId) + "\",\n";
+    json += "  \"latency_samples\": " + juce::String (context.latencySamples) + ",\n";
+    json += "  \"sample_rate\": " + juce::String (context.sampleRate) + ",\n";
+    json += "  \"measurement\": {\n";
+    json += "    \"sample_rate\": " + juce::String (context.sampleRate) + ",\n";
+    json += "    \"block_size\": " + juce::String (context.blockSize) + "\n";
+    json += "  },\n";
+    json += "  \"parameter_snapshot\": "
+            + (context.paramSnapshot.isNotEmpty() ? context.paramSnapshot : juce::String ("{}")) + ",\n";
     json += "  \"curve\": [\n";
 
     for (size_t i = 0; i < result.curve.size(); ++i)

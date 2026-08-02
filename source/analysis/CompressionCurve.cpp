@@ -18,22 +18,36 @@ CompressionCurve::Result CompressionCurve::analyze (
     if (numBursts == 0) return result;
 
     int samplesPerBurst = numSamples / numBursts;
-    int burstAnalysisLen = samplesPerBurst / 2;  // Use middle half of each burst
-    int burstStartOffset = samplesPerBurst / 4;
 
     for (int b = 0; b < numBursts; ++b)
     {
-        int start = b * samplesPerBurst + burstStartOffset;
-        int length = burstAnalysisLen;
+        int segStart = b * samplesPerBurst;
+        int segLen   = juce::jmin (samplesPerBurst, numSamples - segStart);
+        if (segLen <= 0) break;
 
-        if (start + length > numSamples)
+        // The tone burst occupies only part of each segment (ToneBurst uses a
+        // 25% duty cycle at the segment start). Hunt for the loudest
+        // quarter-length window within the segment — the burst itself — so the
+        // measurement is robust to the exact duty cycle and any plugin delay.
+        int windowLen = segLen / 4;
+        if (windowLen <= 0) break;
+
+        int bestStart = segStart;
+        double bestRMS = 0.0;
+        const int step = juce::jmax (1, windowLen / 2);
+
+        for (int off = 0; off + windowLen <= segLen; off += step)
         {
-            length = numSamples - start;
-            if (length <= 0) break;
+            double rms = measureRMS (dryData, segStart + off, windowLen);
+            if (rms > bestRMS)
+            {
+                bestRMS = rms;
+                bestStart = segStart + off;
+            }
         }
 
-        double dryRMS = measureRMS (dryData, start, length);
-        double wetRMS = measureRMS (wetData, start, length);
+        double dryRMS = bestRMS;
+        double wetRMS = measureRMS (wetData, bestStart, windowLen);
 
         Point p;
         p.inputDB = MathUtils::amplitudeToDB (dryRMS);
@@ -42,8 +56,6 @@ CompressionCurve::Result CompressionCurve::analyze (
 
         result.curve.push_back (p);
     }
-
-    // Fit compression parameters
     result.fitted = fitParams (result.curve);
 
     return result;
@@ -81,27 +93,37 @@ CompressionCurve::FittedParams CompressionCurve::fitParams (
     }
     params.thresholdDB = thresholdDB;
 
-    // Simple ratio estimation from points above threshold
-    double sumInputAbove = 0.0, sumOutputAbove = 0.0;
-    int countAbove = 0;
-
+    // Ratio estimation from points above threshold: least-squares slope of
+    // output vs input, converted to a ratio (dIn / dOut). Always finite and
+    // clamped to >= 1:1.
+    std::vector<const Point*> above;
     for (auto& p : curve)
     {
         if (p.inputDB > thresholdDB && p.gainReductionDB < -0.5)
-        {
-            sumInputAbove += p.inputDB;
-            sumOutputAbove += p.outputDB;
-            countAbove++;
-        }
+            above.push_back (&p);
     }
 
-    if (countAbove > 0)
+    if (above.size() >= 2)
     {
-        double avgInput = sumInputAbove / countAbove;
-        double avgOutput = sumOutputAbove / countAbove;
-        if (avgInput > avgOutput && std::abs (avgInput - thresholdDB) > 0.1)
-            params.ratio = (avgInput - thresholdDB) / (avgOutput - (avgInput - (avgInput - avgOutput)));
-        if (params.ratio < 1.0) params.ratio = 1.0;
+        double meanX = 0.0, meanY = 0.0;
+        for (auto* p : above) { meanX += p->inputDB;  meanY += p->outputDB; }
+        meanX /= static_cast<double> (above.size());
+        meanY /= static_cast<double> (above.size());
+
+        double covXY = 0.0, varX = 0.0;
+        for (auto* p : above)
+        {
+            const double dx = p->inputDB - meanX;
+            const double dy = p->outputDB - meanY;
+            covXY += dx * dy;
+            varX  += dx * dx;
+        }
+
+        if (varX > 1e-6 && covXY > 0.0)
+        {
+            params.ratio = varX / covXY;  // slope⁻¹ = compression ratio
+            if (params.ratio < 1.0) params.ratio = 1.0;
+        }
     }
 
     params.kneeDB = 3.0;  // Default knee; more sophisticated fitting later

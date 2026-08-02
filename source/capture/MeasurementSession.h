@@ -61,6 +61,14 @@ public:
     /** Get the configured block size. */
     int getBlockSize() const { return blockSize; }
 
+    /** Get the fundamental frequencies used for harmonic analysis.
+     *  Empty unless the session type is harmonicAnalysis and run() completed. */
+    const std::vector<double>& getFundamentalFreqs() const { return fundamentalFreqs; }
+
+    /** Get the tone-burst input levels in dB (20*log10(amplitude)).
+     *  Empty unless the session type is compressionCurve and run() completed. */
+    std::vector<double> getInputLevelsDB() const;
+
     /** Get progress (0.0 - 1.0). */
     float getProgress() const { return lastProgress; }
 
@@ -82,6 +90,10 @@ private:
     std::function<void(float)> progressCallback;
 
     juce::String paramSnapshot;
+
+    // Analysis parameters populated by run() from the generated signal.
+    std::vector<double> fundamentalFreqs;  // harmonic analysis frequencies
+    std::vector<double> lastLevels;        // tone-burst amplitudes (linear)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MeasurementSession)
 };

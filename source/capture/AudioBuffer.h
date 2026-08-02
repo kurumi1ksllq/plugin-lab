@@ -22,6 +22,11 @@ public:
     void append (const juce::AudioBuffer<float>& dry,
                  const juce::AudioBuffer<float>& wet);
 
+    /** Shrink the internal buffers to exactly the recorded sample count so
+     *  that analyzers see the true captured length instead of the
+     *  pre-allocated capacity (which is 30 s of silent padding). */
+    void trim();
+
     /** Clear all recorded data. */
     void clear();
 

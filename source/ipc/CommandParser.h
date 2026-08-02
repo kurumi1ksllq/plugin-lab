@@ -4,6 +4,21 @@
 #include "../host/PluginManager.h"
 #include "../capture/MeasurementSession.h"
 #include "../analysis/FreqResponse.h"
+#include "../analysis/HarmonicAnalysis.h"
+#include "../analysis/CompressionCurve.h"
+
+/**
+ * Aggregated measurement outcome passed to the UI after analysis + export.
+ * Exactly one Result field is populated depending on type; the others stay
+ * default-constructed (empty).
+ */
+struct MeasurementResults
+{
+    MeasurementSession::Type type = MeasurementSession::Type::frequencyResponse;
+    FreqResponse::Result freq;
+    HarmonicAnalysis::Result harmonic;
+    CompressionCurve::Result compression;
+};
 
 /**
  * Parses incoming JSON commands and dispatches them to the
@@ -42,7 +57,7 @@ public:
 
     /** Set a callback invoked on the message thread after measurement
      *  completes (analysis + export finished). */
-    void setMeasurementCompleteCallback (std::function<void(const FreqResponse::Result&)> cb)
+    void setMeasurementCompleteCallback (std::function<void(const MeasurementResults&)> cb)
     {
         measurementCompleteCallback = std::move (cb);
     }
@@ -58,7 +73,7 @@ private:
 
     std::function<void(const juce::PluginDescription&)> loadPluginCallback;
     std::function<void(const juce::String&)> statusCallback;
-    std::function<void(const FreqResponse::Result&)> measurementCompleteCallback;
+    std::function<void(const MeasurementResults&)> measurementCompleteCallback;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CommandParser)
 };

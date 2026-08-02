@@ -65,8 +65,8 @@ TEST_CASE ("CommandParser: measure performs frequency analysis, exports JSON, an
     parser.setSession (&session);
 
     std::atomic<bool> callbackFired { false };
-    FreqResponse::Result capturedResult;
-    parser.setMeasurementCompleteCallback ([&] (const FreqResponse::Result& r) {
+    MeasurementResults capturedResult;
+    parser.setMeasurementCompleteCallback ([&] (const MeasurementResults& r) {
         callbackFired.store (true);
         capturedResult = r;
     });
@@ -99,10 +99,12 @@ TEST_CASE ("CommandParser: measure performs frequency analysis, exports JSON, an
     // 2. The measurement complete callback must have been invoked
     REQUIRE (callbackFired.load());
 
-    // 3. The callback result must contain frequency response data
-    REQUIRE_FALSE (capturedResult.raw.empty());
-    REQUIRE (capturedResult.raw[0].frequency > 0.0);
-    REQUIRE (capturedResult.sampleRate > 0.0);
+    // 3. The callback result must identify the measurement type and contain
+    //    frequency response data
+    REQUIRE (capturedResult.type == MeasurementSession::Type::frequencyResponse);
+    REQUIRE_FALSE (capturedResult.freq.raw.empty());
+    REQUIRE (capturedResult.freq.raw[0].frequency > 0.0);
+    REQUIRE (capturedResult.freq.sampleRate > 0.0);
 
     // 4. Export file must exist and contain valid JSON
     juce::File exportFile (exportPath);
@@ -112,6 +114,176 @@ TEST_CASE ("CommandParser: measure performs frequency analysis, exports JSON, an
     REQUIRE (exportObj != nullptr);
     REQUIRE (exportObj->hasProperty ("type"));
     REQUIRE (exportObj->getProperty ("type").toString() == "frequency_response");
+
+    // Cleanup
+    exportFile.deleteFile();
+}
+
+//==============================================================================
+// 1b. Measure — harmonic analysis: analysis + export + callback
+//==============================================================================
+
+TEST_CASE ("CommandParser: measure harmonic analysis exports JSON and fires callback",
+           "[commandparser][measure]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::harmonicAnalysis);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    std::atomic<bool> callbackFired { false };
+    MeasurementResults capturedResult;
+    parser.setMeasurementCompleteCallback ([&] (const MeasurementResults& r) {
+        callbackFired.store (true);
+        capturedResult = r;
+    });
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_harmonic.json")
+            .getFullPathName();
+
+    // Clean up from previous runs
+    juce::File (exportPath).deleteFile();
+
+    // ---- Act ----
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","type":"harmonic","path":)")
+        + juce::JSON::toString (exportPath)
+        + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    // Flush MessageManager to process the callAsync callback
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    // 1. Response must indicate success with samples and export path
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"samples\":"));
+    REQUIRE (response.contains ("\"export_path\":"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    // 2. The measurement complete callback must have been invoked with the
+    //    harmonic analysis result (tones detected from the multi-tone signal)
+    REQUIRE (callbackFired.load());
+    REQUIRE (capturedResult.type == MeasurementSession::Type::harmonicAnalysis);
+    REQUIRE_FALSE (capturedResult.harmonic.tones.empty());
+    // The analysis must have actually detected the fundamentals (real signal
+    // energy), not emitted empty -120 dB placeholder tones from silence.
+    REQUIRE (capturedResult.harmonic.tones[0].fundamentalDB > -100.0);
+
+    // 3. Export file must exist, be parseable, and carry the harmonic payload
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    auto* exportObj = exportedJson.getDynamicObject();
+    REQUIRE (exportObj != nullptr);
+    REQUIRE (exportObj->getProperty ("type").toString() == "harmonic_analysis");
+    REQUIRE (exportObj->hasProperty ("class_id"));
+    REQUIRE (exportObj->hasProperty ("tones"));
+    REQUIRE (exportObj->getProperty ("tones").size() > 0);
+
+    // Cleanup
+    exportFile.deleteFile();
+}
+
+//==============================================================================
+// 1c. Measure — compression curve: analysis + export + callback
+//==============================================================================
+
+TEST_CASE ("CommandParser: measure compression curve exports JSON and fires callback",
+           "[commandparser][measure]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::compressionCurve);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    std::atomic<bool> callbackFired { false };
+    MeasurementResults capturedResult;
+    parser.setMeasurementCompleteCallback ([&] (const MeasurementResults& r) {
+        callbackFired.store (true);
+        capturedResult = r;
+    });
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_compression.json")
+            .getFullPathName();
+
+    // Clean up from previous runs
+    juce::File (exportPath).deleteFile();
+
+    // ---- Act ----
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","type":"compression","path":)")
+        + juce::JSON::toString (exportPath)
+        + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    // Flush MessageManager to process the callAsync callback
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    // 1. Response must indicate success with samples and export path
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"samples\":"));
+    REQUIRE (response.contains ("\"export_path\":"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    // 2. The measurement complete callback must have been invoked with the
+    //    compression curve result (9 burst levels measured)
+    REQUIRE (callbackFired.load());
+    REQUIRE (capturedResult.type == MeasurementSession::Type::compressionCurve);
+    REQUIRE_FALSE (capturedResult.compression.curve.empty());
+    // The analysis must have measured actual burst energy: most windows must
+    // land on tone bursts instead of empty buffer regions.
+    int realPoints = 0;
+    for (const auto& p : capturedResult.compression.curve)
+        if (p.inputDB > -100.0)
+            ++realPoints;
+    REQUIRE (realPoints >= 8);
+
+    // 3. Export file must exist, be parseable, and carry the curve + fitted data
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    auto* exportObj = exportedJson.getDynamicObject();
+    REQUIRE (exportObj != nullptr);
+    REQUIRE (exportObj->getProperty ("type").toString() == "compression_curve");
+    REQUIRE (exportObj->hasProperty ("class_id"));
+    REQUIRE (exportObj->hasProperty ("curve"));
+    REQUIRE (exportObj->getProperty ("curve").size() > 0);
+    REQUIRE (exportObj->hasProperty ("fitted"));
+    // Fitted params must be finite, parseable numbers (never "inf").
+    REQUIRE (exportedJson["fitted"]["ratio"].isDouble());
+    REQUIRE (static_cast<double> (exportedJson["fitted"]["ratio"]) >= 1.0);
+    REQUIRE (exportedJson["fitted"]["threshold_db"].isDouble());
+    REQUIRE (exportedJson["fitted"]["knee_db"].isDouble());
 
     // Cleanup
     exportFile.deleteFile();

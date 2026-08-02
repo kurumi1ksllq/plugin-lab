@@ -2,6 +2,7 @@
 #include "../signal/SineSweep.h"
 #include "../signal/MultiTone.h"
 #include "../signal/ToneBurst.h"
+#include "../utils/MathUtils.h"
 
 void MeasurementSession::setPluginInstance (juce::AudioPluginInstance* p)
 {
@@ -70,9 +71,16 @@ bool MeasurementSession::run()
 
         case Type::harmonicAnalysis:
         {
+            // Explicit frequency list shared with HarmonicAnalysis: the
+            // analysis must know exactly which fundamentals to look for.
+            static const std::vector<double> kFundamentals =
+                { 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0, 12800.0 };
+
             auto multi = std::make_unique<MultiTone>();
             multi->setDuration (3.0);
             multi->setAmplitude (0.4);
+            multi->setFrequencies (kFundamentals);
+            fundamentalFreqs = kFundamentals;
             gen = std::move (multi);
             break;
         }
@@ -81,6 +89,7 @@ bool MeasurementSession::run()
         {
             auto bursts = std::make_unique<ToneBurst>();
             bursts->setFrequency (1000.0);
+            lastLevels = bursts->getLevels();
             gen = std::move (bursts);
             break;
         }
@@ -104,4 +113,15 @@ bool MeasurementSession::run()
 
     // Run
     return runner.run();
+}
+
+std::vector<double> MeasurementSession::getInputLevelsDB() const
+{
+    std::vector<double> levelsDB;
+    levelsDB.reserve (lastLevels.size());
+
+    for (double amp : lastLevels)
+        levelsDB.push_back (MathUtils::amplitudeToDB (amp));
+
+    return levelsDB;
 }

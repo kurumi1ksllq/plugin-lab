@@ -51,3 +51,9 @@ void CaptureBuffer::append (const juce::AudioBuffer<float>& dry,
 
     totalSamples += numNewSamples;
 }
+
+void CaptureBuffer::trim()
+{
+    dryBuffer.setSize (numChannels, static_cast<int> (totalSamples), true, false, false);
+    wetBuffer.setSize (numChannels, static_cast<int> (totalSamples), true, false, false);
+}

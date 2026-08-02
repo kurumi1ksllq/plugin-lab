@@ -1,6 +1,8 @@
 #include "CommandParser.h"
 #include "Protocol.h"
 #include "../analysis/Export.h"
+#include "../analysis/HarmonicAnalysis.h"
+#include "../analysis/CompressionCurve.h"
 
 juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 {
@@ -123,12 +125,6 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
             auto& result = session->getResult();
 
-            FreqResponse fr;
-            fr.setLatencySamples (plugin->getLatencySamples());
-            auto frResult = fr.analyze (result.getDryBuffer(),
-                                        result.getWetBuffer(),
-                                        result.getSampleRate());
-
             Export::Context ctx;
             ctx.pluginName = plugin->getName();
             {
@@ -141,14 +137,54 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             ctx.blockSize       = session->getBlockSize();
             ctx.paramSnapshot   = session->getParameterSnapshot();
 
-            auto exportJson = Export::freqResponseToJSON (frResult, ctx);
+            // Dispatch the analysis to the analyzer matching the session type.
+            MeasurementResults results;
+            results.type = session->getType();
+
+            juce::String exportJson;
+
+            switch (session->getType())
+            {
+                case MeasurementSession::Type::frequencyResponse:
+                {
+                    FreqResponse fr;
+                    fr.setLatencySamples (plugin->getLatencySamples());
+                    results.freq = fr.analyze (result.getDryBuffer(),
+                                               result.getWetBuffer(),
+                                               result.getSampleRate());
+                    exportJson = Export::freqResponseToJSON (results.freq, ctx);
+                    break;
+                }
+
+                case MeasurementSession::Type::harmonicAnalysis:
+                {
+                    HarmonicAnalysis ha;
+                    results.harmonic = ha.analyze (result.getWetBuffer(),
+                                                   result.getSampleRate(),
+                                                   session->getFundamentalFreqs());
+                    exportJson = Export::harmonicAnalysisToJSON (results.harmonic, ctx);
+                    break;
+                }
+
+                case MeasurementSession::Type::compressionCurve:
+                {
+                    CompressionCurve cc;
+                    results.compression = cc.analyze (result.getDryBuffer(),
+                                                      result.getWetBuffer(),
+                                                      result.getSampleRate(),
+                                                      session->getInputLevelsDB());
+                    exportJson = Export::compressionCurveToJSON (results.compression, ctx);
+                    break;
+                }
+            }
+
             juce::File exportFile (path);
             Export::writeToFile (exportJson, exportFile);
 
             // measurementCompleteCallback is fired synchronously on the
             // measurement thread — unit tests assert this timing.
             if (measurementCompleteCallback)
-                measurementCompleteCallback (frResult);
+                measurementCompleteCallback (results);
 
             juce::String d = R"("samples":)" + juce::String (result.getNumRecordedSamples())
                            + R"(,"rate":)"    + juce::String (result.getSampleRate())
