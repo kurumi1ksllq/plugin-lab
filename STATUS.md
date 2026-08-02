@@ -67,6 +67,16 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 - **监控脚本**：`D:\Documents\PluginLab\monitor.ps1`
 - **GUI 自动化验收**：`C:\Users\admin\AppData\Local\Temp\opencode\gui_test_full8.py`（UIA select + 日志解析 + 崩溃重启）
 
+## 阶段 2-5 计划（2026-08-03，Momus 审查定稿）
+
+- **详细计划**：`docs/plan-phase2-5.md`（含 P0/P1/P2 问题清单 + 修正后阶段计划 + 依赖图）
+- 阶段 2：输入与信号增强（FilePlayback 重采样 / 噪声固定种子 / EnvelopeSignal / source 选择）
+- 阶段 3：参数连续扫描（ScanEngine + 连续性 JSON + GUI 多曲线）— 与阶段 4 可并行
+- 阶段 4：动态压缩行为（TestCompressorPlugin + GR 时间线 + τ 曲线族 + GR 表头）
+- 阶段 5：建模与数据整合（数据包 + 反推验证）
+- 关键路径：`2 → max(3,4) → 5`
+- vocal 素材：`take01.wav`（48k/16bit/stereo/17.0s，未入库，阶段 2 处理）
+
 ## 待办（下一步）
 
 - **T3 数据记录系统**（2026-08-02 定稿，详见 DESIGN.md §8）：
