@@ -941,7 +941,11 @@ private:
         // handleAsyncUpdate once the result has been rendered to the plots.
         // On failure the completion callback never fires, so re-arm the
         // guard here (otherwise the measure buttons stay locked forever).
-        if (auto* obj = juce::JSON::parse (response).getDynamicObject())
+        // NOTE: JSON::parse returns a temporary var — the DynamicObject must
+        // be read through a persistent local, otherwise obj dangles after the
+        // full expression and getProperty() is a use-after-free (0xc0000005).
+        const auto responseVar = juce::JSON::parse (response);
+        if (auto* obj = responseVar.getDynamicObject())
         {
             if (! (bool) obj->getProperty (Protocol::Status::ok))
             {
@@ -1041,9 +1045,12 @@ private:
         const auto paramId = scanParamIds[static_cast<size_t> (scanParamCombo->getSelectedId() - 1)];
 
         // Build the scan command with the same source fields as measure.
+        // NOTE: paramId comes from the plugin and must be JSON-escaped —
+        // String::quoted() only wraps in quotes and breaks on embedded
+        // quotes/backslashes, so use JSON::toString (same as the file path).
         juce::String json = R"({"cmd":"scan","type":")" + currentMeasureType
-                          + R"(","param_id":")" + paramId.quoted()
-                          + R"(","values":[)";
+                          + R"(","param_id":)" + juce::JSON::toString (paramId)
+                          + R"(,"values":[)";
         for (size_t i = 0; i < values.size(); ++i)
         {
             if (i > 0) json += ",";
@@ -1068,7 +1075,10 @@ private:
         // Surface errors. Success is reported by handleAsyncUpdate once the
         // scan result has been rendered; on failure the completion callback
         // never fires, so re-arm the guards and buttons here.
-        if (auto* obj = juce::JSON::parse (response).getDynamicObject())
+        // (Same dangling-temporary guard as startMeasurement — read the JSON
+        //  through a persistent local, never a temporary var.)
+        const auto responseVar = juce::JSON::parse (response);
+        if (auto* obj = responseVar.getDynamicObject())
         {
             if (! (bool) obj->getProperty (Protocol::Status::ok))
             {
