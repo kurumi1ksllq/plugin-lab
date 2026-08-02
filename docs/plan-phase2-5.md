@@ -38,7 +38,7 @@
 
 **P0-3：GR 时间线缺干/湿对齐 + 尾部截断处理**（阶段 4.1）
 插件延迟（Pro-C/Pro-Q 的 latency 随参数可变）使 wet 相对 dry 滞后 `latencySamples`。直接比 `RMS(dryBlock)/RMS(wetBlock)` 会把延迟误判为 GR；vocal 瞬态下 RMS 窗口错位会污染攻击段。另外 `SweepRunner` 在 generator 耗尽即停，**wet 尾部（latency 长度的输出余量）被截断**——扫频靠去卷积免疫，vocal/GR 会丢尾。
-**方案**：`SweepRunner::setTailPadSamples(L)` 末尾补 L 个静音 dry 让 wet 尾部完整；GR 计算前**对齐**：`GR_dB = 20·log10(RMS_wet_aligned/RMS_dry_aligned)`（dry 平移 +L，wet 平移 -L）。验收：TestPlugin `setLatencySamples(100)` + `gain=0.5` → GR 恒定 -6.02dB、无边界毛刺。
+**方案**：`SweepRunner::setTailPadSamples(L)` 末尾补 L 个静音 dry 让 wet 尾部完整；GR 计算前**对齐**：`GR_dB = 20·log10(RMS_wet_aligned/RMS_dry_aligned)`，对齐按 `wet[i+latencySamples]` 对 `dry[i]`（wet 输出相对 dry 滞后 latency 个样本，故 wet 窗口起始索引前移 L 与 dry 对齐）。验收：TestPlugin `setLatencySamples(100)` + `gain=0.5` → GR 恒定 -6.02dB、无边界毛刺。
 
 **P0-4：扫描期间 IPC `stop` 不可达，进度不可见**（阶段 3.1）
 measure 用 `callAsync + done.wait()`，PipeServer 单线程循环——**50s 扫描期间管道上的 stop 命令根本读不到**；IPC 客户端无法中断；GUI 按钮同路径也无法中途取消（只能等完）。`progressCallback` 只给 GUI，IPC 客户端收不到任何进度。
@@ -50,7 +50,7 @@ measure 用 `callAsync + done.wait()`，PipeServer 单线程循环——**50s �
 lookahead 压缩器/oversampling EQ 的 latency 随参数变化。现在 `run()` 后只读一次。扫描引擎必须在**每轮**读 `plugin->getLatencySamples()` 存入该档条目，且该档频响分析也要用该档 latency（`fr.setLatencySamples`）。验收：TestPlugin 扩展为"latency 随参数变"，扫描结果每档 latency 记录正确。
 
 **P1-6：`scan` 命令与现有 `measure` 的关系需定义**（阶段 3.1）
-**方案**：新增 `scan` IPC 命令（`{type, param_id, values[]（归一化 0-1）, path}`），响应 `{"ok":true,"runs":N,"export_path":...}`；内部**复用 `MeasurementSession::run()`**（每轮 setParam + setType + run + 分析 + 收集）；**不改动现有 measure 响应格式**（向后兼容）。`MeasurementSession::run()` 的 switch 目前同时管"信号类型"与"分析类型"——阶段 2.4 先拆为"source 决定信号、type 决定分析"二维，扫描才能组合。
+**方案**：新增 `scan` IPC 命令（`{type, param_id, values[]（归一化 0-1）, path}`），响应 `{"ok":true,"runs":N,"export_path":...}`；`type` 省略时缺省为 `frequency_response`（freq）。字段语义：file 源时 `path` = **输入音频文件路径**、`export_path` = 导出 JSON 路径；非 file 源（signal/noise/dynamic）时 `path` = 导出 JSON 路径（无 `export_path`）。内部**复用 `MeasurementSession::run()`**（每轮 setParam + setType + run + 分析 + 收集）；**不改动现有 measure 响应格式**（向后兼容）。`MeasurementSession::run()` 的 switch 目前同时管"信号类型"与"分析类型"——阶段 2.4 先拆为"source 决定信号、type 决定分析"二维，扫描才能组合。
 
 **P1-7：扫描参数快照/恢复要落实（setValue 异步、双值记录）**
 
