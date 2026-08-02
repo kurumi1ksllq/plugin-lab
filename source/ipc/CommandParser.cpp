@@ -7,6 +7,135 @@
 #include "../analysis/TimeConstants.h"
 #include "../analysis/CompressionFamily.h"
 
+// Maps the protocol source string to the session source enum. Returns false
+// when the value is not a known protocol source; callers respond with the
+// "unknown source" error.
+static bool parseSource (const juce::String& sourceStr, MeasurementSession::Source& source)
+{
+    if      (sourceStr == Protocol::Source::signal)  source = MeasurementSession::Source::signal;
+    else if (sourceStr == Protocol::Source::file)    source = MeasurementSession::Source::file;
+    else if (sourceStr == Protocol::Source::noise)   source = MeasurementSession::Source::noise;
+    else if (sourceStr == Protocol::Source::dynamic) source = MeasurementSession::Source::dynamic;
+    else return false;
+
+    return true;
+}
+
+// Applies the source-specific session configuration: the input file path
+// (with existence check) for the file source, the noise generator settings
+// for the noise source, and the carrier frequency / sweep-start for the
+// dynamic source. Returns an error message when the configuration is
+// invalid (empty string on success); callers respond with it. Shared by
+// the measure and scan commands.
+static juce::String configureSessionSource (MeasurementSession& session, const juce::DynamicObject& obj,
+                                            MeasurementSession::Source source)
+{
+    if (source == MeasurementSession::Source::file)
+    {
+        // For the file source "path" names the INPUT audio file (the
+        // export path is disambiguated via "export_path" below).
+        auto inputPath = obj.getProperty ("path").toString();
+        if (inputPath.isEmpty())
+            return R"("error":"path required")";
+        juce::File inputFile (inputPath);
+        if (! inputFile.existsAsFile())
+            return R"("error":"file not found")";
+        session.setFilePath (inputFile);
+    }
+    else if (source == MeasurementSession::Source::noise)
+    {
+        NoiseGenerator::Type noiseType = NoiseGenerator::Type::white;
+        auto noiseTypeStr = obj.getProperty ("noise_type").toString();
+        if (noiseTypeStr == "pink")
+            noiseType = NoiseGenerator::Type::pink;
+        else if (! noiseTypeStr.isEmpty() && noiseTypeStr != "white")
+            return R"("error":"unknown noise type")";
+
+        double duration = 2.0;
+        if (obj.hasProperty ("duration"))
+            duration = static_cast<double> (obj.getProperty ("duration"));
+
+        uint32_t seed = 0x2E42A5;
+        if (obj.hasProperty ("seed"))
+            seed = static_cast<uint32_t> (static_cast<int64_t> (obj.getProperty ("seed")));
+
+        session.setNoiseConfig (noiseType, duration, seed);
+    }
+    else if (source == MeasurementSession::Source::dynamic)
+    {
+        if (obj.hasProperty ("carrier_freq"))
+            session.setDynamicCarrierFreq (static_cast<double> (obj.getProperty ("carrier_freq")));
+
+        // The carrier sweep must start high enough that the detector is
+        // not polluted by low-frequency carrier wobble (otherwise the GR
+        // attack edge is corrupted and tau comes back invalid). Default
+        // to 10 kHz, matching CompressionFamily's internal configuration.
+        double carrierStartHz = 10000.0;
+        if (obj.hasProperty ("carrier_start_hz"))
+            carrierStartHz = static_cast<double> (obj.getProperty ("carrier_start_hz"));
+        session.setDynamicCarrierStartHz (carrierStartHz);
+    }
+
+    return {};
+}
+
+// Resolves the export path for a command: "export_path" for the file
+// source (where "path" names the input audio file), "path" otherwise.
+// Falls back to <current directory>/<defaultFileName> when omitted. The
+// default file name differs per command (measure/scan) and per source.
+static juce::String resolveExportPath (const juce::DynamicObject& obj, MeasurementSession::Source source,
+                                       const juce::String& defaultFileName)
+{
+    auto path = (source == MeasurementSession::Source::file)
+                    ? obj.getProperty ("export_path").toString()
+                    : obj.getProperty ("path").toString();
+    if (path.isEmpty())
+        path = juce::File::getCurrentWorkingDirectory()
+                   .getChildFile (defaultFileName)
+                   .getFullPathName();
+    return path;
+}
+
+// Builds the export context for a measurement/scan: plugin identity and
+// latency, session sample rate / block size / parameter snapshot, plus the
+// input-source metadata (file source: path/sample-rate/resample/duration;
+// noise source: type/seed/duration). Shared verbatim by the measure and
+// scan commands.
+static Export::Context buildExportContext (juce::AudioPluginInstance* plugin, MeasurementSession& session,
+                                           MeasurementSession::Source source, const juce::String& sourceStr)
+{
+    Export::Context ctx;
+    ctx.pluginName = plugin->getName();
+    {
+        juce::PluginDescription desc;
+        plugin->fillInPluginDescription (desc);
+        ctx.classId = desc.fileOrIdentifier;
+    }
+    ctx.latencySamples = plugin->getLatencySamples();
+    ctx.sampleRate     = session.getSampleRate();
+    ctx.blockSize      = session.getBlockSize();
+    ctx.paramSnapshot  = session.getParameterSnapshot();
+
+    // Attach the input-source metadata to the export.
+    ctx.source.type = sourceStr;
+    if (source == MeasurementSession::Source::file)
+    {
+        ctx.source.filePath         = session.getSourceFilePath();
+        ctx.source.sourceSampleRate = session.getSourceSampleRate();
+        ctx.source.resampleRatio    = session.getResampleRatio();
+        ctx.source.durationSec      = session.getSourceDurationSec();
+    }
+    else if (source == MeasurementSession::Source::noise)
+    {
+        ctx.source.noiseType   = (session.getNoiseType() == NoiseGenerator::Type::pink)
+                                     ? juce::String ("pink") : juce::String ("white");
+        ctx.source.seed        = session.getNoiseSeed();
+        ctx.source.durationSec = session.getNoiseDuration();
+    }
+
+    return ctx;
+}
+
 juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 {
     auto json = juce::JSON::parse (jsonCommand);
@@ -102,11 +231,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             sourceStr = Protocol::Source::signal;
 
         MeasurementSession::Source source = MeasurementSession::Source::signal;
-        if      (sourceStr == Protocol::Source::signal)  source = MeasurementSession::Source::signal;
-        else if (sourceStr == Protocol::Source::file)    source = MeasurementSession::Source::file;
-        else if (sourceStr == Protocol::Source::noise)   source = MeasurementSession::Source::noise;
-        else if (sourceStr == Protocol::Source::dynamic) source = MeasurementSession::Source::dynamic;
-        else
+        if (! parseSource (sourceStr, source))
             return Protocol::makeResponse (false, R"("error":"unknown source")");
 
         // --- measurement type (analysis field; for raw sources it is only
@@ -133,51 +258,9 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 R"("error":"gr_timeline requires a non-signal source")");
 
         // --- source-specific configuration ---
-        if (source == MeasurementSession::Source::file)
-        {
-            // For the file source "path" names the INPUT audio file (the
-            // export path is disambiguated via "export_path" below).
-            auto inputPath = obj->getProperty ("path").toString();
-            if (inputPath.isEmpty())
-                return Protocol::makeResponse (false, R"("error":"path required")");
-            juce::File inputFile (inputPath);
-            if (! inputFile.existsAsFile())
-                return Protocol::makeResponse (false, R"("error":"file not found")");
-            session->setFilePath (inputFile);
-        }
-        else if (source == MeasurementSession::Source::noise)
-        {
-            NoiseGenerator::Type noiseType = NoiseGenerator::Type::white;
-            auto noiseTypeStr = obj->getProperty ("noise_type").toString();
-            if (noiseTypeStr == "pink")
-                noiseType = NoiseGenerator::Type::pink;
-            else if (! noiseTypeStr.isEmpty() && noiseTypeStr != "white")
-                return Protocol::makeResponse (false, R"("error":"unknown noise type")");
-
-            double duration = 2.0;
-            if (obj->hasProperty ("duration"))
-                duration = static_cast<double> (obj->getProperty ("duration"));
-
-            uint32_t seed = 0x2E42A5;
-            if (obj->hasProperty ("seed"))
-                seed = static_cast<uint32_t> (static_cast<int64_t> (obj->getProperty ("seed")));
-
-            session->setNoiseConfig (noiseType, duration, seed);
-        }
-        else if (source == MeasurementSession::Source::dynamic)
-        {
-            if (obj->hasProperty ("carrier_freq"))
-                session->setDynamicCarrierFreq (static_cast<double> (obj->getProperty ("carrier_freq")));
-
-            // The carrier sweep must start high enough that the detector is
-            // not polluted by low-frequency carrier wobble (otherwise the GR
-            // attack edge is corrupted and tau comes back invalid). Default
-            // to 10 kHz, matching CompressionFamily's internal configuration.
-            double carrierStartHz = 10000.0;
-            if (obj->hasProperty ("carrier_start_hz"))
-                carrierStartHz = static_cast<double> (obj->getProperty ("carrier_start_hz"));
-            session->setDynamicCarrierStartHz (carrierStartHz);
-        }
+        auto sourceError = configureSessionSource (*session, *obj, source);
+        if (sourceError.isNotEmpty())
+            return Protocol::makeResponse (false, sourceError);
 
         session->setSource (source);
         session->setPluginInstance (plugin);
@@ -185,15 +268,10 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         // Determine export path:
         //   - signal/noise/dynamic → "path" (existing protocol)
         //   - file → "export_path" ("path" names the input audio file)
-        auto path = (source == MeasurementSession::Source::file)
-                        ? obj->getProperty ("export_path").toString()
-                        : obj->getProperty ("path").toString();
-        if (path.isEmpty())
-            path = juce::File::getCurrentWorkingDirectory()
-                       .getChildFile (source == MeasurementSession::Source::signal
-                                          ? "pluginlab_freq_response.json"
-                                          : "pluginlab_raw_capture.json")
-                       .getFullPathName();
+        auto path = resolveExportPath (*obj, source,
+                                       source == MeasurementSession::Source::signal
+                                           ? "pluginlab_freq_response.json"
+                                           : "pluginlab_raw_capture.json");
 
         if (statusCallback)
             juce::MessageManager::callAsync ([this] { statusCallback ("Measuring..."); });
@@ -208,34 +286,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
             auto& result = session->getResult();
 
-            Export::Context ctx;
-            ctx.pluginName = plugin->getName();
-            {
-                juce::PluginDescription desc;
-                plugin->fillInPluginDescription (desc);
-                ctx.classId = desc.fileOrIdentifier;
-            }
-            ctx.latencySamples = plugin->getLatencySamples();
-            ctx.sampleRate     = session->getSampleRate();
-            ctx.blockSize       = session->getBlockSize();
-            ctx.paramSnapshot   = session->getParameterSnapshot();
-
-            // Attach the input-source metadata to the export.
-            ctx.source.type = sourceStr;
-            if (source == MeasurementSession::Source::file)
-            {
-                ctx.source.filePath         = session->getSourceFilePath();
-                ctx.source.sourceSampleRate = session->getSourceSampleRate();
-                ctx.source.resampleRatio    = session->getResampleRatio();
-                ctx.source.durationSec      = session->getSourceDurationSec();
-            }
-            else if (source == MeasurementSession::Source::noise)
-            {
-                ctx.source.noiseType   = (session->getNoiseType() == NoiseGenerator::Type::pink)
-                                             ? juce::String ("pink") : juce::String ("white");
-                ctx.source.seed        = session->getNoiseSeed();
-                ctx.source.durationSec = session->getNoiseDuration();
-            }
+            Export::Context ctx = buildExportContext (plugin, *session, source, sourceStr);
 
             MeasurementResults results;
             results.type   = session->getType();
@@ -448,71 +499,19 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             sourceStr = Protocol::Source::signal;
 
         MeasurementSession::Source source = MeasurementSession::Source::signal;
-        if      (sourceStr == Protocol::Source::signal)  source = MeasurementSession::Source::signal;
-        else if (sourceStr == Protocol::Source::file)    source = MeasurementSession::Source::file;
-        else if (sourceStr == Protocol::Source::noise)   source = MeasurementSession::Source::noise;
-        else if (sourceStr == Protocol::Source::dynamic) source = MeasurementSession::Source::dynamic;
-        else
+        if (! parseSource (sourceStr, source))
             return Protocol::makeResponse (false, R"("error":"unknown source")");
 
         // --- source-specific configuration (mirrors the measure command) ---
-        if (source == MeasurementSession::Source::file)
-        {
-            // "path" names the INPUT audio file (replayed once per round);
-            // the export path is disambiguated via "export_path" below.
-            auto inputPath = obj->getProperty ("path").toString();
-            if (inputPath.isEmpty())
-                return Protocol::makeResponse (false, R"("error":"path required")");
-            juce::File inputFile (inputPath);
-            if (! inputFile.existsAsFile())
-                return Protocol::makeResponse (false, R"("error":"file not found")");
-            session->setFilePath (inputFile);
-        }
-        else if (source == MeasurementSession::Source::noise)
-        {
-            NoiseGenerator::Type noiseType = NoiseGenerator::Type::white;
-            auto noiseTypeStr = obj->getProperty ("noise_type").toString();
-            if (noiseTypeStr == "pink")
-                noiseType = NoiseGenerator::Type::pink;
-            else if (! noiseTypeStr.isEmpty() && noiseTypeStr != "white")
-                return Protocol::makeResponse (false, R"("error":"unknown noise type")");
-
-            double duration = 2.0;
-            if (obj->hasProperty ("duration"))
-                duration = static_cast<double> (obj->getProperty ("duration"));
-
-            uint32_t seed = 0x2E42A5;
-            if (obj->hasProperty ("seed"))
-                seed = static_cast<uint32_t> (static_cast<int64_t> (obj->getProperty ("seed")));
-
-            session->setNoiseConfig (noiseType, duration, seed);
-        }
-        else if (source == MeasurementSession::Source::dynamic)
-        {
-            if (obj->hasProperty ("carrier_freq"))
-                session->setDynamicCarrierFreq (static_cast<double> (obj->getProperty ("carrier_freq")));
-
-            // The carrier sweep must start high enough that the detector is
-            // not polluted by low-frequency carrier wobble (otherwise the GR
-            // attack edge is corrupted and tau comes back invalid). Default
-            // to 10 kHz, matching CompressionFamily's internal configuration.
-            double carrierStartHz = 10000.0;
-            if (obj->hasProperty ("carrier_start_hz"))
-                carrierStartHz = static_cast<double> (obj->getProperty ("carrier_start_hz"));
-            session->setDynamicCarrierStartHz (carrierStartHz);
-        }
+        auto sourceError = configureSessionSource (*session, *obj, source);
+        if (sourceError.isNotEmpty())
+            return Protocol::makeResponse (false, sourceError);
 
         session->setSource (source);
         session->setPluginInstance (plugin);
 
         // --- export path (default pluginlab_scan.json) ---
-        auto path = (source == MeasurementSession::Source::file)
-                        ? obj->getProperty ("export_path").toString()
-                        : obj->getProperty ("path").toString();
-        if (path.isEmpty())
-            path = juce::File::getCurrentWorkingDirectory()
-                       .getChildFile ("pluginlab_scan.json")
-                       .getFullPathName();
+        auto path = resolveExportPath (*obj, source, "pluginlab_scan.json");
 
         if (statusCallback)
             juce::MessageManager::callAsync ([this] { statusCallback ("Scanning..."); });
@@ -543,32 +542,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             if (scanResult.family.empty())
                 return Protocol::makeResponse (false, R"("error":"scan failed")");
 
-            Export::Context ctx;
-            ctx.pluginName = plugin->getName();
-            {
-                juce::PluginDescription desc;
-                plugin->fillInPluginDescription (desc);
-                ctx.classId = desc.fileOrIdentifier;
-            }
-            ctx.latencySamples = plugin->getLatencySamples();
-            ctx.sampleRate     = session->getSampleRate();
-            ctx.blockSize      = session->getBlockSize();
-            ctx.paramSnapshot  = session->getParameterSnapshot();
-            ctx.source.type = sourceStr;
-            if (source == MeasurementSession::Source::file)
-            {
-                ctx.source.filePath         = session->getSourceFilePath();
-                ctx.source.sourceSampleRate = session->getSourceSampleRate();
-                ctx.source.resampleRatio    = session->getResampleRatio();
-                ctx.source.durationSec      = session->getSourceDurationSec();
-            }
-            else if (source == MeasurementSession::Source::noise)
-            {
-                ctx.source.noiseType   = (session->getNoiseType() == NoiseGenerator::Type::pink)
-                                             ? juce::String ("pink") : juce::String ("white");
-                ctx.source.seed        = session->getNoiseSeed();
-                ctx.source.durationSec = session->getNoiseDuration();
-            }
+            Export::Context ctx = buildExportContext (plugin, *session, source, sourceStr);
 
             auto exportJson = Export::scanToJSON (scanResult, scanType, ctx);
             juce::File exportFile (path);
