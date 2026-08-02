@@ -8,8 +8,10 @@
 #include "ipc/Protocol.h"
 #include "capture/MeasurementSession.h"
 #include "analysis/FreqResponse.h"
+#include "scan/ScanEngine.h"
 #include <atomic>
 #include <mutex>
+#include <vector>
 
 //==============================================================================
 // Windows crash handler: writes minidump + diagnostics, then terminates.
@@ -96,21 +98,27 @@ public:
         measureFreqButton.reset (new juce::TextButton ("Freq Response"));
         measureFreqButton->onClick = [this]
         {
-            startMeasurement (juce::String (Protocol::MeasureType::freq));
+            currentMeasureType = juce::String (Protocol::MeasureType::freq);
+            updateScanEstimate();
+            startMeasurement (currentMeasureType);
         };
         addAndMakeVisible (measureFreqButton.get());
 
         measureHarmonicButton.reset (new juce::TextButton ("Harmonic"));
         measureHarmonicButton->onClick = [this]
         {
-            startMeasurement (juce::String (Protocol::MeasureType::harmonic));
+            currentMeasureType = juce::String (Protocol::MeasureType::harmonic);
+            updateScanEstimate();
+            startMeasurement (currentMeasureType);
         };
         addAndMakeVisible (measureHarmonicButton.get());
 
         measureCompressionButton.reset (new juce::TextButton ("Compression"));
         measureCompressionButton->onClick = [this]
         {
-            startMeasurement (juce::String (Protocol::MeasureType::compression));
+            currentMeasureType = juce::String (Protocol::MeasureType::compression);
+            updateScanEstimate();
+            startMeasurement (currentMeasureType);
         };
         addAndMakeVisible (measureCompressionButton.get());
 
@@ -148,6 +156,43 @@ public:
         noiseDurationBox->setVisible (false);
         addAndMakeVisible (noiseDurationBox.get());
 
+        // Parameter-scan panel (right panel, row 3): sweep one plugin
+        // parameter across the values listed in the editor — one measurement
+        // round per value (T3.3).
+        scanParamCombo.reset (new juce::ComboBox ("ScanParam"));
+        scanParamCombo->setEnabled (false);  // filled when a plugin is loaded
+        addAndMakeVisible (scanParamCombo.get());
+
+        scanValuesBox.reset (new juce::TextEditor ("ScanValues"));
+        scanValuesBox->setText ("0.0,0.25,0.5,0.75,1.0");
+        scanValuesBox->onTextChange = [this] { updateScanEstimate(); };
+        addAndMakeVisible (scanValuesBox.get());
+
+        scanEstimateLabel.reset (new juce::Label ("ScanEstimate", "≈ -- s"));
+        scanEstimateLabel->setFont (juce::FontOptions (12.0f));
+        addAndMakeVisible (scanEstimateLabel.get());
+
+        scanRunButton.reset (new juce::TextButton ("Scan"));
+        scanRunButton->onClick = [this] { startScan(); };
+        addAndMakeVisible (scanRunButton.get());
+
+        stopScanButton.reset (new juce::TextButton ("Stop"));
+        stopScanButton->onClick = [this]
+        {
+            // The scan runs synchronously on the message thread; SweepRunner
+            // yields the loop per block so this click is processed mid-scan.
+            // Cancelling the session aborts the in-flight round and ScanEngine
+            // stops at the next round boundary.
+            if (measurementSession)
+                measurementSession->cancel();
+        };
+        stopScanButton->setEnabled (false);
+        addAndMakeVisible (stopScanButton.get());
+
+        scanProgressLabel.reset (new juce::Label ("ScanProgress", ""));
+        scanProgressLabel->setFont (juce::FontOptions (12.0f));
+        addAndMakeVisible (scanProgressLabel.get());
+
         pluginManager.reset (new PluginManager());
         threadPool = std::make_unique<juce::ThreadPool> (2);
 
@@ -165,12 +210,23 @@ public:
         });
         commandParser->setStatusCallback ([this] (const juce::String& s)
         {
-            statusLabel->setText (s, juce::dontSendNotification);
+            // Scan round progress goes to the scan progress label; everything
+            // else updates the main status bar.
+            if (s.startsWith ("scan round"))
+                scanProgressLabel->setText (s, juce::dontSendNotification);
+            else
+                statusLabel->setText (s, juce::dontSendNotification);
         });
         commandParser->setMeasurementCompleteCallback ([this] (const MeasurementResults& r)
         {
             measurementResult = r;
             hasMeasurement = true;
+            triggerAsyncUpdate();
+        });
+        commandParser->setScanCompleteCallback ([this] (const ScanEngine::ScanResult& r)
+        {
+            lastScanResult = r;
+            paramScanUpdatePending = true;
             triggerAsyncUpdate();
         });
 
@@ -181,6 +237,8 @@ public:
         });
         pipeServer->startup();
         setSize (1400, 850);
+
+        updateScanEstimate();
 
         // Start initial scan on a background thread
         scanPlugins();
@@ -223,10 +281,10 @@ public:
         }
 
         // Right panel: measurement controls on top (source/type row +
-        // source-parameter row), then the magnitude plot (~65%) and phase
-        // plot (~35%) below.
+        // source-parameter row + scan row), then the magnitude plot (~65%)
+        // and phase plot (~35%) below.
         auto plotArea = area;
-        auto controls = plotArea.removeFromTop (92).reduced (0, 2);
+        auto controls = plotArea.removeFromTop (122).reduced (0, 2);
         {
             const int gap = 6;
 
@@ -249,6 +307,22 @@ public:
             row2.removeFromLeft (gap);
             noiseDurationLabel->setBounds (row2.removeFromLeft (70).reduced (0, 2));
             noiseDurationBox->setBounds (row2.removeFromLeft (56).reduced (0, 2));
+
+            // Row 3: parameter scan — param combo / values / estimate /
+            // Scan + Stop buttons / live round progress.
+            controls.removeFromTop (4);
+            auto row3 = controls.removeFromTop (26);
+            scanParamCombo->setBounds (row3.removeFromLeft (150).reduced (0, 2));
+            row3.removeFromLeft (gap);
+            scanValuesBox->setBounds (row3.removeFromLeft (170).reduced (0, 2));
+            row3.removeFromLeft (gap);
+            scanEstimateLabel->setBounds (row3.removeFromLeft (70).reduced (0, 2));
+            row3.removeFromLeft (gap);
+            scanRunButton->setBounds (row3.removeFromLeft (60).reduced (0, 2));
+            row3.removeFromLeft (gap);
+            stopScanButton->setBounds (row3.removeFromLeft (56).reduced (0, 2));
+            row3.removeFromLeft (gap);
+            scanProgressLabel->setBounds (row3);
         }
 
         auto phaseArea = plotArea.removeFromBottom (juce::roundToInt (plotArea.getHeight() * 0.35f));
@@ -349,6 +423,31 @@ public:
             {
                 CRASH_LOG_ERR ("Load UI update", "exception caught");
                 loadingRunning = false;
+            }
+        }
+
+        // Process the parameter-scan result (before the measurement block —
+        // the same ordering as the plugin-scan update above).
+        if (paramScanUpdatePending.exchange (false))
+        {
+            try
+            {
+                scanInProgress = false;
+                measurementInProgress = false;
+                scanRunButton->setEnabled (true);
+                stopScanButton->setEnabled (false);
+                measureFreqButton->setEnabled (true);
+                measureHarmonicButton->setEnabled (true);
+                measureCompressionButton->setEnabled (true);
+                renderScanResult();
+            }
+            catch (...)
+            {
+                CRASH_LOG_ERR ("Scan UI update", "exception caught");
+                scanInProgress = false;
+                measurementInProgress = false;
+                scanRunButton->setEnabled (true);
+                stopScanButton->setEnabled (false);
             }
         }
 
@@ -774,6 +873,269 @@ private:
     }
 
     //==============================================================================
+    // Parameter-scan helpers (T3.3).
+
+    /** Fill the scan parameter combo from the loaded plugin (name shown,
+     *  stable ID stored in scanParamIds). */
+    void fillScanParamCombo (juce::AudioPluginInstance* inst)
+    {
+        scanParamCombo->clear();
+        scanParamIds.clear();
+
+        if (inst == nullptr)
+        {
+            scanParamCombo->setEnabled (false);
+            return;
+        }
+
+        auto& params = inst->getParameters();
+        for (int i = 0; i < params.size(); ++i)
+        {
+            auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (params[i]);
+            scanParamIds.push_back (hosted != nullptr
+                                        ? hosted->getParameterID()
+                                        : juce::String (i));
+            scanParamCombo->addItem (params[i]->getName (128), i + 1);
+        }
+
+        if (scanParamCombo->getNumItems() > 0)
+        {
+            scanParamCombo->setSelectedId (1);
+            scanParamCombo->setEnabled (true);
+        }
+    }
+
+    /** Start a parameter scan from the GUI. Runs synchronously on the
+     *  message thread (mirroring startMeasurement); the result arrives via
+     *  scanCompleteCallback → handleAsyncUpdate. */
+    void startScan()
+    {
+        if (! pluginLoaded || scanParamCombo->getSelectedId() <= 0)
+        {
+            statusLabel->setText ("Load a plugin first", juce::dontSendNotification);
+            return;
+        }
+
+        // Re-entry guard (shared with measurements — both run synchronously
+        // on the message thread and must never overlap).
+        if (measurementInProgress || scanInProgress)
+            return;
+
+        const auto sourceStr = selectedSourceString();
+
+        // Source-specific prerequisites (same as the measure flow).
+        if (sourceStr == juce::String (Protocol::Source::file)
+            && ! selectedFile.existsAsFile())
+        {
+            statusLabel->setText ("Choose an audio file first", juce::dontSendNotification);
+            return;
+        }
+
+        // Parse the comma-separated normalized values.
+        std::vector<float> values;
+        if (! parseScanValues (scanValuesBox->getText(), values))
+        {
+            statusLabel->setText ("Scan failed: invalid values (0..1)",
+                                  juce::dontSendNotification);
+            return;
+        }
+
+        scanInProgress = true;
+        measurementInProgress = true;
+        scanRunButton->setEnabled (false);
+        stopScanButton->setEnabled (true);
+        measureFreqButton->setEnabled (false);
+        measureHarmonicButton->setEnabled (false);
+        measureCompressionButton->setEnabled (false);
+        scanProgressLabel->setText ("", juce::dontSendNotification);
+        statusLabel->setText ("Scanning...", juce::dontSendNotification);
+        updateScanEstimate();
+
+        const auto paramId = scanParamIds[static_cast<size_t> (scanParamCombo->getSelectedId() - 1)];
+
+        // Build the scan command with the same source fields as measure.
+        juce::String json = R"({"cmd":"scan","type":")" + currentMeasureType
+                          + R"(","param_id":")" + paramId.quoted()
+                          + R"(","values":[)";
+        for (size_t i = 0; i < values.size(); ++i)
+        {
+            if (i > 0) json += ",";
+            json += juce::String (values[i], 4);
+        }
+        json += R"(],"source":")" + sourceStr + R"(")";
+        if (sourceStr == juce::String (Protocol::Source::file))
+            json += R"(,"path":)" + juce::JSON::toString (selectedFile.getFullPathName());
+        else if (sourceStr == juce::String (Protocol::Source::noise))
+        {
+            const double duration = noiseDurationBox->getText().getDoubleValue();
+            if (duration > 0.0)
+                json += R"(,"duration":)" + juce::String (duration);
+        }
+        json += "}";
+
+        lastScanType = currentMeasureType;
+
+        // Synchronous on the message thread (no IPC involved from the GUI).
+        auto response = commandParser->handleCommand (json);
+
+        // Surface errors. Success is reported by handleAsyncUpdate once the
+        // scan result has been rendered; on failure the completion callback
+        // never fires, so re-arm the guards and buttons here.
+        if (auto* obj = juce::JSON::parse (response).getDynamicObject())
+        {
+            if (! (bool) obj->getProperty (Protocol::Status::ok))
+            {
+                measurementInProgress = false;
+                scanInProgress = false;
+                scanRunButton->setEnabled (true);
+                stopScanButton->setEnabled (false);
+                measureFreqButton->setEnabled (true);
+                measureHarmonicButton->setEnabled (true);
+                measureCompressionButton->setEnabled (true);
+                statusLabel->setText ("Scan failed: "
+                    + obj->getProperty (Protocol::Status::error).toString(),
+                    juce::dontSendNotification);
+            }
+        }
+    }
+
+    /** Parse a comma-separated list of normalized values (0..1). Returns
+     *  false when no values are present or any value is out of range. */
+    bool parseScanValues (const juce::String& text, std::vector<float>& out) const
+    {
+        out.clear();
+
+        auto tokens = juce::StringArray::fromTokens (text, ",", "");
+        for (const auto& token : tokens)
+        {
+            const auto trimmed = token.trim();
+            if (trimmed.isEmpty())
+                continue;
+
+            const double v = trimmed.getDoubleValue();
+            if (v < 0.0 || v > 1.0)
+                return false;
+
+            out.push_back (static_cast<float> (v));
+        }
+
+        return ! out.empty();
+    }
+
+    /** Recompute the "≈ N s" scan-duration estimate (values × per-round). */
+    void updateScanEstimate()
+    {
+        std::vector<float> values;
+        const int numValues = parseScanValues (scanValuesBox->getText(), values)
+                                  ? static_cast<int> (values.size()) : 0;
+        const double totalSeconds = static_cast<double> (numValues)
+                                    * estimateSecondsPerRound();
+        scanEstimateLabel->setText ("≈ " + juce::String (juce::roundToInt (totalSeconds))
+                                    + " s", juce::dontSendNotification);
+    }
+
+    /** Rough seconds per scan round for the current source/type. */
+    double estimateSecondsPerRound() const
+    {
+        switch (selectedSource())
+        {
+            case MeasurementSession::Source::noise:
+                return juce::jmax (0.5, noiseDurationBox->getText().getDoubleValue());
+            case MeasurementSession::Source::dynamic:
+                return 2.0;
+            case MeasurementSession::Source::file:
+                return 5.0;  // input-file duration unknown — assume typical
+            case MeasurementSession::Source::signal:
+                break;
+        }
+
+        if (currentMeasureType == juce::String (Protocol::MeasureType::harmonic))
+            return 3.0;
+        if (currentMeasureType == juce::String (Protocol::MeasureType::compression))
+            return 2.0;
+        return 5.0;  // frequency-response sine sweep
+    }
+
+    /** Render the completed scan: for a frequency-response scan, one curve
+     *  per family entry on each plot, coloured with the HSL palette. Other
+     *  scan types are reported in the status bar (curve rendering is
+     *  freq-first; harmonic/compression curves are phase 4+). */
+    void renderScanResult()
+    {
+        const bool isFreq = (lastScanType == juce::String (Protocol::MeasureType::freq));
+
+        if (! isFreq || lastScanResult.family.empty())
+        {
+            magPlot->clear();
+            magPlot->repaint();
+            phasePlot->clear();
+            phasePlot->repaint();
+            statusLabel->setText ("Scan complete: "
+                + juce::String (static_cast<int> (lastScanResult.family.size()))
+                + " runs" + (isFreq ? "" : " (curves only for frequency response)"),
+                juce::dontSendNotification);
+            return;
+        }
+
+        magPlot->setAxisLabels ("Frequency (Hz)", "Magnitude (dB)");
+        magPlot->setXAxisLog (true);
+        phasePlot->setAxisLabels ("Frequency (Hz)", "Phase (degrees)");
+        phasePlot->setXAxisLog (true);
+        magPlot->clear();
+        phasePlot->clear();
+
+        const int numCurves = static_cast<int> (lastScanResult.family.size());
+        auto palette = PlotWidget::getPalette (numCurves);
+
+        int drawn = 0;
+        for (int i = 0; i < numCurves; ++i)
+        {
+            const auto& entry = lastScanResult.family[static_cast<size_t> (i)];
+            if (entry.freq.raw.empty())
+                continue;
+
+            const juce::String curveName = entry.paramValueText.isNotEmpty()
+                                               ? entry.paramValueText
+                                               : juce::String (entry.paramValue, 3);
+
+            PlotWidget::Series magSeries;
+            magSeries.name = curveName;
+            magSeries.colour = palette[static_cast<size_t> (i)];
+            magSeries.lineWidth = 2.0f;
+            magSeries.x.reserve (entry.freq.raw.size());
+            magSeries.y.reserve (entry.freq.raw.size());
+            for (const auto& p : entry.freq.raw)
+            {
+                magSeries.x.push_back (static_cast<float> (p.frequency));
+                magSeries.y.push_back (static_cast<float> (p.magnitudeDB));
+            }
+            magPlot->addSeries (std::move (magSeries));
+
+            PlotWidget::Series phaseSeries;
+            phaseSeries.name = curveName;
+            phaseSeries.colour = palette[static_cast<size_t> (i)];
+            phaseSeries.lineWidth = 2.0f;
+            phaseSeries.x.reserve (entry.freq.raw.size());
+            phaseSeries.y.reserve (entry.freq.raw.size());
+            for (const auto& p : entry.freq.raw)
+            {
+                phaseSeries.x.push_back (static_cast<float> (p.frequency));
+                phaseSeries.y.push_back (static_cast<float> (p.phaseDeg));
+            }
+            phasePlot->addSeries (std::move (phaseSeries));
+
+            ++drawn;
+        }
+
+        magPlot->repaint();
+        phasePlot->repaint();
+
+        statusLabel->setText ("Scan complete: " + juce::String (drawn)
+            + " curves, " + juce::String (numCurves) + " runs",
+            juce::dontSendNotification);
+    }
+
+    //==============================================================================
     // Input-source helpers.
 
     MeasurementSession::Source selectedSource() const
@@ -808,11 +1170,14 @@ private:
     }
 
     /** Drop the previous measurement result when the source changes, so the
-     *  plots never mix stale results from a different input source. */
+     *  plots never mix stale results from a different input source. Also
+     *  clears any scan result. */
     void clearMeasurementDisplay()
     {
         hasMeasurement = false;
         measurementResult = MeasurementResults{};
+        lastScanResult = ScanEngine::ScanResult{};
+        scanProgressLabel->setText ("", juce::dontSendNotification);
         magPlot->clear();
         magPlot->repaint();
         phasePlot->clear();
@@ -904,6 +1269,9 @@ private:
             measurementSession->setPluginInstance (rawInstance);
             pluginLoaded = true;
 
+            // Populate the scan parameter combo from the loaded plugin.
+            fillScanParamCombo (rawInstance);
+
             const bool isGeneric = dynamic_cast<juce::GenericAudioProcessorEditor*> (editor) != nullptr;
             CRASH_LOG_INFO (isGeneric ? "Editor ok (generic)" : "Editor ok", name + " "
                 + juce::String (editorWindow->getWidth()) + "x"
@@ -925,6 +1293,12 @@ private:
         pluginLoaded = false;
         commandParser->setPluginInstance (nullptr);
         measurementSession->setPluginInstance (nullptr);
+
+        // The scan parameter combo needs a plugin — empty + disable it.
+        scanParamCombo->clear();
+        scanParamCombo->setEnabled (false);
+        scanParamIds.clear();
+        scanProgressLabel->setText ("", juce::dontSendNotification);
         statusLabel->setText ("Ready", juce::dontSendNotification);
         CRASH_LOG_INFO ("Editor window closed", {});
     }
@@ -968,6 +1342,29 @@ private:
     std::unique_ptr<juce::FileChooser> fileChooser;  // kept alive during async launch
     juce::File selectedFile;
     bool pluginLoaded = false;
+
+    // Parameter-scan panel (right panel, row 3)
+    std::unique_ptr<juce::ComboBox> scanParamCombo;
+    std::unique_ptr<juce::TextEditor> scanValuesBox;
+    std::unique_ptr<juce::Label> scanEstimateLabel;
+    std::unique_ptr<juce::TextButton> scanRunButton;
+    std::unique_ptr<juce::TextButton> stopScanButton;
+    std::unique_ptr<juce::Label> scanProgressLabel;
+
+    /** Stable parameter IDs parallel to scanParamCombo items (item i+1 → ids[i]). */
+    std::vector<juce::String> scanParamIds;
+
+    /** Measurement type used by the scan — follows the last clicked measure
+     *  button (default: frequency response). */
+    juce::String currentMeasureType = juce::String (Protocol::MeasureType::freq);
+
+    // Scan result held for UI rendering
+    ScanEngine::ScanResult lastScanResult;
+    juce::String lastScanType;
+
+    // Re-entry guard for the synchronous GUI scan (mirrors measurementInProgress).
+    bool scanInProgress = false;
+    std::atomic<bool> paramScanUpdatePending { false };
 
     // Re-entry guard: a measurement runs synchronously on the message thread
     // (~5 s), so a second click must be ignored while one is in progress.

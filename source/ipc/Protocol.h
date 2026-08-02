@@ -24,6 +24,7 @@ namespace Protocol
         constexpr auto setParam     = "setParam";
         constexpr auto getParams    = "getParams";
         constexpr auto measure      = "measure";
+        constexpr auto scan         = "scan";
         constexpr auto stop         = "stop";
         constexpr auto exportCmd    = "exportData";
     }

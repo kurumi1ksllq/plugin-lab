@@ -65,6 +65,22 @@ void PlotWidget::setXAxisLog (bool logXEnabled)
     repaint();
 }
 
+std::vector<juce::Colour> PlotWidget::getPalette (int count)
+{
+    count = juce::jlimit (1, 16, count);
+
+    std::vector<juce::Colour> palette;
+    palette.reserve (static_cast<size_t> (count));
+
+    for (int i = 0; i < count; ++i)
+    {
+        const float hue = static_cast<float> (i) / static_cast<float> (count);
+        palette.emplace_back (juce::Colour::fromHSV (hue, 0.7f, 0.6f, 1.0f));
+    }
+
+    return palette;
+}
+
 juce::Rectangle<float> PlotWidget::getPlotArea() const
 {
     auto bounds = getLocalBounds().toFloat();

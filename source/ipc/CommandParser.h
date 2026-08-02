@@ -6,6 +6,7 @@
 #include "../analysis/FreqResponse.h"
 #include "../analysis/HarmonicAnalysis.h"
 #include "../analysis/CompressionCurve.h"
+#include "../scan/ScanEngine.h"
 
 /**
  * Aggregated measurement outcome passed to the UI after analysis + export.
@@ -71,6 +72,14 @@ public:
         measurementCompleteCallback = std::move (cb);
     }
 
+    /** Set a callback invoked after a parameter scan completes (analysis +
+     *  export finished). Fires synchronously on the measurement thread,
+     *  mirroring setMeasurementCompleteCallback timing. */
+    void setScanCompleteCallback (std::function<void(const ScanEngine::ScanResult&)> cb)
+    {
+        scanCompleteCallback = std::move (cb);
+    }
+
     //==============================================================================
     /** Process a JSON command and return a JSON response. */
     juce::String handleCommand (const juce::String& jsonCommand);
@@ -83,6 +92,7 @@ private:
     std::function<void(const juce::PluginDescription&)> loadPluginCallback;
     std::function<void(const juce::String&)> statusCallback;
     std::function<void(const MeasurementResults&)> measurementCompleteCallback;
+    std::function<void(const ScanEngine::ScanResult&)> scanCompleteCallback;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CommandParser)
 };

@@ -309,6 +309,209 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         return response;
     }
 
+    // --- scan ---
+    if (cmd == "scan")
+    {
+        if (session == nullptr || plugin == nullptr)
+            return Protocol::makeResponse (false, R"("error":"no session or plugin")");
+
+        // --- measurement type (analysis field; default frequency_response) ---
+        auto t = obj->getProperty ("type").toString();
+        if (t.isEmpty())
+            t = Protocol::MeasureType::freq;
+
+        MeasurementSession::Type scanType;
+        if (t == Protocol::MeasureType::freq)
+            scanType = MeasurementSession::Type::frequencyResponse;
+        else if (t == Protocol::MeasureType::harmonic)
+            scanType = MeasurementSession::Type::harmonicAnalysis;
+        else if (t == Protocol::MeasureType::compression)
+            scanType = MeasurementSession::Type::compressionCurve;
+        else
+            return Protocol::makeResponse (false, R"("error":"unknown measure type")");
+
+        // --- scanned parameter (located by stable ID) ---
+        auto paramId = obj->getProperty ("param_id").toString();
+        if (paramId.isEmpty())
+            return Protocol::makeResponse (false, R"("error":"param_id required")");
+
+        juce::AudioProcessorParameter* scanParam = nullptr;
+        {
+            auto& params = plugin->getParameters();
+            for (auto* candidate : params)
+            {
+                auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (candidate);
+                if (hosted != nullptr && hosted->getParameterID() == paramId)
+                {
+                    scanParam = candidate;
+                    break;
+                }
+            }
+        }
+        if (scanParam == nullptr)
+            return Protocol::makeResponse (false, R"("error":"parameter not found")");
+
+        // --- values (normalized 0..1; must be non-empty) ---
+        auto valuesVar = obj->getProperty ("values");
+        if (! valuesVar.isArray() || valuesVar.size() == 0)
+            return Protocol::makeResponse (false, R"("error":"values array required")");
+
+        std::vector<float> values;
+        values.reserve (static_cast<size_t> (valuesVar.size()));
+        for (int i = 0; i < valuesVar.size(); ++i)
+        {
+            const double v = static_cast<double> (valuesVar[i]);
+            if (v < 0.0 || v > 1.0)
+                return Protocol::makeResponse (false, R"#("error":"values out of range (0..1)")#");
+            values.push_back (static_cast<float> (v));
+        }
+
+        // --- input source (default: signal; other sources capture raw per
+        //     round — analysis still runs via ScanEngine) ---
+        auto sourceStr = obj->getProperty ("source").toString();
+        if (sourceStr.isEmpty())
+            sourceStr = Protocol::Source::signal;
+
+        MeasurementSession::Source source = MeasurementSession::Source::signal;
+        if      (sourceStr == Protocol::Source::signal)  source = MeasurementSession::Source::signal;
+        else if (sourceStr == Protocol::Source::file)    source = MeasurementSession::Source::file;
+        else if (sourceStr == Protocol::Source::noise)   source = MeasurementSession::Source::noise;
+        else if (sourceStr == Protocol::Source::dynamic) source = MeasurementSession::Source::dynamic;
+        else
+            return Protocol::makeResponse (false, R"("error":"unknown source")");
+
+        // --- source-specific configuration (mirrors the measure command) ---
+        if (source == MeasurementSession::Source::file)
+        {
+            // "path" names the INPUT audio file (replayed once per round);
+            // the export path is disambiguated via "export_path" below.
+            auto inputPath = obj->getProperty ("path").toString();
+            if (inputPath.isEmpty())
+                return Protocol::makeResponse (false, R"("error":"path required")");
+            juce::File inputFile (inputPath);
+            if (! inputFile.existsAsFile())
+                return Protocol::makeResponse (false, R"("error":"file not found")");
+            session->setFilePath (inputFile);
+        }
+        else if (source == MeasurementSession::Source::noise)
+        {
+            NoiseGenerator::Type noiseType = NoiseGenerator::Type::white;
+            auto noiseTypeStr = obj->getProperty ("noise_type").toString();
+            if (noiseTypeStr == "pink")
+                noiseType = NoiseGenerator::Type::pink;
+            else if (! noiseTypeStr.isEmpty() && noiseTypeStr != "white")
+                return Protocol::makeResponse (false, R"("error":"unknown noise type")");
+
+            double duration = 2.0;
+            if (obj->hasProperty ("duration"))
+                duration = static_cast<double> (obj->getProperty ("duration"));
+
+            uint32_t seed = 0x2E42A5;
+            if (obj->hasProperty ("seed"))
+                seed = static_cast<uint32_t> (static_cast<int64_t> (obj->getProperty ("seed")));
+
+            session->setNoiseConfig (noiseType, duration, seed);
+        }
+        else if (source == MeasurementSession::Source::dynamic)
+        {
+            if (obj->hasProperty ("carrier_freq"))
+                session->setDynamicCarrierFreq (static_cast<double> (obj->getProperty ("carrier_freq")));
+        }
+
+        session->setSource (source);
+        session->setPluginInstance (plugin);
+
+        // --- export path (default pluginlab_scan.json) ---
+        auto path = (source == MeasurementSession::Source::file)
+                        ? obj->getProperty ("export_path").toString()
+                        : obj->getProperty ("path").toString();
+        if (path.isEmpty())
+            path = juce::File::getCurrentWorkingDirectory()
+                       .getChildFile ("pluginlab_scan.json")
+                       .getFullPathName();
+
+        if (statusCallback)
+            juce::MessageManager::callAsync ([this] { statusCallback ("Scanning..."); });
+
+        // Body of the scan: run the engine, export, build the response.
+        // Extracted as a reusable lambda so both the sync (message-thread)
+        // and async (IPC-thread → message-thread dispatch) paths share it.
+        auto runScan = [&]() -> juce::String
+        {
+            ScanEngine engine;
+            engine.setPluginInstance (plugin);
+            engine.setSession (session);
+
+            // Per-round progress → status callback (e.g. "scan round 2/5").
+            auto scanResult = engine.run (paramId, values, scanType,
+                [this] (int round, int totalRounds)
+                {
+                    juce::MessageManager::callAsync ([this, round, totalRounds]
+                    {
+                        if (statusCallback)
+                            statusCallback ("scan round " + juce::String (round)
+                                            + "/" + juce::String (totalRounds));
+                    });
+                });
+
+            // No rounds completed (round 1 failed or the scan was aborted
+            // before the first round): report the error.
+            if (scanResult.family.empty())
+                return Protocol::makeResponse (false, R"("error":"scan failed")");
+
+            Export::Context ctx;
+            ctx.pluginName = plugin->getName();
+            {
+                juce::PluginDescription desc;
+                plugin->fillInPluginDescription (desc);
+                ctx.classId = desc.fileOrIdentifier;
+            }
+            ctx.latencySamples = plugin->getLatencySamples();
+            ctx.sampleRate     = session->getSampleRate();
+            ctx.blockSize      = session->getBlockSize();
+            ctx.paramSnapshot  = session->getParameterSnapshot();
+            ctx.source.type = sourceStr;
+            if (source == MeasurementSession::Source::file)
+            {
+                ctx.source.filePath         = session->getSourceFilePath();
+                ctx.source.sourceSampleRate = session->getSourceSampleRate();
+                ctx.source.resampleRatio    = session->getResampleRatio();
+                ctx.source.durationSec      = session->getSourceDurationSec();
+            }
+            else if (source == MeasurementSession::Source::noise)
+            {
+                ctx.source.noiseType   = (session->getNoiseType() == NoiseGenerator::Type::pink)
+                                             ? juce::String ("pink") : juce::String ("white");
+                ctx.source.seed        = session->getNoiseSeed();
+                ctx.source.durationSec = session->getNoiseDuration();
+            }
+
+            auto exportJson = Export::scanToJSON (scanResult, scanType, ctx);
+            juce::File exportFile (path);
+            Export::writeToFile (exportJson, exportFile);
+
+            // scanCompleteCallback fires synchronously on the measurement
+            // thread — unit tests assert this timing (measure pattern).
+            if (scanCompleteCallback)
+                scanCompleteCallback (scanResult);
+
+            juce::String d = R"("runs":)" + juce::String (static_cast<int> (scanResult.family.size()))
+                           + R"(,"export_path":")" + path.quoted() + R"(")";
+            return Protocol::makeResponse (true, d);
+        };
+
+        // Dispatch strategy mirrors the measure command: synchronous on the
+        // message thread, callAsync + WaitableEvent from any other thread.
+        if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+            return runScan();
+
+        juce::WaitableEvent done;
+        juce::String response;
+        juce::MessageManager::callAsync ([&] { response = runScan(); done.signal(); });
+        done.wait();
+        return response;
+    }
+
     // --- stop ---
     if (cmd == "stop")
     {

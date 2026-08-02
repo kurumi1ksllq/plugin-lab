@@ -21,6 +21,7 @@
 #include "../source/analysis/FreqResponse.h"
 #include "../source/analysis/Export.h"
 #include "../source/host/PluginManager.h"
+#include "../source/scan/ScanEngine.h"
 
 #include <algorithm>
 #include <atomic>
@@ -859,4 +860,211 @@ TEST_CASE ("CommandParser: file source with nonexistent path returns error witho
         R"({"cmd":"measure","source":"file","path":"Z:\nonexistent\missing.wav"})");
     REQUIRE (response.contains ("\"ok\":false"));
     REQUIRE (response.contains ("\"error\""));
+}
+
+//==============================================================================
+// 9. Scan (T3.3) — parameter sweep: IPC command + ScanEngine + export + callback
+//
+// The scan command runs one measurement round per parameter value and
+// exports a family JSON via Export::scanToJSON. A dedicated
+// setScanCompleteCallback(ScanResult) fires on completion (same synchronous
+// timing as measurementCompleteCallback).
+//==============================================================================
+
+TEST_CASE ("CommandParser: scan sweeps gain across 3 values and exports family JSON",
+           "[commandparser][scan-happy]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    std::atomic<bool> scanCompleteFired { false };
+    ScanEngine::ScanResult capturedScan;
+    parser.setScanCompleteCallback ([&] (const ScanEngine::ScanResult& r) {
+        scanCompleteFired.store (true);
+        capturedScan = r;
+    });
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_scan_output.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+
+    // ---- Act ----
+    // 3 gain values (all non-zero so every round yields a valid response).
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"scan","type":"frequency_response","param_id":"gain",)"
+                      R"("values":[0.1,0.5,0.9],"path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    // 1. Response: ok, 3 runs, export path present.
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"runs\":3"));
+    REQUIRE (response.contains ("\"export_path\":"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    // 2. Scan-complete callback fired with the full family (3 entries).
+    REQUIRE (scanCompleteFired.load());
+    REQUIRE (capturedScan.paramId == "gain");
+    REQUIRE (capturedScan.family.size() == 3);
+    REQUIRE (capturedScan.values.size() == 3);
+
+    // 3. Export: top-level type "scan", family length 3, every round has a
+    //    valid frequency-response result (non-empty raw) + latency re-read.
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    REQUIRE (exportedJson.getDynamicObject() != nullptr);
+    REQUIRE (exportedJson["type"].toString() == "scan");
+    REQUIRE (exportedJson["scan"]["param_id"].toString() == "gain");
+    REQUIRE (exportedJson["scan"]["param_name"].toString() == "Gain");
+    REQUIRE (exportedJson["scan"]["values"].size() == 3);
+    REQUIRE (exportedJson["family"].size() == 3);
+    for (int i = 0; i < 3; ++i)
+    {
+        REQUIRE (exportedJson["family"][i]["param_value_normalized"].isDouble());
+        REQUIRE (exportedJson["family"][i]["result"]["raw"].size() > 0);
+    }
+
+    // Cleanup
+    exportFile.deleteFile();
+}
+
+TEST_CASE ("CommandParser: scan fails for unknown param_id", "[commandparser][scan-unknown-param]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    auto response = parser.handleCommand (
+        R"({"cmd":"scan","param_id":"nonexistent","values":[0.5]})");
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("\"error\""));
+}
+
+TEST_CASE ("CommandParser: scan fails for empty values array", "[commandparser][scan-empty-values]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    auto response = parser.handleCommand (R"({"cmd":"scan","param_id":"gain","values":[]})");
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("\"error\""));
+}
+
+TEST_CASE ("CommandParser: scan rejects values outside 0..1", "[commandparser][scan-out-of-range]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    auto response = parser.handleCommand (
+        R"({"cmd":"scan","param_id":"gain","values":[0.5,1.5]})");
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("\"error\""));
+}
+
+TEST_CASE ("CommandParser: scan with noise source runs noise rounds and exports valid family",
+           "[commandparser][scan-source-noise]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_scan_noise.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+
+    // ---- Act ----
+    // 2 gain values, 1 s deterministic white noise per round (seed 42).
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"scan","type":"frequency_response","param_id":"gain",)"
+                      R"("values":[0.5,0.9],"source":"noise","duration":1,"seed":42,"path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"runs\":2"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    REQUIRE (exportedJson["type"].toString() == "scan");
+    REQUIRE (exportedJson["family"].size() == 2);
+    // Noise has broadband energy -> every round yields a non-empty result.
+    REQUIRE (exportedJson["family"][0]["result"]["raw"].size() > 0);
+    REQUIRE (exportedJson["family"][1]["result"]["raw"].size() > 0);
+    // The noise source metadata is attached to the scan export context.
+    REQUIRE (exportedJson["context"]["source"]["type"].toString() == "noise");
+
+    // Cleanup
+    exportFile.deleteFile();
 }

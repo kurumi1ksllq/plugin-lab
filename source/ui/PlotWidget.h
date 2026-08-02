@@ -50,6 +50,12 @@ public:
     void setXAxisLog (bool logXEnabled);
 
     //==============================================================================
+    /** Return `count` evenly spaced HSL colours (saturation 0.7, lightness
+     *  0.6) for multi-curve plots such as parameter-scan families.
+     *  `count` is clamped to 1..16. */
+    static std::vector<juce::Colour> getPalette (int count);
+
+    //==============================================================================
     void paint (juce::Graphics& g) override;
     void resized() override;
 
