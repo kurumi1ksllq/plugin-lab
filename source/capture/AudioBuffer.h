@@ -20,7 +20,8 @@ public:
 
     /** Append a block of dry and wet audio. */
     void append (const juce::AudioBuffer<float>& dry,
-                 const juce::AudioBuffer<float>& wet);
+                 const juce::AudioBuffer<float>& wet,
+                 int numSamples);
 
     /** Shrink the internal buffers to exactly the recorded sample count so
      *  that analyzers see the true captured length instead of the
