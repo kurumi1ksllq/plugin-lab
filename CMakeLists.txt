@@ -49,6 +49,7 @@ target_sources(PluginLab PRIVATE
     source/analysis/HarmonicAnalysis.cpp
     source/analysis/CompressionCurve.cpp
     source/analysis/Export.cpp
+    source/analysis/GainReduction.cpp
     source/ipc/PipeServer.cpp
     source/ipc/CommandParser.cpp
     source/ui/PlotWidget.cpp

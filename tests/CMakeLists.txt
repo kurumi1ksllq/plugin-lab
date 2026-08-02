@@ -22,6 +22,7 @@ target_sources(unit_tests PRIVATE
     ../source/scan/ScanEngine.cpp
     ../source/analysis/FreqResponse.cpp ../source/analysis/HarmonicAnalysis.cpp
     ../source/analysis/CompressionCurve.cpp ../source/analysis/Export.cpp
+    ../source/analysis/GainReduction.cpp
     ../source/utils/FftHelper.cpp ../source/utils/MathUtils.cpp
     ../source/ipc/CommandParser.cpp
     ../source/ipc/PipeServer.cpp
@@ -30,7 +31,7 @@ target_sources(unit_tests PRIVATE
     TestPlugin.h TestPluginTests.cpp TestCompressorPlugin.h TestCompressorPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp FreqResponseTests.cpp ExportTests.cpp
     CommandParserTests.cpp PipeServerTests.cpp
     FilePlaybackTests.cpp NoiseGeneratorTests.cpp EnvelopeSignalTests.cpp
-    ScanEngineTests.cpp)
+    GainReductionTests.cpp ScanEngineTests.cpp)
 target_link_libraries(unit_tests PRIVATE
     juce::juce_audio_basics juce::juce_audio_processors juce::juce_audio_utils juce::juce_dsp
     juce::juce_audio_formats

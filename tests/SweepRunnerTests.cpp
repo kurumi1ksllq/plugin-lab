@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <thread>
 #include <atomic>
@@ -84,4 +85,129 @@ TEST_CASE ("SweepRunner: cancel before run leaves state clean",
     // Assert — run() completed successfully (cancelled was reset at entry)
     REQUIRE (runResult);
     REQUIRE (runner.getResult().getNumRecordedSamples() > 0);
+}
+
+//==============================================================================
+// T4.1: SweepRunner tail padding + per-block callback
+//==============================================================================
+
+TEST_CASE ("SweepRunner: tailPad appends L silent samples after the signal",
+           "[sweeprunner][tailpad]")
+{
+    // Arrange
+    TestPlugin plugin;
+    plugin.setGain (1.0);
+
+    SineSweep sweep;
+    sweep.setFrequencyRange (100.0, 5000.0);
+    sweep.setDuration (0.1);  // 4800 samples @ 48 kHz
+    sweep.setAmplitude (0.5);
+
+    SweepRunner runner;
+    runner.prepare (48000.0, 512);
+    runner.setGenerator (&sweep);
+    runner.setPlugin (&plugin);
+    runner.setTailPadSamples (100);
+
+    // Act
+    REQUIRE (runner.run());
+
+    // Assert — recorded length == signal length + tailPad
+    const int64_t expected = sweep.getTotalLength() + 100;
+    REQUIRE (runner.getResult().getNumRecordedSamples() == expected);
+
+    // Assert — the dry tail region is silence (so analyzers see a padded tail)
+    const auto& dry = runner.getResult().getDryBuffer();
+    const int tailStart = static_cast<int> (sweep.getTotalLength());
+    REQUIRE (dry.getNumSamples() == static_cast<int> (expected));
+    for (int s = tailStart; s < dry.getNumSamples(); ++s)
+        REQUIRE (dry.getSample (0, s) == 0.0f);
+}
+
+TEST_CASE ("SweepRunner: blockCallback fires per block with monotonic progress",
+           "[sweeprunner][blockcallback]")
+{
+    // Arrange
+    TestPlugin plugin;
+    plugin.setGain (1.0);
+
+    SineSweep sweep;
+    sweep.setFrequencyRange (100.0, 5000.0);
+    sweep.setDuration (0.1);  // 4800 samples @ 48 kHz → 10 generator blocks
+    sweep.setAmplitude (0.5);
+
+    SweepRunner runner;
+    runner.prepare (48000.0, 512);
+    runner.setGenerator (&sweep);
+    runner.setPlugin (&plugin);
+    runner.setTailPadSamples (100);  // → 1 additional tail block
+
+    std::vector<float> progressList;
+    juce::AudioBuffer<float> firstDryBlock (2, 512);
+    juce::AudioBuffer<float> firstWetBlock (2, 512);
+    bool firstCaptured = false;
+
+    runner.setBlockCallback (
+        [&] (float progress,
+             const juce::AudioBuffer<float>& dryBlock,
+             const juce::AudioBuffer<float>& wetBlock)
+        {
+            progressList.push_back (progress);
+            if (! firstCaptured)
+            {
+                firstDryBlock.makeCopyOf (dryBlock, true);
+                firstWetBlock.makeCopyOf (wetBlock, true);
+                firstCaptured = true;
+            }
+        });
+
+    // Act
+    REQUIRE (runner.run());
+
+    // Assert — one callback per processed block. 4800 samples / 512 = 9 full
+    // blocks + 1 partial block (192 samples); the 100-sample tail is appended
+    // from that partial block's zero-padded region, so no separate tail block
+    // is needed. Total: 10 blocks.
+    REQUIRE (firstCaptured);
+    REQUIRE (progressList.size() == 10);
+
+    // Assert — progress is monotonic non-decreasing and ends at 1.0
+    for (size_t i = 1; i < progressList.size(); ++i)
+        REQUIRE (progressList[i] >= progressList[i - 1]);
+    REQUIRE (progressList.back() == Catch::Approx (1.0f));
+
+    // Assert — the first callback block matches the corresponding section of
+    // the final result buffers (same data the analyzers will consume).
+    const auto& dry = runner.getResult().getDryBuffer();
+    const auto& wet = runner.getResult().getWetBuffer();
+    for (int s = 0; s < 512; ++s)
+    {
+        REQUIRE (firstDryBlock.getSample (0, s) == dry.getSample (0, s));
+        REQUIRE (firstWetBlock.getSample (0, s) == wet.getSample (0, s));
+    }
+}
+
+TEST_CASE ("SweepRunner: default tailPad=0 preserves existing recorded length",
+           "[sweeprunner][tailpad-zero]")
+{
+    // Arrange
+    TestPlugin plugin;
+    plugin.setGain (1.0);
+
+    SineSweep sweep;
+    sweep.setFrequencyRange (100.0, 5000.0);
+    sweep.setDuration (0.1);
+    sweep.setAmplitude (0.5);
+
+    SweepRunner runner;
+    runner.prepare (48000.0, 512);
+    runner.setGenerator (&sweep);
+    runner.setPlugin (&plugin);
+    // tailPad left at its default (0)
+
+    // Act
+    REQUIRE (runner.run());
+
+    // Assert — exactly the generator length, no padding
+    REQUIRE (runner.getResult().getNumRecordedSamples() == sweep.getTotalLength());
 }

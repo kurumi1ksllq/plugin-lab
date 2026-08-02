@@ -55,6 +55,9 @@ bool SweepRunner::run()
     if (totalLength <= 0)
         totalLength = static_cast<int64_t> (sampleRate * 10);  // fallback 10s
 
+    const int64_t tailTarget = static_cast<int64_t> (juce::jmax (0, tailPadSamples));
+    const int64_t totalDoneTarget = totalLength + tailTarget;
+
     int numInputChannels  = plugin->getTotalNumInputChannels();
     int numOutputChannels = plugin->getTotalNumOutputChannels();
     juce::AudioBuffer<float> dryBlock (numInputChannels, blockSize);
@@ -62,6 +65,7 @@ bool SweepRunner::run()
     juce::MidiBuffer emptyMidi;
 
     int64_t samplesGenerated = 0;
+    int64_t tailSamples = 0;
     const int reportInterval = std::max (1, static_cast<int> (totalLength / 100));
 
     while (samplesGenerated < totalLength && ! cancelled)
@@ -86,7 +90,24 @@ bool SweepRunner::run()
         // final block is often partial, and the plugin's full-block output
         // beyond numToGenerate corresponds to silence-padded input that must
         // not appear in the measurement.
-        result.append (dryBlock, wetBlock, numToGenerate);
+        //
+        // Tail pad: the final block's zero-padded region also carries the
+        // plugin's response to the last signal samples (its wet tail for
+        // latency > 0, or ringing that has not yet decayed). Appending that
+        // region as tail-pad samples captures the true tail — otherwise the
+        // tail loop below would feed an already-flushed plugin and record
+        // silence instead. The dry region appended here is the same silence
+        // the tail loop would have produced.
+        int numAppend = numToGenerate;
+        if (tailSamples < tailTarget)
+        {
+            const int paddingInBlock = blockSize - numToGenerate;
+            const int64_t tailFromBlock = std::min<int64_t> (
+                tailTarget - tailSamples, paddingInBlock);
+            numAppend += static_cast<int> (tailFromBlock);
+            tailSamples += tailFromBlock;
+        }
+        result.append (dryBlock, wetBlock, numAppend);
 
         samplesGenerated += numToGenerate;
 
@@ -105,6 +126,47 @@ bool SweepRunner::run()
             float progress = static_cast<float> (samplesGenerated)
                            / static_cast<float> (totalLength);
             progressCallback (progress);
+        }
+
+        // Report the block (dry/wet contents + total progress incl. tail)
+        if (blockCallback)
+        {
+            float progress = static_cast<float> (samplesGenerated + tailSamples)
+                           / static_cast<float> (totalDoneTarget);
+            blockCallback (progress, dryBlock, wetBlock);
+        }
+    }
+
+    // Tail pad: feed the remaining silent samples through the plugin so its
+    // wet tail (reverb decay, compressor release, ...) is captured. The dry
+    // blocks stay silent, so analyzers can distinguish signal from tail.
+    while (tailSamples < tailTarget && ! cancelled)
+    {
+        int numToGenerate = static_cast<int> (
+            std::min<int64_t> (blockSize, tailTarget - tailSamples));
+
+        // Silence: cleared blocks, no generator call
+        dryBlock.clear();
+        wetBlock.clear();
+        wetBlock.makeCopyOf (dryBlock, true);
+
+        // Process through plugin
+        plugin->processBlock (wetBlock, emptyMidi);
+
+        result.append (dryBlock, wetBlock, numToGenerate);
+
+        tailSamples += numToGenerate;
+
+        if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+        {
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (2);
+        }
+
+        if (blockCallback)
+        {
+            float progress = static_cast<float> (samplesGenerated + tailSamples)
+                           / static_cast<float> (totalDoneTarget);
+            blockCallback (progress, dryBlock, wetBlock);
         }
     }
 
