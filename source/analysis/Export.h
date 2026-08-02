@@ -92,6 +92,29 @@ namespace Export
                                    const TimeConstants::Result& tau,
                                    const Context& context);
 
+    //==============================================================================
+    /** A modelling data package (T5.1): aggregates the parameter-scan family,
+     *  the compression-response family and the GR timeline into one
+     *  self-contained JSON document that an AI can consume to replicate the
+     *  plugin's behaviour. Every field is an optional measurement — the
+     *  caller fills only the completed ones, and omitted ones are not
+     *  emitted. */
+    struct Dataset
+    {
+        const ScanEngine::ScanResult* scan = nullptr;              // parameter-scan family (optional)
+        MeasurementSession::Type scanType = MeasurementSession::Type::frequencyResponse;  // scan's analysis type
+        const CompressionFamily::FamilyResult* compressionFamily = nullptr;  // compression-response family (optional)
+        const GainReduction::Result* grTimeline = nullptr;         // GR timeline (optional)
+        const TimeConstants::Result* grTau = nullptr;              // GR time constants (optional, with grTimeline)
+        juce::String measurementNote;                              // fitting advice / notes (optional)
+    };
+
+    /** Export a modelling data package to a single self-contained JSON
+     *  document (type + context + optional note + optional scan /
+     *  compression_family / gr_timeline blocks). */
+    juce::String datasetToJSON (const Dataset& dataset,
+                                const Context& context);
+
     /** Write a JSON string to a file. Returns true on success. */
     bool writeToFile (const juce::String& json,
                       const juce::File& file);

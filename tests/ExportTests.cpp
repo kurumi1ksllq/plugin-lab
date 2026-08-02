@@ -464,3 +464,294 @@ TEST_CASE ("grTimelineToJSON emits invalid tau block for edgeless GR", "[export]
     REQUIRE (parsed["tau"]["attack_by_level"].size() == 0);
     REQUIRE (parsed["tau"]["release_by_level"].size() == 0);
 }
+
+//==============================================================================
+// Test cases M..R (T5.1/T5.2): datasetToJSON — a modelling data package that
+// aggregates the parameter-scan family, the compression-response family and
+// the GR timeline into one self-contained JSON document for AI modelling.
+// Every measurement is optional; the caller fills only completed ones and
+// omitted ones are not emitted.
+
+namespace
+{
+    /** 2×2 compression grid: levels × speeds, each cell a static curve + GR
+     *  timeline + time constants. */
+    CompressionFamily::FamilyResult makeFamilyResult()
+    {
+        CompressionFamily::FamilyResult family;
+        family.levelsDB = { -12.0, -6.0 };
+        family.speeds = { 1.0, 2.0 };
+
+        for (double level : family.levelsDB)
+        {
+            for (double speed : family.speeds)
+            {
+                CompressionFamily::FamilyEntry entry;
+                entry.inputLevelDB = level;
+                entry.speed = speed;
+                entry.curve.curve =
+                {
+                    { level, level, 0.0 },
+                    { level + 6.0, level + 1.0, 5.0 }
+                };
+                entry.curve.fitted.ratio = 2.0;
+                entry.curve.fitted.thresholdDB = level;
+                entry.curve.fitted.kneeDB = 0.0;
+                entry.gr.sampleRate = 48000.0;
+                entry.gr.timeline = { { 0.0, -1.0 }, { 0.005, -2.0 } };
+                entry.gr.numPoints = static_cast<int> (entry.gr.timeline.size());
+                entry.tau.tauAttackSec = 0.001;
+                entry.tau.tauReleaseSec = 0.05;
+                entry.tau.valid = true;
+                entry.valid = true;
+                family.entries.push_back (entry);
+            }
+        }
+        return family;
+    }
+
+    /** GR timeline in the GainReduction convention (negative dB = reduction),
+     *  the convention carried by grTimelineToJSON. */
+    GainReduction::Result makeGRResult()
+    {
+        GainReduction::Result gr;
+        gr.sampleRate = 48000.0;
+        gr.timeline = { { 0.0, 0.0 }, { 0.005, -6.0 }, { 0.010, -6.0 } };
+        gr.numPoints = static_cast<int> (gr.timeline.size());
+        return gr;
+    }
+
+    TimeConstants::Result makeTauResult()
+    {
+        TimeConstants::Result tau;
+        tau.tauAttackSec = 0.002;
+        tau.tauReleaseSec = 0.04;
+        tau.valid = true;
+        return tau;
+    }
+}
+
+//==============================================================================
+// Test case M: scan-only dataset — the scan block carries param metadata,
+// values, texts and the full family; family[0].result.raw is data-equivalent
+// to the standalone scanToJSON export body.
+
+TEST_CASE ("datasetToJSON emits dataset schema with scan family", "[export][dataset-scan-only]")
+{
+    const auto scan = makeScanResult();
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+    ctx.classId = "com.example.dataset";
+    ctx.latencySamples = 64;
+    ctx.sampleRate = 48000.0;
+    ctx.blockSize = 512;
+
+    Export::Dataset dataset;
+    dataset.scan = &scan;
+    dataset.scanType = MeasurementSession::Type::frequencyResponse;
+
+    const auto json = Export::datasetToJSON (dataset, ctx);
+    const auto parsed = juce::JSON::parse (json);
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (parsed["type"].toString() == "dataset");
+    REQUIRE (parsed["context"]["plugin"].toString() == ctx.pluginName);
+    REQUIRE (parsed["scan"]["param_id"].toString() == scan.paramId);
+    REQUIRE (parsed["scan"]["param_name"].toString() == scan.paramName);
+    REQUIRE (parsed["scan"]["values"].size() == 3);
+    REQUIRE (parsed["scan"]["param_texts"].size() == 3);
+    REQUIRE (parsed["scan"]["family"].size() == 3);
+    REQUIRE (parsed["scan"]["family"][0]["result"]["raw"].size() == 3);
+    REQUIRE (static_cast<double> (parsed["scan"]["family"][1]["result"]["raw"][1]["mag"])
+             == Catch::Approx (6.0));  // round 2 peak = 0.5 * 12
+
+    // Body equivalence: the dataset scan block carries exactly the same data
+    // as the standalone scanToJSON export.
+    const auto standalone = juce::JSON::parse (
+        Export::scanToJSON (scan, MeasurementSession::Type::frequencyResponse, ctx));
+    REQUIRE (! standalone.isUndefined());
+    REQUIRE (parsed["scan"]["family"] == standalone["family"]);
+    REQUIRE (parsed["scan"]["values"] == standalone["scan"]["values"]);
+    REQUIRE (parsed["scan"]["param_texts"] == standalone["scan"]["param_texts"]);
+
+    // No other measurement keys present.
+    REQUIRE (! parsed.hasProperty ("compression_family"));
+    REQUIRE (! parsed.hasProperty ("gr_timeline"));
+}
+
+//==============================================================================
+// Test case N: GR-only dataset — the gr_timeline block carries the gr body
+// (timeline round-trips) and the tau body (attack/release sec); no scan key.
+
+TEST_CASE ("datasetToJSON emits gr_timeline block without scan", "[export][dataset-gr-only]")
+{
+    const auto gr = makeGRResult();
+    const auto tau = makeTauResult();
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+    ctx.sampleRate = 48000.0;
+
+    Export::Dataset dataset;
+    dataset.grTimeline = &gr;
+    dataset.grTau = &tau;
+
+    const auto json = Export::datasetToJSON (dataset, ctx);
+    const auto parsed = juce::JSON::parse (json);
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (parsed["type"].toString() == "dataset");
+    REQUIRE (parsed["gr_timeline"]["gr"]["timeline"].size() == 3);
+    REQUIRE (static_cast<double> (parsed["gr_timeline"]["gr"]["timeline"][1]["t"])
+             == Catch::Approx (0.005));
+    REQUIRE (static_cast<double> (parsed["gr_timeline"]["gr"]["timeline"][1]["gr_db"])
+             == Catch::Approx (-6.0));
+    REQUIRE (static_cast<double> (parsed["gr_timeline"]["tau"]["attack_sec"])
+             == Catch::Approx (0.002));
+    REQUIRE (static_cast<double> (parsed["gr_timeline"]["tau"]["release_sec"])
+             == Catch::Approx (0.04));
+    REQUIRE ((bool) parsed["gr_timeline"]["tau"]["valid"]);
+    REQUIRE (! parsed.hasProperty ("scan"));
+    REQUIRE (! parsed.hasProperty ("compression_family"));
+}
+
+//==============================================================================
+// Test case O: compression-family-only dataset — the compression_family block
+// carries the full level × speed grid, every entry with a non-empty curve.
+
+TEST_CASE ("datasetToJSON emits compression_family grid", "[export][dataset-compression-only]")
+{
+    const auto family = makeFamilyResult();
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+
+    Export::Dataset dataset;
+    dataset.compressionFamily = &family;
+
+    const auto json = Export::datasetToJSON (dataset, ctx);
+    const auto parsed = juce::JSON::parse (json);
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (parsed["type"].toString() == "dataset");
+    REQUIRE (parsed["compression_family"]["family"].size() == 4);
+    REQUIRE (static_cast<double> (parsed["compression_family"]["family"][0]["input_level_db"])
+             == Catch::Approx (-12.0));
+    REQUIRE (static_cast<double> (parsed["compression_family"]["family"][0]["speed"])
+             == Catch::Approx (1.0));
+    REQUIRE (static_cast<double> (parsed["compression_family"]["family"][3]["speed"])
+             == Catch::Approx (2.0));
+
+    for (int i = 0; i < 4; ++i)
+    {
+        INFO ("family entry " << i);
+        REQUIRE (parsed["compression_family"]["family"][i]["curve"].size() == 2);
+        REQUIRE (parsed["compression_family"]["family"][i]["gr"]["timeline"].size() == 2);
+    }
+
+    REQUIRE (! parsed.hasProperty ("scan"));
+    REQUIRE (! parsed.hasProperty ("gr_timeline"));
+}
+
+//==============================================================================
+// Test case P: full dataset — all three measurements plus the note; every key
+// is present and the note round-trips exactly.
+
+TEST_CASE ("datasetToJSON with all measurements and note", "[export][dataset-full]")
+{
+    const auto scan = makeScanResult();
+    const auto family = makeFamilyResult();
+    const auto gr = makeGRResult();
+    const auto tau = makeTauResult();
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+    ctx.classId = "com.example.full";
+    ctx.latencySamples = 64;
+    ctx.sampleRate = 48000.0;
+
+    Export::Dataset dataset;
+    dataset.scan = &scan;
+    dataset.scanType = MeasurementSession::Type::frequencyResponse;
+    dataset.compressionFamily = &family;
+    dataset.grTimeline = &gr;
+    dataset.grTau = &tau;
+    dataset.measurementNote = "detected peak 993Hz +6.0dB -> likely bell @1k Q1";
+
+    const auto json = Export::datasetToJSON (dataset, ctx);
+    const auto parsed = juce::JSON::parse (json);
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (parsed["type"].toString() == "dataset");
+    REQUIRE (parsed["note"].toString() == dataset.measurementNote);
+    REQUIRE (parsed["context"]["class_id"].toString() == ctx.classId);
+    REQUIRE (parsed["scan"]["family"].size() == 3);
+    REQUIRE (parsed["compression_family"]["family"].size() == 4);
+    REQUIRE (parsed["gr_timeline"]["gr"]["timeline"].size() == 3);
+    REQUIRE (static_cast<double> (parsed["gr_timeline"]["tau"]["attack_sec"])
+             == Catch::Approx (0.002));
+}
+
+//==============================================================================
+// Test case Q: empty dataset — no measurements provided; only type/context
+// survive, and the document is still parseable.
+
+TEST_CASE ("datasetToJSON with no measurements emits only type and context", "[export][dataset-empty]")
+{
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+    ctx.classId = "com.example.empty";
+
+    Export::Dataset dataset;
+
+    const auto json = Export::datasetToJSON (dataset, ctx);
+    const auto parsed = juce::JSON::parse (json);
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (parsed["type"].toString() == "dataset");
+    REQUIRE (parsed["context"]["plugin"].toString() == ctx.pluginName);
+    REQUIRE (! parsed.hasProperty ("scan"));
+    REQUIRE (! parsed.hasProperty ("compression_family"));
+    REQUIRE (! parsed.hasProperty ("gr_timeline"));
+    REQUIRE (! parsed.hasProperty ("note"));
+}
+
+//==============================================================================
+// Test case R: regression lock — every dataset body is data-equivalent to the
+// corresponding standalone export (scanToJSON / grTimelineToJSON /
+// compressionFamilyToJSON), proving the aggregation reuses the exact same
+// serialization.
+
+TEST_CASE ("dataset bodies are data-equivalent to standalone exports", "[export][dataset-body-equiv]")
+{
+    const auto scan = makeScanResult();
+    const auto family = makeFamilyResult();
+    const auto gr = makeGRResult();
+    const auto tau = makeTauResult();
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+    ctx.classId = "com.example.equiv";
+    ctx.latencySamples = 32;
+    ctx.sampleRate = 48000.0;
+    ctx.blockSize = 256;
+
+    Export::Dataset dataset;
+    dataset.scan = &scan;
+    dataset.scanType = MeasurementSession::Type::frequencyResponse;
+    dataset.compressionFamily = &family;
+    dataset.grTimeline = &gr;
+    dataset.grTau = &tau;
+
+    const auto parsed = juce::JSON::parse (Export::datasetToJSON (dataset, ctx));
+    const auto scanStd = juce::JSON::parse (
+        Export::scanToJSON (scan, MeasurementSession::Type::frequencyResponse, ctx));
+    const auto grStd = juce::JSON::parse (Export::grTimelineToJSON (gr, tau, ctx));
+    const auto famStd = juce::JSON::parse (Export::compressionFamilyToJSON (family, ctx));
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (! scanStd.isUndefined());
+    REQUIRE (! grStd.isUndefined());
+    REQUIRE (! famStd.isUndefined());
+
+    REQUIRE (parsed["scan"]["family"] == scanStd["family"]);
+    REQUIRE (parsed["gr_timeline"]["gr"] == grStd["gr"]);
+    REQUIRE (parsed["gr_timeline"]["tau"] == grStd["tau"]);
+    REQUIRE (parsed["compression_family"]["family"] == famStd["family"]);
+}

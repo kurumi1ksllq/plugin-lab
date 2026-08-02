@@ -408,6 +408,140 @@ juce::String scanToJSON (const ScanEngine::ScanResult& scan,
     return json;
 }
 
+/** Append the scan-family array body ("family": [...]) inside a dataset
+ *  "scan" block. Each entry carries the per-round analysis result selected by
+ *  type — the same layout scanToJSON emits for its top-level family (the
+ *  serialization is reused so the bodies stay data-equivalent). Ends with a
+ *  trailing ",\n" so the caller can drop it or continue with more members. */
+static void appendDatasetScanFamily (juce::String& json,
+                                     const ScanEngine::ScanResult& scan,
+                                     MeasurementSession::Type type,
+                                     const juce::String& indent)
+{
+    json += indent + "\"family\": [\n";
+    for (size_t i = 0; i < scan.family.size(); ++i)
+    {
+        const auto& entry = scan.family[i];
+        json += indent + "  {\n";
+        json += indent + "    \"param_value_normalized\": " + fmtDouble (entry.paramValue, 6) + ",\n";
+        json += indent + "    \"param_value_text\": \"" + escapeJsonString (entry.paramValueText) + "\",\n";
+        json += indent + "    \"latency_samples\": " + juce::String (entry.latencySamples) + ",\n";
+        json += indent + "    \"result\": {\n";
+
+        switch (type)
+        {
+            case MeasurementSession::Type::frequencyResponse:
+                appendFreqArrays (json, entry.freq, indent + "      ");
+                break;
+            case MeasurementSession::Type::harmonicAnalysis:
+                appendHarmonicTones (json, entry.harmonic, indent + "      ", true);
+                break;
+            case MeasurementSession::Type::compressionCurve:
+                appendCompressionBody (json, entry.compression, indent + "      ", true);
+                break;
+
+            // Scans never produce a GR timeline (the scan command rejects
+            // gr_timeline) — defensive case to keep the enum switch exhaustive.
+            case MeasurementSession::Type::grTimeline:
+                break;
+        }
+
+        json = json.dropLastCharacters (2);  // remove trailing ",\n"
+        json += "\n";
+        json += indent + "    }\n";
+        json += indent + "  }";
+        if (i < scan.family.size() - 1) json += ",";
+        json += "\n";
+    }
+    json += indent + "],\n";
+}
+
+juce::String datasetToJSON (const Dataset& dataset, const Export::Context& context)
+{
+    juce::String json;
+    json += "{\n";
+    json += "  \"type\": \"dataset\",\n";
+    json += "  \"context\": {\n";
+    appendContextFields (json, context, "    ");
+    json = json.dropLastCharacters (2);  // remove trailing ",\n" after source
+    json += "\n";
+    json += "  },\n";
+
+    if (dataset.measurementNote.isNotEmpty())
+        json += "  \"note\": \"" + escapeJsonString (dataset.measurementNote) + "\",\n";
+
+    if (dataset.scan != nullptr)
+    {
+        const auto& scan = *dataset.scan;
+        json += "  \"scan\": {\n";
+        json += "    \"param_id\": \"" + escapeJsonString (scan.paramId) + "\",\n";
+        json += "    \"param_name\": \"" + escapeJsonString (scan.paramName) + "\",\n";
+        json += "    \"values\": [";
+        for (size_t i = 0; i < scan.values.size(); ++i)
+        {
+            if (i > 0) json += ", ";
+            json += fmtDouble (scan.values[i], 6);
+        }
+        json += "],\n";
+        json += "    \"param_texts\": [";
+        for (size_t i = 0; i < scan.family.size(); ++i)
+        {
+            if (i > 0) json += ", ";
+            json += "\"" + escapeJsonString (scan.family[i].paramValueText) + "\"";
+        }
+        json += "],\n";
+        appendDatasetScanFamily (json, scan, dataset.scanType, "    ");
+        json = json.dropLastCharacters (2);  // remove trailing ",\n" after family
+        json += "\n";
+        json += "  },\n";
+    }
+
+    if (dataset.compressionFamily != nullptr)
+    {
+        const auto& family = *dataset.compressionFamily;
+        json += "  \"compression_family\": {\n";
+        json += "    \"family\": [\n";
+        for (size_t i = 0; i < family.entries.size(); ++i)
+        {
+            const auto& entry = family.entries[i];
+            json += "      {\n";
+            json += "        \"input_level_db\": " + fmtDouble (entry.inputLevelDB) + ",\n";
+            json += "        \"speed\": " + fmtDouble (entry.speed) + ",\n";
+            appendCompressionBody (json, entry.curve, "        ", true);
+            appendGRBody (json, entry.gr, "        ", true);
+            appendTauBody (json, entry.tau, "        ", false);
+            json += "      }";
+            if (i < family.entries.size() - 1) json += ",";
+            json += "\n";
+        }
+        json += "    ]\n";
+        json += "  },\n";
+    }
+
+    if (dataset.grTimeline != nullptr)
+    {
+        json += "  \"gr_timeline\": {\n";
+        appendGRBody (json, *dataset.grTimeline, "    ", true);
+
+        if (dataset.grTau != nullptr)
+        {
+            appendTauBody (json, *dataset.grTau, "    ", false, true);
+        }
+        else
+        {
+            json = json.dropLastCharacters (2);  // remove the gr block's trailing ",\n"
+            json += "\n";
+        }
+
+        json += "  },\n";
+    }
+
+    json = json.dropLastCharacters (2);  // remove trailing ",\n" after the last member
+    json += "\n";
+    json += "}\n";
+    return json;
+}
+
 juce::String rawCaptureToJSON (int64_t samples, double rate, int blockSize,
                                const Export::Context& context)
 {
