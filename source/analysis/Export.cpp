@@ -34,6 +34,29 @@ static juce::String escapeJsonString (const juce::String& s)
     return out;
 }
 
+/** Append the "source": {...} metadata block (with a trailing comma so more
+ *  members can follow). Only non-default fields are emitted. */
+static void appendSourceBlock (juce::String& json, const Export::Context& ctx)
+{
+    json += "  \"source\": {\n";
+    json += "    \"type\": \"" + escapeJsonString (ctx.source.type) + "\"";
+
+    if (ctx.source.filePath.isNotEmpty())
+        json += ",\n    \"file_path\": \"" + escapeJsonString (ctx.source.filePath) + "\"";
+    if (ctx.source.sourceSampleRate > 0.0)
+        json += ",\n    \"sample_rate\": " + juce::String (ctx.source.sourceSampleRate);
+    if (ctx.source.resampleRatio > 0.0)
+        json += ",\n    \"resample_ratio\": " + juce::String (ctx.source.resampleRatio);
+    if (ctx.source.durationSec > 0.0)
+        json += ",\n    \"duration_sec\": " + juce::String (ctx.source.durationSec);
+    if (ctx.source.noiseType.isNotEmpty())
+        json += ",\n    \"noise_type\": \"" + escapeJsonString (ctx.source.noiseType) + "\"";
+    if (ctx.source.seed != 0)
+        json += ",\n    \"seed\": " + juce::String ((int64_t) ctx.source.seed);
+
+    json += "\n  },\n";
+}
+
 juce::String freqResponseToJSON (const FreqResponse::Result& result,
                                   const Export::Context& context)
 {
@@ -51,6 +74,7 @@ juce::String freqResponseToJSON (const FreqResponse::Result& result,
     // paramSnapshot is a JSON object string already; keep it valid even if empty.
     json += "  \"parameter_snapshot\": "
             + (context.paramSnapshot.isNotEmpty() ? context.paramSnapshot : juce::String ("{}")) + ",\n";
+    appendSourceBlock (json, context);
 
     auto writePoints = [&](const juce::String& name,
                             const std::vector<FreqResponse::Point>& points)
@@ -102,6 +126,7 @@ juce::String harmonicAnalysisToJSON (const HarmonicAnalysis::Result& result,
     json += "  },\n";
     json += "  \"parameter_snapshot\": "
             + (context.paramSnapshot.isNotEmpty() ? context.paramSnapshot : juce::String ("{}")) + ",\n";
+    appendSourceBlock (json, context);
     json += "  \"tones\": [\n";
 
     for (size_t t = 0; t < result.tones.size(); ++t)
@@ -159,6 +184,7 @@ juce::String compressionCurveToJSON (const CompressionCurve::Result& result,
     json += "  },\n";
     json += "  \"parameter_snapshot\": "
             + (context.paramSnapshot.isNotEmpty() ? context.paramSnapshot : juce::String ("{}")) + ",\n";
+    appendSourceBlock (json, context);
     json += "  \"curve\": [\n";
 
     for (size_t i = 0; i < result.curve.size(); ++i)
@@ -177,6 +203,25 @@ juce::String compressionCurveToJSON (const CompressionCurve::Result& result,
     json += "    \"threshold_db\": " + fmtDouble (result.fitted.thresholdDB) + ",\n";
     json += "    \"knee_db\": " + fmtDouble (result.fitted.kneeDB) + "\n";
     json += "  }\n";
+    json += "}\n";
+    return json;
+}
+
+juce::String rawCaptureToJSON (int64_t samples, double rate, int blockSize,
+                               const Export::Context& context)
+{
+    juce::String json;
+    json += "{\n";
+    json += "  \"type\": \"raw_capture\",\n";
+    json += "  \"plugin\": \"" + escapeJsonString (context.pluginName) + "\",\n";
+    json += "  \"class_id\": \"" + escapeJsonString (context.classId) + "\",\n";
+    json += "  \"latency_samples\": " + juce::String (context.latencySamples) + ",\n";
+    json += "  \"parameter_snapshot\": "
+            + (context.paramSnapshot.isNotEmpty() ? context.paramSnapshot : juce::String ("{}")) + ",\n";
+    appendSourceBlock (json, context);
+    json += "  \"samples\": " + juce::String (samples) + ",\n";
+    json += "  \"sample_rate\": " + juce::String (rate) + ",\n";
+    json += "  \"block_size\": " + juce::String (blockSize) + "\n";
     json += "}\n";
     return json;
 }

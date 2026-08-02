@@ -93,7 +93,24 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         if (session == nullptr || plugin == nullptr)
             return Protocol::makeResponse (false, R"("error":"no session or plugin")");
 
+        // --- input source (default: signal) ---
+        auto sourceStr = obj->getProperty ("source").toString();
+        if (sourceStr.isEmpty())
+            sourceStr = Protocol::Source::signal;
+
+        MeasurementSession::Source source = MeasurementSession::Source::signal;
+        if      (sourceStr == Protocol::Source::signal)  source = MeasurementSession::Source::signal;
+        else if (sourceStr == Protocol::Source::file)    source = MeasurementSession::Source::file;
+        else if (sourceStr == Protocol::Source::noise)   source = MeasurementSession::Source::noise;
+        else if (sourceStr == Protocol::Source::dynamic) source = MeasurementSession::Source::dynamic;
+        else
+            return Protocol::makeResponse (false, R"("error":"unknown source")");
+
+        // --- measurement type (analysis field; for raw sources it is only
+        //     metadata — defaults to frequency_response when omitted) ---
         auto t = obj->getProperty ("type").toString();
+        if (t.isEmpty())
+            t = Protocol::MeasureType::freq;
         if (t == Protocol::MeasureType::freq)
             session->setMeasurementType (MeasurementSession::Type::frequencyResponse);
         else if (t == Protocol::MeasureType::harmonic)
@@ -103,13 +120,58 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         else
             return Protocol::makeResponse (false, R"("error":"unknown measure type")");
 
+        // --- source-specific configuration ---
+        if (source == MeasurementSession::Source::file)
+        {
+            // For the file source "path" names the INPUT audio file (the
+            // export path is disambiguated via "export_path" below).
+            auto inputPath = obj->getProperty ("path").toString();
+            if (inputPath.isEmpty())
+                return Protocol::makeResponse (false, R"("error":"path required")");
+            juce::File inputFile (inputPath);
+            if (! inputFile.existsAsFile())
+                return Protocol::makeResponse (false, R"("error":"file not found")");
+            session->setFilePath (inputFile);
+        }
+        else if (source == MeasurementSession::Source::noise)
+        {
+            NoiseGenerator::Type noiseType = NoiseGenerator::Type::white;
+            auto noiseTypeStr = obj->getProperty ("noise_type").toString();
+            if (noiseTypeStr == "pink")
+                noiseType = NoiseGenerator::Type::pink;
+            else if (! noiseTypeStr.isEmpty() && noiseTypeStr != "white")
+                return Protocol::makeResponse (false, R"("error":"unknown noise type")");
+
+            double duration = 2.0;
+            if (obj->hasProperty ("duration"))
+                duration = static_cast<double> (obj->getProperty ("duration"));
+
+            uint32_t seed = 0x2E42A5;
+            if (obj->hasProperty ("seed"))
+                seed = static_cast<uint32_t> (static_cast<int64_t> (obj->getProperty ("seed")));
+
+            session->setNoiseConfig (noiseType, duration, seed);
+        }
+        else if (source == MeasurementSession::Source::dynamic)
+        {
+            if (obj->hasProperty ("carrier_freq"))
+                session->setDynamicCarrierFreq (static_cast<double> (obj->getProperty ("carrier_freq")));
+        }
+
+        session->setSource (source);
         session->setPluginInstance (plugin);
 
-        // Determine export path (capture before dispatching)
-        auto path = obj->getProperty ("path").toString();
+        // Determine export path:
+        //   - signal/noise/dynamic → "path" (existing protocol)
+        //   - file → "export_path" ("path" names the input audio file)
+        auto path = (source == MeasurementSession::Source::file)
+                        ? obj->getProperty ("export_path").toString()
+                        : obj->getProperty ("path").toString();
         if (path.isEmpty())
             path = juce::File::getCurrentWorkingDirectory()
-                       .getChildFile ("pluginlab_freq_response.json")
+                       .getChildFile (source == MeasurementSession::Source::signal
+                                          ? "pluginlab_freq_response.json"
+                                          : "pluginlab_raw_capture.json")
                        .getFullPathName();
 
         if (statusCallback)
@@ -137,45 +199,76 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             ctx.blockSize       = session->getBlockSize();
             ctx.paramSnapshot   = session->getParameterSnapshot();
 
-            // Dispatch the analysis to the analyzer matching the session type.
+            // Attach the input-source metadata to the export.
+            ctx.source.type = sourceStr;
+            if (source == MeasurementSession::Source::file)
+            {
+                ctx.source.filePath         = session->getSourceFilePath();
+                ctx.source.sourceSampleRate = session->getSourceSampleRate();
+                ctx.source.resampleRatio    = session->getResampleRatio();
+                ctx.source.durationSec      = session->getSourceDurationSec();
+            }
+            else if (source == MeasurementSession::Source::noise)
+            {
+                ctx.source.noiseType   = (session->getNoiseType() == NoiseGenerator::Type::pink)
+                                             ? juce::String ("pink") : juce::String ("white");
+                ctx.source.seed        = session->getNoiseSeed();
+                ctx.source.durationSec = session->getNoiseDuration();
+            }
+
             MeasurementResults results;
-            results.type = session->getType();
+            results.type   = session->getType();
+            results.source = sourceStr;
 
             juce::String exportJson;
 
-            switch (session->getType())
+            if (source == MeasurementSession::Source::signal)
             {
-                case MeasurementSession::Type::frequencyResponse:
+                // Dispatch the analysis to the analyzer matching the session type.
+                switch (session->getType())
                 {
-                    FreqResponse fr;
-                    fr.setLatencySamples (plugin->getLatencySamples());
-                    results.freq = fr.analyze (result.getDryBuffer(),
-                                               result.getWetBuffer(),
-                                               result.getSampleRate());
-                    exportJson = Export::freqResponseToJSON (results.freq, ctx);
-                    break;
-                }
+                    case MeasurementSession::Type::frequencyResponse:
+                    {
+                        FreqResponse fr;
+                        fr.setLatencySamples (plugin->getLatencySamples());
+                        results.freq = fr.analyze (result.getDryBuffer(),
+                                                   result.getWetBuffer(),
+                                                   result.getSampleRate());
+                        exportJson = Export::freqResponseToJSON (results.freq, ctx);
+                        break;
+                    }
 
-                case MeasurementSession::Type::harmonicAnalysis:
-                {
-                    HarmonicAnalysis ha;
-                    results.harmonic = ha.analyze (result.getWetBuffer(),
-                                                   result.getSampleRate(),
-                                                   session->getFundamentalFreqs());
-                    exportJson = Export::harmonicAnalysisToJSON (results.harmonic, ctx);
-                    break;
-                }
+                    case MeasurementSession::Type::harmonicAnalysis:
+                    {
+                        HarmonicAnalysis ha;
+                        results.harmonic = ha.analyze (result.getWetBuffer(),
+                                                       result.getSampleRate(),
+                                                       session->getFundamentalFreqs());
+                        exportJson = Export::harmonicAnalysisToJSON (results.harmonic, ctx);
+                        break;
+                    }
 
-                case MeasurementSession::Type::compressionCurve:
-                {
-                    CompressionCurve cc;
-                    results.compression = cc.analyze (result.getDryBuffer(),
-                                                      result.getWetBuffer(),
-                                                      result.getSampleRate(),
-                                                      session->getInputLevelsDB());
-                    exportJson = Export::compressionCurveToJSON (results.compression, ctx);
-                    break;
+                    case MeasurementSession::Type::compressionCurve:
+                    {
+                        CompressionCurve cc;
+                        results.compression = cc.analyze (result.getDryBuffer(),
+                                                          result.getWetBuffer(),
+                                                          result.getSampleRate(),
+                                                          session->getInputLevelsDB());
+                        exportJson = Export::compressionCurveToJSON (results.compression, ctx);
+                        break;
+                    }
                 }
+            }
+            else
+            {
+                // Raw capture: record-only export, no analysis (phase 4).
+                results.rawSamples    = result.getNumRecordedSamples();
+                results.rawSampleRate = result.getSampleRate();
+                exportJson = Export::rawCaptureToJSON (result.getNumRecordedSamples(),
+                                                       result.getSampleRate(),
+                                                       session->getBlockSize(),
+                                                       ctx);
             }
 
             juce::File exportFile (path);
