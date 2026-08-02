@@ -35,10 +35,11 @@ TEST_CASE ("TestPlugin reports the configured latency", "[testplugin][smoke]")
     REQUIRE (plugin.getLatencySamples() == 64);
 }
 
-TEST_CASE ("TestPlugin exposes a dummy parameter", "[testplugin][smoke]")
+TEST_CASE ("TestPlugin exposes gain and latency parameters", "[testplugin][smoke]")
 {
     TestPlugin plugin;
 
-    REQUIRE (plugin.getParameters().size() == 1);
+    REQUIRE (plugin.getParameters().size() == 2);
     REQUIRE (plugin.getParameters()[0]->getName (32) == juce::String ("Gain"));
+    REQUIRE (plugin.getParameters()[1]->getName (32) == juce::String ("Latency"));
 }

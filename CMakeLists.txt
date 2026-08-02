@@ -41,6 +41,7 @@ target_sources(PluginLab PRIVATE
     source/capture/AudioBuffer.cpp
     source/capture/SweepRunner.cpp
     source/capture/MeasurementSession.cpp
+    source/scan/ScanEngine.cpp
     source/utils/FftHelper.cpp
     source/utils/MathUtils.cpp
     source/utils/CrashLog.cpp

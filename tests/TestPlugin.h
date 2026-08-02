@@ -28,16 +28,26 @@ public:
     class TestParameter final : public juce::HostedAudioProcessorParameter
     {
     public:
-        TestParameter (juce::String parameterIDToUse, juce::String parameterNameToUse, float defaultValueToUse)
+        /** Optional side-effect invoked whenever the parameter value is set. */
+        using OnSet = std::function<void(float)>;
+
+        TestParameter (juce::String parameterIDToUse, juce::String parameterNameToUse,
+                       float defaultValueToUse, OnSet onSetToUse = {})
             : parameterID (std::move (parameterIDToUse)),
               parameterName (std::move (parameterNameToUse)),
-              defaultValue (defaultValueToUse)
+              defaultValue (defaultValueToUse),
+              onSet (std::move (onSetToUse))
         {
         }
 
         juce::String getParameterID() const override                 { return parameterID; }
         float getValue() const override                              { return value; }
-        void setValue (float newValue) override                      { value = newValue; }
+        void setValue (float newValue) override
+        {
+            value = newValue;
+            if (onSet)
+                onSet (newValue);
+        }
         float getDefaultValue() const override                       { return defaultValue; }
         juce::String getName (int) const override                    { return parameterName; }
         juce::String getLabel() const override                       { return {}; }
@@ -48,6 +58,7 @@ public:
         juce::String parameterName;
         float defaultValue = 0.0f;
         float value = 0.0f;
+        OnSet onSet;
     };
 
     //==============================================================================
@@ -56,7 +67,14 @@ public:
                                    .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                                    .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
     {
-        addHostedParameter (std::make_unique<TestParameter> ("gain", "Gain", 1.0f));
+        // "gain": normalized 0..1 → linear gain (parameter drives processing,
+        // like a real plugin; scan tests rely on this).
+        addHostedParameter (std::make_unique<TestParameter> ("gain", "Gain", 1.0f,
+            [this] (float v) { setGain (static_cast<double> (v)); }));
+
+        // "latency": normalized 0..1 → actual samples = round (v * 1000).
+        addHostedParameter (std::make_unique<TestParameter> ("latency", "Latency", 0.0f,
+            [this] (float v) { setLatencySamples (juce::roundToInt (v * 1000.0f)); }));
     }
 
     ~TestPlugin() override = default;
