@@ -84,7 +84,8 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
   - **阶段 2 ✅ 已完成**：输入源（FilePlayback/noise/dynamic，6054e57）
   - **阶段 3 ✅ 已完成（2026-08-02）**：参数扫描（ScanEngine + GUI 扫描面板 + HSL 色板 + CompressionFamily 网格，5d2c86b..7fa3068）
   - **阶段 4 ✅ 已完成（2026-08-02）**：动态压缩行为（GR 时间线 gr_timeline + τ 估计 + 实时 GR 表头，995fc54；见下"阶段 3+4 完成记录"）
-  - 阶段 5（剩余）：建模与数据整合（数据包 + 反推验证）
+  - **阶段 5 ✅ 已完成（2026-08-02）**：建模与数据整合（datasetToJSON 数据包 + data-schema.md + reverse_derive.py 反推验证，2698068；见下"阶段 5 完成记录"）
+  - **剩余（用户确认项 / 可选）**：GR τ 修复（IPC 暴露 carrier_start_hz，默认 10000）待用户确认后实施；5 个待改进项详见阶段 5 完成记录
 - T2 稳定加固（EditorCrashGuard /EHa TU、Generic 编辑器兜底、观察者指针清理）— 当前已足够稳定，可按需实施
 
 ## 阶段 1 完成记录（2026-08-02）
@@ -122,6 +123,30 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 - **支撑提交**：b2b221e TestCompressorPlugin（可配置 attack/release/threshold/ratio）、df4f82d ScanEngine、d08b94b tail pad + block callback + GainReduction、3c01add scan family JSON schema + body 重构
 
 **测试**：**107/107 全绿**（Catch2，`ctest --timeout 180` 连跑 2 次；scan-happy ~78s 固有慢），Debug 构建 0 警告（/W4 /WX）：unit_tests + PluginLab。
+
+## 阶段 5 完成记录（2026-08-02）
+
+**commit 范围**：`995fc54` → `2698068`（阶段 5 建模与数据整合里程碑，HEAD 2698068 已 push origin/main；新增 b433a18 + 2698068 两个 commit）
+
+**关键交付**：
+
+- **datasetToJSON 建模数据包**（b433a18）：`Dataset` 结构 + `datasetToJSON` 将 scan family / gr_timeline / compression_family 三类测量聚合为单包 JSON；`appendDatasetScanFamily` helper；**现有导出函数 0 修改**；dataset 内各块 body 与独立导出数据等价（body-equiv 测试锁定）
+- **data-schema.md**（b433a18，新建）：8 类导出 JSON schema 完整文档（context / raw_capture / frequency_response / scan / gr_timeline / compression_family / dataset / note）
+- **reverse_derive.py 反推验证**（2698068，新建，stdlib only）：频响峰值 freq/Q 反推 + 压缩 threshold/ratio 分段拟合 + GR τ 读取 + dataset/scan/compression_family/gr_timeline 多布局解析 + `--expected`/`--tol` 容差校验
+
+**测试**：**113/113 全绿**（107 + 6 新增 datasetToJSON 用例：dataset-scan-only / gr-only / compression-only / full / empty / body-equiv），`ctest --timeout 180` 连跑 2 次全过；Debug 构建 0 警告（/W4 /WX）：unit_tests + PluginLab。
+
+**实测结论（真实插件）**：
+
+- Pro-Q 4：反推 freq 987.3Hz（1.27% 误差）、gain 6.00dB（0 误差）、Q 0.90（10.2%，容差 20% PASS）
+- Pro-C 3：threshold ±1dB PASS；ratio 14.3-23.5%（容差 25% PASS，偏因真实插件 burst 未充分压缩 + soft knee）
+
+**已知局限与建议**（本任务不修生产代码，记入待办）：
+
+- **GR τ 真实插件失效**：dynamic 源 20Hz 起始扫频低频段污染 GR 沿 + IPC 无法设 carrier_start_hz → tau.valid=false。修复建议：**IPC 暴露 carrier_start_hz（默认 10000）**——待用户确认的后续项
+- **ratio 25% 容差说明**：真实插件 burst 未充分压缩 + soft knee 造成的系统性偏差，25% 容差内可接受
+- **loadPlugin name 匹配说明**：按名称匹配插件 description，大小写/别名可能不命中
+- **待改进项（5 个）**：data-schema.md scan 结构描述与实现差异、loadPlugin name 匹配、carrier_start_hz IPC 暴露、Pro-Q 4 Band 1 Used、getParams 不带 param_id
 
 ## Oracle 架构审查（2026-08-02）
 
