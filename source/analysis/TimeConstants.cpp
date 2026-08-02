@@ -195,46 +195,50 @@ double TimeConstants::edgeTime (const GainReduction::Result& gr,
     const double low = grMin + 0.1 * range;
     const double high = grMin + 0.9 * range;
 
-    bool found10 = false;
-    bool found90 = false;
-    double t10 = 0.0;
-    double t90 = 0.0;
+    // Times are named by traversal order, not by level: on attack the edge rises
+    // through the 10% level first and the 90% level second, while on release it
+    // falls through the 90% level first and the 10% level second. The duration
+    // tSecondCross - tFirstCross is therefore always positive.
+    bool foundFirst = false;
+    bool foundSecond = false;
+    double tFirstCross = 0.0;
+    double tSecondCross = 0.0;
     for (const auto& p : pts)
     {
         if (attack)
         {
             // Rising edge: cross upward through the 10% then the 90% level.
-            if (! found10 && p.grDB >= low)
+            if (! foundFirst && p.grDB >= low)
             {
-                t10 = p.timeSec;
-                found10 = true;
+                tFirstCross = p.timeSec;
+                foundFirst = true;
             }
-            if (! found90 && p.grDB >= high)
+            if (! foundSecond && p.grDB >= high)
             {
-                t90 = p.timeSec;
-                found90 = true;
+                tSecondCross = p.timeSec;
+                foundSecond = true;
             }
         }
         else
         {
             // Falling edge: cross downward through the 90% then the 10% level.
-            if (! found10 && p.grDB <= high)
+            if (! foundFirst && p.grDB <= high)
             {
-                t10 = p.timeSec;
-                found10 = true;
+                tFirstCross = p.timeSec;
+                foundFirst = true;
             }
-            if (! found90 && p.grDB <= low)
+            if (! foundSecond && p.grDB <= low)
             {
-                t90 = p.timeSec;
-                found90 = true;
+                tSecondCross = p.timeSec;
+                foundSecond = true;
             }
         }
     }
 
-    if (! found10 || ! found90)
+    if (! foundFirst || ! foundSecond)
         return 0.0;  // edge did not traverse the full 10%-90% swing in-interval
 
-    return t90 - t10;
+    return tSecondCross - tFirstCross;
 }
 
 //==============================================================================
