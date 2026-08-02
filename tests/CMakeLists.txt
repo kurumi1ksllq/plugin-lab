@@ -26,7 +26,7 @@ target_sources(unit_tests PRIVATE
     ../source/ipc/PipeServer.cpp
     ../source/host/PluginManager.cpp
     CommandParserStubs.cpp
-    TestPlugin.h TestPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp FreqResponseTests.cpp ExportTests.cpp
+    TestPlugin.h TestPluginTests.cpp TestCompressorPlugin.h TestCompressorPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp FreqResponseTests.cpp ExportTests.cpp
     CommandParserTests.cpp PipeServerTests.cpp
     FilePlaybackTests.cpp NoiseGeneratorTests.cpp EnvelopeSignalTests.cpp)
 target_link_libraries(unit_tests PRIVATE
