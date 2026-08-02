@@ -298,8 +298,8 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
         "sample_rate": 48000.0,
         "num_points": 2,
         "timeline": [
-          { "t": 0.0, "gr_db": -1.0 },
-          { "t": 0.005, "gr_db": -2.0 }
+          { "t": 0.0, "gr_db": 1.0 },
+          { "t": 0.005, "gr_db": 2.0 }
         ]
       },
       "tau": { "attack_sec": 0.001, "release_sec": 0.05 }
@@ -365,7 +365,7 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
         "gr": {
           "sample_rate": 48000.0,
           "num_points": 2,
-          "timeline": [{ "t": 0.0, "gr_db": -1.0 }]
+          "timeline": [{ "t": 0.0, "gr_db": 1.0 }]
         },
         "tau": { "attack_sec": 0.001, "release_sec": 0.05 }
       }
