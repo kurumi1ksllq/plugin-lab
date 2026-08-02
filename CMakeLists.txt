@@ -50,6 +50,7 @@ target_sources(PluginLab PRIVATE
     source/analysis/CompressionCurve.cpp
     source/analysis/Export.cpp
     source/analysis/GainReduction.cpp
+    source/analysis/TimeConstants.cpp
     source/ipc/PipeServer.cpp
     source/ipc/CommandParser.cpp
     source/ui/PlotWidget.cpp
