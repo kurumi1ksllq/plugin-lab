@@ -31,6 +31,9 @@ stdout.txt
 *.tmp
 *.dmp
 
+# 测量运行产物（不提交）
+pluginlab_*.json
+
 # CMake 缓存
 CMakeCache.txt
 CMakeFiles/
