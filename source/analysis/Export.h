@@ -4,6 +4,8 @@
 #include "FreqResponse.h"
 #include "HarmonicAnalysis.h"
 #include "CompressionCurve.h"
+#include "../scan/ScanEngine.h"
+#include "../capture/MeasurementSession.h"
 
 /**
  * Exports measurement results to structured JSON files
@@ -67,6 +69,13 @@ namespace Export
      *  analysis (analysis of raw captures is phase 4). */
     juce::String rawCaptureToJSON (int64_t samples, double rate, int blockSize,
                                    const Context& context);
+
+    /** Export a parameter scan (one measurement round per parameter value) to
+     *  JSON. type selects which per-round analysis result is embedded in each
+     *  family entry (ScanResult does not record the measurement type). */
+    juce::String scanToJSON (const ScanEngine::ScanResult& scan,
+                             MeasurementSession::Type type,
+                             const Context& context);
 
     /** Write a JSON string to a file. Returns true on success. */
     bool writeToFile (const juce::String& json,

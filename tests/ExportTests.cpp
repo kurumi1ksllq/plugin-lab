@@ -1,7 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <cstdlib>
+
 #include "../source/analysis/Export.h"
+#include "../source/scan/ScanEngine.h"
+#include "../source/capture/MeasurementSession.h"
 
 //==============================================================================
 // Export JSON tests: the exported JSON must always be parseable, carry the
@@ -165,4 +169,200 @@ TEST_CASE ("rawCaptureToJSON emits raw_capture payload with source metadata", "[
     REQUIRE (parsed["source"]["sample_rate"].equals (48000.0));
     REQUIRE (parsed["source"]["resample_ratio"].equals (1.0));
     REQUIRE (static_cast<double> (parsed["source"]["duration_sec"]) == Catch::Approx (1.0));
+}
+
+//==============================================================================
+// Test case F: scanToJSON — parameter-scan continuity JSON. Every round
+// ("family" entry) carries the per-value analysis body plus the context that
+// lets the consumer reproduce the measurement.
+
+namespace
+{
+    FreqResponse::Result makeFreqResult (double peakGainDB)
+    {
+        FreqResponse::Result result;
+        result.sampleRate = 48000.0;
+        result.raw =
+        {
+            { 100.0,   peakGainDB - 3.0,  12.0 },
+            { 1000.0,  peakGainDB,        0.0 },
+            { 10000.0, peakGainDB - 6.0, -45.0 }
+        };
+        return result;
+    }
+
+    /** 3-round gain scan: each round a distinct frequency response. */
+    ScanEngine::ScanResult makeScanResult()
+    {
+        ScanEngine::ScanResult scan;
+        scan.paramId = "gain";
+        scan.paramName = "Gain";
+        scan.values = { 0.0, 0.5, 1.0 };
+
+        for (double v : scan.values)
+        {
+            ScanEngine::ScanResultEntry entry;
+            entry.paramValue = v;
+            entry.paramValueText = juce::String (v, 2) + " dB";
+            entry.latencySamples = 32 + static_cast<int> (v * 100);
+            entry.freq = makeFreqResult (v * 12.0);
+            scan.family.push_back (entry);
+        }
+        return scan;
+    }
+}
+
+TEST_CASE ("scanToJSON emits scan schema with context, scan and family", "[export][scan-schema]")
+{
+    const auto scan = makeScanResult();
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+    ctx.classId = "com.example.scan";
+    ctx.latencySamples = 64;
+    ctx.sampleRate = 48000.0;
+    ctx.blockSize = 512;
+    ctx.paramSnapshot = "{\"gain\": 0.5}";
+
+    const auto json = Export::scanToJSON (scan, MeasurementSession::Type::frequencyResponse, ctx);
+    const auto parsed = juce::JSON::parse (json);
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (parsed["type"].toString() == "scan");
+
+    // Context block matches the standalone exporters' context fields.
+    REQUIRE (parsed["context"]["plugin"].toString() == ctx.pluginName);
+    REQUIRE (parsed["context"]["class_id"].toString() == ctx.classId);
+    REQUIRE (parsed["context"]["latency_samples"].equals (64));
+    REQUIRE (parsed["context"]["measurement"]["block_size"].equals (512));
+    REQUIRE (parsed["context"]["parameter_snapshot"]["gain"].equals (0.5));
+
+    REQUIRE (parsed["scan"]["param_id"].toString() == scan.paramId);
+    REQUIRE (parsed["scan"]["param_name"].toString() == scan.paramName);
+    REQUIRE (parsed["scan"]["values"].size() == 3);
+    REQUIRE (parsed["scan"]["param_texts"].size() == 3);
+    REQUIRE (parsed["family"].size() == 3);
+
+    for (size_t i = 0; i < scan.family.size(); ++i)
+    {
+        const auto idx = static_cast<int> (i);
+        INFO ("family entry " << i);
+        REQUIRE (parsed["family"][idx]["latency_samples"].equals (scan.family[i].latencySamples));
+        REQUIRE (static_cast<double> (parsed["family"][idx]["param_value_normalized"])
+                 == Catch::Approx (scan.family[i].paramValue));
+        REQUIRE (parsed["family"][idx]["param_value_text"].toString() == scan.family[i].paramValueText);
+        REQUIRE (parsed["family"][idx]["result"].isObject());
+        REQUIRE (static_cast<double> (parsed["scan"]["values"][idx])
+                 == Catch::Approx (scan.values[i]));
+    }
+}
+
+//==============================================================================
+// Test case G: family[i].result must be data-equivalent to the standalone
+// frequency-response export body (same points, same precision).
+
+TEST_CASE ("scanToJSON family result matches standalone frequency response body",
+           "[export][scan-body-equiv]")
+{
+    const auto freq = makeFreqResult (6.0);
+    Export::Context ctx;
+    ctx.pluginName = "EquivTest";
+    ctx.latencySamples = 64;
+
+    ScanEngine::ScanResult scan;
+    scan.paramId = "gain";
+    scan.paramName = "Gain";
+    scan.values = { 0.5 };
+    ScanEngine::ScanResultEntry entry;
+    entry.paramValue = 0.5;
+    entry.paramValueText = "0.50 dB";
+    entry.latencySamples = 64;
+    entry.freq = freq;
+    scan.family.push_back (entry);
+
+    const auto standalone = juce::JSON::parse (Export::freqResponseToJSON (freq, ctx));
+    const auto parsed = juce::JSON::parse (
+        Export::scanToJSON (scan, MeasurementSession::Type::frequencyResponse, ctx));
+    const auto result = parsed["family"][0]["result"];
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (! result.isUndefined());
+    REQUIRE (result["raw"] == standalone["raw"]);
+    REQUIRE (result["smoothed_1_12"] == standalone["smoothed_1_12"]);
+    REQUIRE (result["smoothed_1_3"] == standalone["smoothed_1_3"]);
+}
+
+//==============================================================================
+// Test case H: every user-supplied string (context, param id/name, value
+// text) is escaped so the JSON round-trips exactly.
+
+TEST_CASE ("scanToJSON escapes quotes and backslashes", "[export][scan-escaping]")
+{
+    const auto scan = makeScanResult();
+    Export::Context ctx;
+    ctx.pluginName = "My \"Cool\" \\Plugin";
+    ctx.classId = "com.example.\"scan\"";
+    ctx.source.type = "file";
+    ctx.source.filePath = "C:\\audio\\\"weird\".wav";
+
+    auto tricky = scan;
+    tricky.paramId = "dr\\ive\"x";
+    tricky.paramName = "Dr \"X\"";
+    tricky.family[0].paramValueText = "0\\\"5 dB";
+
+    const auto json = Export::scanToJSON (tricky, MeasurementSession::Type::frequencyResponse, ctx);
+    const auto parsed = juce::JSON::parse (json);
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (parsed["context"]["plugin"].toString() == ctx.pluginName);
+    REQUIRE (parsed["context"]["class_id"].toString() == ctx.classId);
+    REQUIRE (parsed["context"]["source"]["file_path"].toString() == ctx.source.filePath);
+    REQUIRE (parsed["scan"]["param_id"].toString() == tricky.paramId);
+    REQUIRE (parsed["scan"]["param_name"].toString() == tricky.paramName);
+    REQUIRE (parsed["family"][0]["param_value_text"].toString() == tricky.family[0].paramValueText);
+}
+
+//==============================================================================
+// Test case I: the emitted JSON is parseable by python's stdlib json module
+// (the same interpreter that consumes the other exports via verify_export.py).
+
+TEST_CASE ("scanToJSON output parses with python json.load", "[export][scan-python]")
+{
+    const auto scan = makeScanResult();
+    Export::Context ctx;
+    ctx.pluginName = "PythonScan";
+
+    const auto json = Export::scanToJSON (scan, MeasurementSession::Type::frequencyResponse, ctx);
+    const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                          .getChildFile ("pluginlab_scan_test.json");
+    REQUIRE (Export::writeToFile (json, file));
+
+    const auto command = "python -c \"import json,sys; json.load(open(sys.argv[1]))\" "
+                         + file.getFullPathName().quoted();
+    const auto exitCode = std::system (command.toRawUTF8());
+    file.deleteFile();
+
+    REQUIRE (exitCode == 0);
+}
+
+//==============================================================================
+// Test case J: an empty family (cancelled before the first round) still
+// yields parseable JSON with family == [].
+
+TEST_CASE ("scanToJSON handles empty family", "[export][scan-empty-family]")
+{
+    ScanEngine::ScanResult scan;
+    scan.paramId = "gain";
+    scan.paramName = "Gain";
+    scan.values = { 0.0, 0.5, 1.0 };
+
+    Export::Context ctx;
+    ctx.pluginName = "EmptyScan";
+
+    const auto json = Export::scanToJSON (scan, MeasurementSession::Type::compressionCurve, ctx);
+    const auto parsed = juce::JSON::parse (json);
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (parsed["family"].size() == 0);
+    REQUIRE (parsed["scan"]["values"].size() == 3);
+    REQUIRE (parsed["scan"]["param_texts"].size() == 0);
 }

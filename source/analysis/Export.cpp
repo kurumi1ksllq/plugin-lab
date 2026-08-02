@@ -36,25 +36,71 @@ static juce::String escapeJsonString (const juce::String& s)
 
 /** Append the "source": {...} metadata block (with a trailing comma so more
  *  members can follow). Only non-default fields are emitted. */
-static void appendSourceBlock (juce::String& json, const Export::Context& ctx)
+static void appendSourceBlock (juce::String& json, const Export::Context& ctx,
+                               const juce::String& indent)
 {
-    json += "  \"source\": {\n";
-    json += "    \"type\": \"" + escapeJsonString (ctx.source.type) + "\"";
+    json += indent + "\"source\": {\n";
+    json += indent + "  \"type\": \"" + escapeJsonString (ctx.source.type) + "\"";
 
     if (ctx.source.filePath.isNotEmpty())
-        json += ",\n    \"file_path\": \"" + escapeJsonString (ctx.source.filePath) + "\"";
+        json += ",\n" + indent + "  \"file_path\": \"" + escapeJsonString (ctx.source.filePath) + "\"";
     if (ctx.source.sourceSampleRate > 0.0)
-        json += ",\n    \"sample_rate\": " + juce::String (ctx.source.sourceSampleRate);
+        json += ",\n" + indent + "  \"sample_rate\": " + juce::String (ctx.source.sourceSampleRate);
     if (ctx.source.resampleRatio > 0.0)
-        json += ",\n    \"resample_ratio\": " + juce::String (ctx.source.resampleRatio);
+        json += ",\n" + indent + "  \"resample_ratio\": " + juce::String (ctx.source.resampleRatio);
     if (ctx.source.durationSec > 0.0)
-        json += ",\n    \"duration_sec\": " + juce::String (ctx.source.durationSec);
+        json += ",\n" + indent + "  \"duration_sec\": " + juce::String (ctx.source.durationSec);
     if (ctx.source.noiseType.isNotEmpty())
-        json += ",\n    \"noise_type\": \"" + escapeJsonString (ctx.source.noiseType) + "\"";
+        json += ",\n" + indent + "  \"noise_type\": \"" + escapeJsonString (ctx.source.noiseType) + "\"";
     if (ctx.source.seed != 0)
-        json += ",\n    \"seed\": " + juce::String ((int64_t) ctx.source.seed);
+        json += ",\n" + indent + "  \"seed\": " + juce::String ((int64_t) ctx.source.seed);
 
-    json += "\n  },\n";
+    json += "\n" + indent + "},\n";
+}
+
+/** Append the measurement-context fields shared by every exporter (plugin,
+ *  class_id, latency, sample_rate, measurement, parameter_snapshot, source).
+ *  Each member is emitted with a trailing comma so more members can follow. */
+static void appendContextFields (juce::String& json, const Export::Context& ctx,
+                                 const juce::String& indent)
+{
+    json += indent + "\"plugin\": \"" + escapeJsonString (ctx.pluginName) + "\",\n";
+    json += indent + "\"class_id\": \"" + escapeJsonString (ctx.classId) + "\",\n";
+    json += indent + "\"latency_samples\": " + juce::String (ctx.latencySamples) + ",\n";
+    json += indent + "\"sample_rate\": " + juce::String (ctx.sampleRate) + ",\n";
+    json += indent + "\"measurement\": {\n";
+    json += indent + "  \"sample_rate\": " + juce::String (ctx.sampleRate) + ",\n";
+    json += indent + "  \"block_size\": " + juce::String (ctx.blockSize) + "\n";
+    json += indent + "},\n";
+    json += indent + "\"parameter_snapshot\": "
+            + (ctx.paramSnapshot.isNotEmpty() ? ctx.paramSnapshot : juce::String ("{}")) + ",\n";
+    appendSourceBlock (json, ctx, indent);
+}
+
+/** Serialize the frequency-response analysis body (raw/smoothed point
+ *  arrays). Ends with a trailing ",\n" so the caller can drop it or
+ *  continue with more members. */
+static void appendFreqArrays (juce::String& json, const FreqResponse::Result& result,
+                              const juce::String& indent)
+{
+    auto writePoints = [&](const juce::String& name,
+                            const std::vector<FreqResponse::Point>& points)
+    {
+        json += indent + "\"" + name + "\": [\n";
+        for (size_t i = 0; i < points.size(); ++i)
+        {
+            json += indent + "  {\"f\": " + fmtDouble (points[i].frequency, 1)
+                    + ", \"mag\": " + fmtDouble (points[i].magnitudeDB)
+                    + ", \"phase\": " + fmtDouble (points[i].phaseDeg) + "}";
+            if (i < points.size() - 1) json += ",";
+            json += "\n";
+        }
+        json += indent + "],\n";
+    };
+
+    writePoints ("raw", result.raw);
+    writePoints ("smoothed_1_12", result.smoothed_1_12);
+    writePoints ("smoothed_1_3", result.smoothed_1_3);
 }
 
 juce::String freqResponseToJSON (const FreqResponse::Result& result,
@@ -63,37 +109,8 @@ juce::String freqResponseToJSON (const FreqResponse::Result& result,
     juce::String json;
     json += "{\n";
     json += "  \"type\": \"frequency_response\",\n";
-    json += "  \"plugin\": \"" + escapeJsonString (context.pluginName) + "\",\n";
-    json += "  \"class_id\": \"" + escapeJsonString (context.classId) + "\",\n";
-    json += "  \"latency_samples\": " + juce::String (context.latencySamples) + ",\n";
-    json += "  \"sample_rate\": " + juce::String (context.sampleRate) + ",\n";
-    json += "  \"measurement\": {\n";
-    json += "    \"sample_rate\": " + juce::String (context.sampleRate) + ",\n";
-    json += "    \"block_size\": " + juce::String (context.blockSize) + "\n";
-    json += "  },\n";
-    // paramSnapshot is a JSON object string already; keep it valid even if empty.
-    json += "  \"parameter_snapshot\": "
-            + (context.paramSnapshot.isNotEmpty() ? context.paramSnapshot : juce::String ("{}")) + ",\n";
-    appendSourceBlock (json, context);
-
-    auto writePoints = [&](const juce::String& name,
-                            const std::vector<FreqResponse::Point>& points)
-    {
-        json += "  \"" + name + "\": [\n";
-        for (size_t i = 0; i < points.size(); ++i)
-        {
-            json += "    {\"f\": " + fmtDouble (points[i].frequency, 1)
-                    + ", \"mag\": " + fmtDouble (points[i].magnitudeDB)
-                    + ", \"phase\": " + fmtDouble (points[i].phaseDeg) + "}";
-            if (i < points.size() - 1) json += ",";
-            json += "\n";
-        }
-        json += "  ],\n";
-    };
-
-    writePoints ("raw", result.raw);
-    writePoints ("smoothed_1_12", result.smoothed_1_12);
-    writePoints ("smoothed_1_3", result.smoothed_1_3);
+    appendContextFields (json, context, "  ");
+    appendFreqArrays (json, result, "  ");
 
     // Remove trailing comma of the last array, then close the object.
     json = json.dropLastCharacters (2);  // remove ",\n"
@@ -110,38 +127,26 @@ juce::String freqResponseToJSON (const FreqResponse::Result& result,
     return freqResponseToJSON (result, context);
 }
 
-juce::String harmonicAnalysisToJSON (const HarmonicAnalysis::Result& result,
-                                      const Export::Context& context)
+/** Serialize the harmonic-analysis body ("tones"). If trailingComma is set,
+ *  the emitted block ends with ",\n" instead of "\n". */
+static void appendHarmonicTones (juce::String& json, const HarmonicAnalysis::Result& result,
+                                 const juce::String& indent, bool trailingComma)
 {
-    juce::String json;
-    json += "{\n";
-    json += "  \"type\": \"harmonic_analysis\",\n";
-    json += "  \"plugin\": \"" + escapeJsonString (context.pluginName) + "\",\n";
-    json += "  \"class_id\": \"" + escapeJsonString (context.classId) + "\",\n";
-    json += "  \"latency_samples\": " + juce::String (context.latencySamples) + ",\n";
-    json += "  \"sample_rate\": " + juce::String (context.sampleRate) + ",\n";
-    json += "  \"measurement\": {\n";
-    json += "    \"sample_rate\": " + juce::String (context.sampleRate) + ",\n";
-    json += "    \"block_size\": " + juce::String (context.blockSize) + "\n";
-    json += "  },\n";
-    json += "  \"parameter_snapshot\": "
-            + (context.paramSnapshot.isNotEmpty() ? context.paramSnapshot : juce::String ("{}")) + ",\n";
-    appendSourceBlock (json, context);
-    json += "  \"tones\": [\n";
+    json += indent + "\"tones\": [\n";
 
     for (size_t t = 0; t < result.tones.size(); ++t)
     {
         auto& tone = result.tones[t];
-        json += "    {\n";
-        json += "      \"fundamental_hz\": " + fmtDouble (tone.fundamentalFreq, 1) + ",\n";
-        json += "      \"fundamental_db\": " + fmtDouble (tone.fundamentalDB) + ",\n";
-        json += "      \"thd_percent\": " + fmtDouble (tone.thdPercent, 4) + ",\n";
-        json += "      \"harmonics\": [\n";
+        json += indent + "  {\n";
+        json += indent + "    \"fundamental_hz\": " + fmtDouble (tone.fundamentalFreq, 1) + ",\n";
+        json += indent + "    \"fundamental_db\": " + fmtDouble (tone.fundamentalDB) + ",\n";
+        json += indent + "    \"thd_percent\": " + fmtDouble (tone.thdPercent, 4) + ",\n";
+        json += indent + "    \"harmonics\": [\n";
 
         for (size_t h = 0; h < tone.harmonics.size(); ++h)
         {
             auto& harm = tone.harmonics[h];
-            json += "        {\"order\": " + juce::String (harm.order)
+            json += indent + "      {\"order\": " + juce::String (harm.order)
                     + ", \"freq\": " + fmtDouble (harm.frequency, 1)
                     + ", \"mag_db\": " + fmtDouble (harm.magnitudeDB)
                     + ", \"percent\": " + fmtDouble (harm.percent, 4) + "}";
@@ -149,13 +154,25 @@ juce::String harmonicAnalysisToJSON (const HarmonicAnalysis::Result& result,
             json += "\n";
         }
 
-        json += "      ]\n";
-        json += "    }";
+        json += indent + "    ]\n";
+        json += indent + "  }";
         if (t < result.tones.size() - 1) json += ",";
         json += "\n";
     }
 
-    json += "  ]\n";
+    json += indent + "]";
+    if (trailingComma) json += ",";
+    json += "\n";
+}
+
+juce::String harmonicAnalysisToJSON (const HarmonicAnalysis::Result& result,
+                                      const Export::Context& context)
+{
+    juce::String json;
+    json += "{\n";
+    json += "  \"type\": \"harmonic_analysis\",\n";
+    appendContextFields (json, context, "  ");
+    appendHarmonicTones (json, result, "  ", false);
     json += "}\n";
     return json;
 }
@@ -168,41 +185,108 @@ juce::String harmonicAnalysisToJSON (const HarmonicAnalysis::Result& result,
     return harmonicAnalysisToJSON (result, context);
 }
 
-juce::String compressionCurveToJSON (const CompressionCurve::Result& result,
-                                      const Export::Context& context)
+/** Serialize the compression-curve body ("curve" + "fitted"). If trailingComma
+ *  is set, the emitted block ends with ",\n" instead of "\n". */
+static void appendCompressionBody (juce::String& json, const CompressionCurve::Result& result,
+                                   const juce::String& indent, bool trailingComma)
 {
-    juce::String json;
-    json += "{\n";
-    json += "  \"type\": \"compression_curve\",\n";
-    json += "  \"plugin\": \"" + escapeJsonString (context.pluginName) + "\",\n";
-    json += "  \"class_id\": \"" + escapeJsonString (context.classId) + "\",\n";
-    json += "  \"latency_samples\": " + juce::String (context.latencySamples) + ",\n";
-    json += "  \"sample_rate\": " + juce::String (context.sampleRate) + ",\n";
-    json += "  \"measurement\": {\n";
-    json += "    \"sample_rate\": " + juce::String (context.sampleRate) + ",\n";
-    json += "    \"block_size\": " + juce::String (context.blockSize) + "\n";
-    json += "  },\n";
-    json += "  \"parameter_snapshot\": "
-            + (context.paramSnapshot.isNotEmpty() ? context.paramSnapshot : juce::String ("{}")) + ",\n";
-    appendSourceBlock (json, context);
-    json += "  \"curve\": [\n";
+    json += indent + "\"curve\": [\n";
 
     for (size_t i = 0; i < result.curve.size(); ++i)
     {
         auto& p = result.curve[i];
-        json += "    {\"input_db\": " + fmtDouble (p.inputDB)
+        json += indent + "  {\"input_db\": " + fmtDouble (p.inputDB)
                 + ", \"output_db\": " + fmtDouble (p.outputDB)
                 + ", \"gr_db\": " + fmtDouble (p.gainReductionDB) + "}";
         if (i < result.curve.size() - 1) json += ",";
         json += "\n";
     }
 
-    json += "  ],\n";
-    json += "  \"fitted\": {\n";
-    json += "    \"ratio\": " + fmtDouble (result.fitted.ratio) + ",\n";
-    json += "    \"threshold_db\": " + fmtDouble (result.fitted.thresholdDB) + ",\n";
-    json += "    \"knee_db\": " + fmtDouble (result.fitted.kneeDB) + "\n";
-    json += "  }\n";
+    json += indent + "],\n";
+    json += indent + "\"fitted\": {\n";
+    json += indent + "  \"ratio\": " + fmtDouble (result.fitted.ratio) + ",\n";
+    json += indent + "  \"threshold_db\": " + fmtDouble (result.fitted.thresholdDB) + ",\n";
+    json += indent + "  \"knee_db\": " + fmtDouble (result.fitted.kneeDB) + "\n";
+    json += indent + "}";
+    if (trailingComma) json += ",";
+    json += "\n";
+}
+
+juce::String compressionCurveToJSON (const CompressionCurve::Result& result,
+                                      const Export::Context& context)
+{
+    juce::String json;
+    json += "{\n";
+    json += "  \"type\": \"compression_curve\",\n";
+    appendContextFields (json, context, "  ");
+    appendCompressionBody (json, result, "  ", false);
+    json += "}\n";
+    return json;
+}
+
+juce::String scanToJSON (const ScanEngine::ScanResult& scan,
+                         MeasurementSession::Type type,
+                         const Export::Context& context)
+{
+    juce::String json;
+    json += "{\n";
+    json += "  \"type\": \"scan\",\n";
+    json += "  \"context\": {\n";
+    appendContextFields (json, context, "    ");
+    json = json.dropLastCharacters (2);  // remove trailing ",\n" after source
+    json += "\n";
+    json += "  },\n";
+
+    json += "  \"scan\": {\n";
+    json += "    \"param_id\": \"" + escapeJsonString (scan.paramId) + "\",\n";
+    json += "    \"param_name\": \"" + escapeJsonString (scan.paramName) + "\",\n";
+    json += "    \"values\": [";
+    for (size_t i = 0; i < scan.values.size(); ++i)
+    {
+        if (i > 0) json += ", ";
+        json += fmtDouble (scan.values[i], 6);
+    }
+    json += "],\n";
+    json += "    \"param_texts\": [";
+    for (size_t i = 0; i < scan.family.size(); ++i)
+    {
+        if (i > 0) json += ", ";
+        json += "\"" + escapeJsonString (scan.family[i].paramValueText) + "\"";
+    }
+    json += "]\n";
+    json += "  },\n";
+
+    json += "  \"family\": [\n";
+    for (size_t i = 0; i < scan.family.size(); ++i)
+    {
+        const auto& entry = scan.family[i];
+        json += "    {\n";
+        json += "      \"param_value_normalized\": " + fmtDouble (entry.paramValue, 6) + ",\n";
+        json += "      \"param_value_text\": \"" + escapeJsonString (entry.paramValueText) + "\",\n";
+        json += "      \"latency_samples\": " + juce::String (entry.latencySamples) + ",\n";
+        json += "      \"result\": {\n";
+
+        switch (type)
+        {
+            case MeasurementSession::Type::frequencyResponse:
+                appendFreqArrays (json, entry.freq, "        ");
+                break;
+            case MeasurementSession::Type::harmonicAnalysis:
+                appendHarmonicTones (json, entry.harmonic, "        ", true);
+                break;
+            case MeasurementSession::Type::compressionCurve:
+                appendCompressionBody (json, entry.compression, "        ", true);
+                break;
+        }
+
+        json = json.dropLastCharacters (2);  // remove trailing ",\n"
+        json += "\n";
+        json += "      }\n";
+        json += "    }";
+        if (i < scan.family.size() - 1) json += ",";
+        json += "\n";
+    }
+    json += "  ]\n";
     json += "}\n";
     return json;
 }
@@ -218,7 +302,7 @@ juce::String rawCaptureToJSON (int64_t samples, double rate, int blockSize,
     json += "  \"latency_samples\": " + juce::String (context.latencySamples) + ",\n";
     json += "  \"parameter_snapshot\": "
             + (context.paramSnapshot.isNotEmpty() ? context.paramSnapshot : juce::String ("{}")) + ",\n";
-    appendSourceBlock (json, context);
+    appendSourceBlock (json, context, "  ");
     json += "  \"samples\": " + juce::String (samples) + ",\n";
     json += "  \"sample_rate\": " + juce::String (rate) + ",\n";
     json += "  \"block_size\": " + juce::String (blockSize) + "\n";
