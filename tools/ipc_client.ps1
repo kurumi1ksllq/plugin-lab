@@ -1,4 +1,7 @@
-param([Parameter(Mandatory=$true)][string]$Command)
+param(
+    [Parameter(Mandatory=$true)][string]$Command,
+    [int]$TimeoutSeconds = 120
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -13,7 +16,11 @@ try {
     $pipe.WaitForPipeDrain()
 
     # Read response — the server may write one JSON line per response
-    $response = $reader.ReadLine()
+    $task = $reader.ReadLineAsync()
+    if (-not $task.Wait([TimeSpan]::FromSeconds($TimeoutSeconds))) {
+        throw "IPC response timed out after ${TimeoutSeconds}s"
+    }
+    $response = $task.Result
     Write-Output $response
 
     $pipe.Dispose()
