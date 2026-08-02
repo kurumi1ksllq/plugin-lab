@@ -8,6 +8,7 @@
 #include "ipc/Protocol.h"
 #include "capture/MeasurementSession.h"
 #include "analysis/FreqResponse.h"
+#include "analysis/GainReduction.h"
 #include "scan/ScanEngine.h"
 #include <atomic>
 #include <mutex>
@@ -92,6 +93,17 @@ public:
         phasePlot->setAutoFitY (true);
         addAndMakeVisible (phasePlot.get());
 
+        // GR header (T4.4): GR_dB(t) timeline for dynamic/file sources.
+        // Visible only while the GR measurement type is selected; shows the
+        // partial timeline live during the sweep and the full timeline on
+        // completion.
+        grPlot.reset (new PlotWidget());
+        grPlot->setAxisLabels ("Time (s)", "Gain Reduction (dB)");
+        grPlot->setXAxisLog (false);
+        grPlot->setAutoFitY (true);
+        grPlot->setVisible (false);
+        addAndMakeVisible (grPlot.get());
+
         // Measurement control row (right panel, above the plots).
         // Frequency response is wired end-to-end; harmonic/compression are
         // placeholders until phase 2 (they only report "not wired yet").
@@ -122,6 +134,18 @@ public:
         };
         addAndMakeVisible (measureCompressionButton.get());
 
+        // GR timeline (T4.4): gain reduction over time for dynamic/file
+        // sources — the GR header plot shows it live while measuring.
+        measureGRButton.reset (new juce::TextButton ("GR"));
+        measureGRButton->onClick = [this]
+        {
+            currentMeasureType = juce::String (Protocol::MeasureType::grTimeline);
+            updateScanEstimate();
+            updateGRPlotVisibility();
+            startMeasurement (currentMeasureType);
+        };
+        addAndMakeVisible (measureGRButton.get());
+
         // Input source selector (signal | file | noise | dynamic). The source
         // decides which signal is generated; non-signal sources are captured
         // raw (no analysis — that is phase 4).
@@ -134,6 +158,7 @@ public:
         sourceCombo->onChange = [this]
         {
             updateSourceControls();
+            updateGRPlotVisibility();
             clearMeasurementDisplay();
         };
         addAndMakeVisible (sourceCombo.get());
@@ -200,6 +225,28 @@ public:
         measurementSession = std::make_unique<MeasurementSession>();
         measurementSession->setSampleRate (48000.0);
         measurementSession->setBlockSize (512);
+
+        // T4.4 live GR header: accumulate the dry/wet blocks streamed by
+        // SweepRunner and refresh the partial GR timeline at most every
+        // 50 ms while a GR measurement runs. Runs on the message thread
+        // (both the GUI and IPC paths execute measurements there).
+        measurementSession->setBlockCallback ([this] (float,
+                                                       const juce::AudioBuffer<float>& dryBlock,
+                                                       const juce::AudioBuffer<float>& wetBlock)
+        {
+            if (! grLiveActive)
+                return;
+
+            appendLiveBlock (liveDry, dryBlock);
+            appendLiveBlock (liveWet, wetBlock);
+
+            const auto now = juce::Time::getMillisecondCounter();
+            if (now - lastGRUpdateMs < 50)
+                return;
+            lastGRUpdateMs = now;
+
+            updateLiveGR();
+        });
 
         commandParser = std::make_unique<CommandParser>();
         commandParser->setPluginManager (pluginManager.get());
@@ -288,17 +335,19 @@ public:
         {
             const int gap = 6;
 
-            // Row 1: source combo (right) + the three measure buttons.
+            // Row 1: source combo (right) + the four measure buttons.
             auto row1 = controls.removeFromTop (30);
             const int comboW = 110;
             sourceCombo->setBounds (row1.removeFromRight (comboW));
             row1.removeFromRight (gap);
-            const int btnW = (row1.getWidth() - 2 * gap) / 3;
+            const int btnW = (row1.getWidth() - 3 * gap) / 4;
             measureFreqButton->setBounds (row1.removeFromLeft (btnW));
             row1.removeFromLeft (gap);
             measureHarmonicButton->setBounds (row1.removeFromLeft (btnW));
             row1.removeFromLeft (gap);
-            measureCompressionButton->setBounds (row1);
+            measureCompressionButton->setBounds (row1.removeFromLeft (btnW));
+            row1.removeFromLeft (gap);
+            measureGRButton->setBounds (row1);
 
             // Row 2: source-specific parameters (file chooser / noise duration).
             controls.removeFromTop (4);
@@ -325,9 +374,18 @@ public:
             scanProgressLabel->setBounds (row3);
         }
 
+        // GR header strip (T4.4): takes the top of the plot area while the
+        // GR timeline type is selected; the freq plots shrink below it.
+        juce::Rectangle<int> grArea;
+        if (grPlot->isVisible())
+            grArea = plotArea.removeFromTop (110);
+
         auto phaseArea = plotArea.removeFromBottom (juce::roundToInt (plotArea.getHeight() * 0.35f));
         magPlot->setBounds (plotArea);
         phasePlot->setBounds (phaseArea);
+
+        if (grPlot->isVisible())
+            grPlot->setBounds (grArea.reduced (0, 2));
     }
 
     //==============================================================================
@@ -439,6 +497,7 @@ public:
                 measureFreqButton->setEnabled (true);
                 measureHarmonicButton->setEnabled (true);
                 measureCompressionButton->setEnabled (true);
+                measureGRButton->setEnabled (true);
                 renderScanResult();
             }
             catch (...)
@@ -459,12 +518,15 @@ public:
             // Measurement finished: re-arm the re-entry guard and re-enable
             // the measure buttons (empty-result path below also returns here).
             measurementInProgress = false;
+            grLiveActive = false;
             measureFreqButton->setEnabled (true);
             measureHarmonicButton->setEnabled (true);
             measureCompressionButton->setEnabled (true);
+            measureGRButton->setEnabled (true);
 
             // Non-signal sources are captured raw — show the capture summary
-            // instead of analysis plots (analysis is phase 4).
+            // instead of analysis plots (analysis is phase 4). Exception: the
+            // GR timeline analysis (dynamic/file) renders its header plot.
             if (measurementResult.source == juce::String (Protocol::Source::signal))
             {
                 switch (measurementResult.type)
@@ -478,7 +540,16 @@ public:
                     case MeasurementSession::Type::compressionCurve:
                         renderCompressionCurve();
                         break;
+
+                    // Unreachable — the parser rejects gr_timeline for
+                    // Source::signal (defensive, keeps the switch exhaustive).
+                    case MeasurementSession::Type::grTimeline:
+                        break;
                 }
+            }
+            else if (measurementResult.type == MeasurementSession::Type::grTimeline)
+            {
+                renderGRTimeline (measurementResult.gr, buildGRStatusText (measurementResult.tau));
             }
             else
             {
@@ -835,7 +906,20 @@ private:
         measureFreqButton->setEnabled (false);
         measureHarmonicButton->setEnabled (false);
         measureCompressionButton->setEnabled (false);
+        measureGRButton->setEnabled (false);
         statusLabel->setText ("Measuring...", juce::dontSendNotification);
+
+        // T4.4 live GR header: accumulate the streamed dry/wet blocks and
+        // show the partial timeline while a GR measurement runs.
+        grLiveActive = (type == juce::String (Protocol::MeasureType::grTimeline));
+        if (grLiveActive)
+        {
+            liveDry = juce::AudioBuffer<float>();
+            liveWet = juce::AudioBuffer<float>();
+            lastGRUpdateMs = 0;
+            grPlot->clear();
+            grPlot->repaint();
+        }
 
         // Build the measure command with the source field + source params.
         juce::String json = R"({"cmd":"measure","type":")" + type
@@ -862,9 +946,11 @@ private:
             if (! (bool) obj->getProperty (Protocol::Status::ok))
             {
                 measurementInProgress = false;
+                grLiveActive = false;
                 measureFreqButton->setEnabled (true);
                 measureHarmonicButton->setEnabled (true);
                 measureCompressionButton->setEnabled (true);
+                measureGRButton->setEnabled (true);
                 statusLabel->setText ("Measure failed: "
                     + obj->getProperty (Protocol::Status::error).toString(),
                     juce::dontSendNotification);
@@ -947,6 +1033,7 @@ private:
         measureFreqButton->setEnabled (false);
         measureHarmonicButton->setEnabled (false);
         measureCompressionButton->setEnabled (false);
+        measureGRButton->setEnabled (false);
         scanProgressLabel->setText ("", juce::dontSendNotification);
         statusLabel->setText ("Scanning...", juce::dontSendNotification);
         updateScanEstimate();
@@ -992,6 +1079,7 @@ private:
                 measureFreqButton->setEnabled (true);
                 measureHarmonicButton->setEnabled (true);
                 measureCompressionButton->setEnabled (true);
+                measureGRButton->setEnabled (true);
                 statusLabel->setText ("Scan failed: "
                     + obj->getProperty (Protocol::Status::error).toString(),
                     juce::dontSendNotification);
@@ -1182,6 +1270,8 @@ private:
         magPlot->repaint();
         phasePlot->clear();
         phasePlot->repaint();
+        grPlot->clear();
+        grPlot->repaint();
     }
 
     void chooseAudioFile()
@@ -1221,11 +1311,101 @@ private:
     }
 
     //==============================================================================
+    // GR timeline (T4.4) — live header plot + completion rendering.
+
+    /** Append one block to a live accumulation buffer (grows to fit). */
+    static void appendLiveBlock (juce::AudioBuffer<float>& dst,
+                                 const juce::AudioBuffer<float>& src)
+    {
+        if (src.getNumSamples() <= 0)
+            return;
+
+        const int oldSamples = dst.getNumSamples();
+        const int newSamples = oldSamples + src.getNumSamples();
+        const int numChans = juce::jmax (dst.getNumChannels(), src.getNumChannels());
+
+        dst.setSize (numChans, newSamples, true, false, true);
+        for (int ch = 0; ch < src.getNumChannels(); ++ch)
+            dst.copyFrom (ch, oldSamples, src, ch, 0, src.getNumSamples());
+    }
+
+    /** Recompute the partial GR timeline from the accumulated dry/wet blocks
+     *  and refresh the header plot (message thread, throttled to 50 ms). */
+    void updateLiveGR()
+    {
+        if (liveDry.getNumSamples() == 0 || liveWet.getNumSamples() == 0)
+            return;
+
+        const double sr = measurementSession->getSampleRate();
+        const int latency = (livePlugin != nullptr) ? livePlugin->getLatencySamples() : 0;
+        renderGRTimeline (GainReduction::analyze (liveDry, liveWet, sr, latency), {});
+    }
+
+    /** Render a GR timeline (live partial or final) on the header plot. The
+     *  status label is only touched when statusMsg is non-empty. */
+    void renderGRTimeline (const GainReduction::Result& gr,
+                           const juce::String& statusMsg) const
+    {
+        grPlot->setAxisLabels ("Time (s)", "Gain Reduction (dB)");
+        grPlot->setXAxisLog (false);
+        grPlot->setAutoFitY (true);
+        grPlot->clear();
+
+        if (! gr.timeline.empty())
+        {
+            PlotWidget::Series series;
+            series.name = "GR";
+            series.colour = juce::Colours::cyan;
+            series.lineWidth = 2.0f;
+            series.x.reserve (gr.timeline.size());
+            series.y.reserve (gr.timeline.size());
+            for (const auto& p : gr.timeline)
+            {
+                series.x.push_back (static_cast<float> (p.timeSec));
+                series.y.push_back (static_cast<float> (p.grDB));
+            }
+            grPlot->addSeries (std::move (series));
+        }
+
+        grPlot->repaint();
+
+        if (statusMsg.isNotEmpty())
+            statusLabel->setText (statusMsg, juce::dontSendNotification);
+    }
+
+    /** Status text for a completed GR measurement (tau summary when valid). */
+    static juce::String buildGRStatusText (const TimeConstants::Result& tau)
+    {
+        juce::String msg = "GR timeline complete";
+        if (tau.valid)
+            msg += ": attack " + juce::String (tau.tauAttackSec * 1000.0, 2) + " ms, release "
+                   + juce::String (tau.tauReleaseSec * 1000.0, 2) + " ms";
+        else
+            msg += ", tau not estimable (no controlled edges)";
+        return msg;
+    }
+
+    /** Show the GR header plot while the GR timeline type is selected
+     *  (regardless of source — the file source also produces GR timelines). */
+    void updateGRPlotVisibility()
+    {
+        const bool showGR = (currentMeasureType
+                             == juce::String (Protocol::MeasureType::grTimeline));
+        grPlot->setVisible (showGR);
+        if (showGR)
+        {
+            resized();
+            grPlot->repaint();
+        }
+    }
+
+    //==============================================================================
     void openEditorWindowFor (std::unique_ptr<juce::AudioPluginInstance> instance,
                                const juce::String& name)
     {
         unloadCurrentPlugin();
         pluginLoaded = false;
+        livePlugin = nullptr;
 
         if (!instance)
         {
@@ -1267,6 +1447,7 @@ private:
             auto* rawInstance = editorWindow->getPluginInstance();
             commandParser->setPluginInstance (rawInstance);
             measurementSession->setPluginInstance (rawInstance);
+            livePlugin = rawInstance;
             pluginLoaded = true;
 
             // Populate the scan parameter combo from the loaded plugin.
@@ -1291,6 +1472,7 @@ private:
     {
         unloadCurrentPlugin();
         pluginLoaded = false;
+        livePlugin = nullptr;
         commandParser->setPluginInstance (nullptr);
         measurementSession->setPluginInstance (nullptr);
 
@@ -1333,6 +1515,7 @@ private:
     std::unique_ptr<juce::TextButton> measureFreqButton;
     std::unique_ptr<juce::TextButton> measureHarmonicButton;
     std::unique_ptr<juce::TextButton> measureCompressionButton;
+    std::unique_ptr<juce::TextButton> measureGRButton;
 
     // Input source selector + source-specific controls
     std::unique_ptr<juce::ComboBox> sourceCombo;
@@ -1373,6 +1556,14 @@ private:
     // Right-panel frequency-response plots
     std::unique_ptr<PlotWidget> magPlot;
     std::unique_ptr<PlotWidget> phasePlot;
+
+    // GR header (T4.4): GR_dB(t) timeline, live while measuring.
+    std::unique_ptr<PlotWidget> grPlot;
+    bool grLiveActive = false;
+    juce::AudioBuffer<float> liveDry;          // accumulated dry blocks
+    juce::AudioBuffer<float> liveWet;          // accumulated wet blocks
+    uint32_t lastGRUpdateMs = 0;               // throttling (50 ms)
+    juce::AudioPluginInstance* livePlugin = nullptr;  // latency source
 
     std::unique_ptr<PluginEditorWindow> editorWindow;
 

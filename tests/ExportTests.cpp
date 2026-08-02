@@ -366,3 +366,101 @@ TEST_CASE ("scanToJSON handles empty family", "[export][scan-empty-family]")
     REQUIRE (parsed["scan"]["values"].size() == 3);
     REQUIRE (parsed["scan"]["param_texts"].size() == 0);
 }
+
+//==============================================================================
+// Test case K (T4.4): grTimelineToJSON — GR timeline + tau export. The
+// schema carries the nested context block, the gr timeline and the tau
+// summary (attack/release sec + valid flag + tau(level) curve families).
+
+TEST_CASE ("grTimelineToJSON emits gr_timeline schema with gr and tau blocks", "[export][gr-schema]")
+{
+    GainReduction::Result gr;
+    gr.sampleRate = 48000.0;
+    gr.timeline =
+    {
+        { 0.000, -6.0 },
+        { 0.005, -6.0 },
+        { 0.010, -6.02 }
+    };
+    gr.numPoints = static_cast<int> (gr.timeline.size());
+
+    TimeConstants::Result tau;
+    tau.tauAttackSec  = 0.001;
+    tau.tauReleaseSec = 0.05;
+    tau.attackByLevel.levelDB = { -6.0 };
+    tau.attackByLevel.tauSec  = { 0.001 };
+    tau.releaseByLevel.levelDB = { -6.0, -3.0 };
+    tau.releaseByLevel.tauSec  = { 0.05, 0.049 };
+    tau.valid = true;
+
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+    ctx.classId = "com.example.gr";
+    ctx.latencySamples = 0;
+    ctx.sampleRate = 48000.0;
+    ctx.blockSize = 512;
+    ctx.source.type = "dynamic";
+
+    const auto json = Export::grTimelineToJSON (gr, tau, ctx);
+    const auto parsed = juce::JSON::parse (json);
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (parsed["type"].toString() == "gr_timeline");
+
+    // Nested context block (mirrors scanToJSON / compressionFamilyToJSON).
+    REQUIRE (parsed["context"]["plugin"].toString() == ctx.pluginName);
+    REQUIRE (parsed["context"]["class_id"].toString() == ctx.classId);
+    REQUIRE (parsed["context"]["latency_samples"].equals (0));
+    REQUIRE (parsed["context"]["source"]["type"].toString() == "dynamic");
+
+    // gr block: sample_rate + timeline points round-trip exactly.
+    REQUIRE (parsed["gr"]["sample_rate"].equals (48000.0));
+    REQUIRE (parsed["gr"]["timeline"].size() == 3);
+    REQUIRE (static_cast<double> (parsed["gr"]["timeline"][1]["t"])
+             == Catch::Approx (0.005));
+    REQUIRE (static_cast<double> (parsed["gr"]["timeline"][1]["gr_db"])
+             == Catch::Approx (-6.0));
+
+    // tau block: attack/release seconds, valid flag and by-level families.
+    REQUIRE (static_cast<double> (parsed["tau"]["attack_sec"])
+             == Catch::Approx (0.001));
+    REQUIRE (static_cast<double> (parsed["tau"]["release_sec"])
+             == Catch::Approx (0.05));
+    REQUIRE (parsed["tau"]["valid"].isBool());
+    REQUIRE ((bool) parsed["tau"]["valid"]);
+    REQUIRE (parsed["tau"]["attack_by_level"].size() == 1);
+    REQUIRE (static_cast<double> (parsed["tau"]["attack_by_level"][0]["level_db"])
+             == Catch::Approx (-6.0));
+    REQUIRE (static_cast<double> (parsed["tau"]["attack_by_level"][0]["tau_sec"])
+             == Catch::Approx (0.001));
+    REQUIRE (parsed["tau"]["release_by_level"].size() == 2);
+    REQUIRE (static_cast<double> (parsed["tau"]["release_by_level"][1]["tau_sec"])
+             == Catch::Approx (0.049));
+}
+
+//==============================================================================
+// Test case L (T4.4): an invalid tau result (no detected edges) still emits a
+// well-formed tau block: zeros + valid=false + empty curve families.
+
+TEST_CASE ("grTimelineToJSON emits invalid tau block for edgeless GR", "[export][gr-tau-invalid]")
+{
+    GainReduction::Result gr;
+    gr.sampleRate = 48000.0;
+    gr.timeline = { { 0.0, 0.0 }, { 0.005, 0.0 } };
+    gr.numPoints = 2;
+
+    TimeConstants::Result tau;  // default: all zeros, valid=false
+
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+
+    const auto json = Export::grTimelineToJSON (gr, tau, ctx);
+    const auto parsed = juce::JSON::parse (json);
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (! (bool) parsed["tau"]["valid"]);
+    REQUIRE (static_cast<double> (parsed["tau"]["attack_sec"]) == Catch::Approx (0.0));
+    REQUIRE (static_cast<double> (parsed["tau"]["release_sec"]) == Catch::Approx (0.0));
+    REQUIRE (parsed["tau"]["attack_by_level"].size() == 0);
+    REQUIRE (parsed["tau"]["release_by_level"].size() == 0);
+}

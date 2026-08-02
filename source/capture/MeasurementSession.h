@@ -21,7 +21,8 @@ public:
     {
         frequencyResponse,   // Sine sweep → frequency/phase response
         harmonicAnalysis,    // Multi-tone → THD + harmonics
-        compressionCurve     // Tone burst at multiple levels → gain reduction
+        compressionCurve,    // Tone burst at multiple levels → gain reduction
+        grTimeline           // GR-over-time + attack/release tau (non-signal sources)
     };
 
     /** Input signal source. The source decides which signal is generated;
@@ -126,6 +127,16 @@ public:
     void setProgressCallback (std::function<void(float)> cb)
     {
         progressCallback = std::move (cb);
+    }
+
+    /** Register a per-block callback (T4.4 live GR header): invoked after
+     *  every processed block with the total progress and the dry/wet block
+     *  contents just appended to the result. Passthrough to SweepRunner. */
+    void setBlockCallback (std::function<void(float progress,
+                                               const juce::AudioBuffer<float>& dryBlock,
+                                               const juce::AudioBuffer<float>& wetBlock)> cb)
+    {
+        runner.setBlockCallback (std::move (cb));
     }
 
     //==============================================================================

@@ -236,15 +236,41 @@ static void appendGRBody (juce::String& json, const GainReduction::Result& resul
     json += "\n";
 }
 
-/** Serialize the time-constant body ("tau": attack_sec, release_sec). If
- *  trailingComma is set, the emitted block ends with ",\n" instead of "\n". */
+/** Serialize the time-constant body ("tau": attack_sec, release_sec, and —
+ *  when includeDetails is set — the valid flag and the tau(level) curve
+ *  families). If trailingComma is set, the emitted block ends with ",\n"
+ *  instead of "\n". */
 static void appendTauBody (juce::String& json, const TimeConstants::Result& result,
-                           const juce::String& indent, bool trailingComma)
+                           const juce::String& indent, bool trailingComma,
+                           bool includeDetails = false)
 {
     json += indent + "\"tau\": {\n";
     json += indent + "  \"attack_sec\": " + fmtDouble (result.tauAttackSec, 6) + ",\n";
-    json += indent + "  \"release_sec\": " + fmtDouble (result.tauReleaseSec, 6) + "\n";
-    json += indent + "}";
+    json += indent + "  \"release_sec\": " + fmtDouble (result.tauReleaseSec, 6);
+
+    if (includeDetails)
+    {
+        json += ",\n" + indent + "  \"valid\": " + (result.valid ? "true" : "false");
+
+        auto appendCurve = [&json, &indent] (const juce::String& name,
+                                             const TimeConstants::TauCurve& curve)
+        {
+            json += ",\n" + indent + "  \"" + name + "\": [";
+            const size_t n = std::min (curve.levelDB.size(), curve.tauSec.size());
+            for (size_t i = 0; i < n; ++i)
+            {
+                if (i > 0) json += ", ";
+                json += "{\"level_db\": " + fmtDouble (curve.levelDB[i])
+                        + ", \"tau_sec\": " + fmtDouble (curve.tauSec[i], 6) + "}";
+            }
+            json += "]";
+        };
+
+        appendCurve ("attack_by_level", result.attackByLevel);
+        appendCurve ("release_by_level", result.releaseByLevel);
+    }
+
+    json += "\n" + indent + "}";
     if (trailingComma) json += ",";
     json += "\n";
 }
@@ -288,6 +314,24 @@ juce::String compressionFamilyToJSON (const CompressionFamily::FamilyResult& res
         json += "\n";
     }
     json += "  ]\n";
+    json += "}\n";
+    return json;
+}
+
+juce::String grTimelineToJSON (const GainReduction::Result& gr,
+                               const TimeConstants::Result& tau,
+                               const Export::Context& context)
+{
+    juce::String json;
+    json += "{\n";
+    json += "  \"type\": \"gr_timeline\",\n";
+    json += "  \"context\": {\n";
+    appendContextFields (json, context, "    ");
+    json = json.dropLastCharacters (2);  // remove trailing ",\n" after source
+    json += "\n";
+    json += "  },\n";
+    appendGRBody (json, gr, "  ", true);
+    appendTauBody (json, tau, "  ", false, true);
     json += "}\n";
     return json;
 }
@@ -344,6 +388,11 @@ juce::String scanToJSON (const ScanEngine::ScanResult& scan,
                 break;
             case MeasurementSession::Type::compressionCurve:
                 appendCompressionBody (json, entry.compression, "        ", true);
+                break;
+
+            // Scans never produce a GR timeline (the scan command rejects
+            // gr_timeline) — defensive case to keep the enum switch exhaustive.
+            case MeasurementSession::Type::grTimeline:
                 break;
         }
 

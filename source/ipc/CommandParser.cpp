@@ -3,6 +3,9 @@
 #include "../analysis/Export.h"
 #include "../analysis/HarmonicAnalysis.h"
 #include "../analysis/CompressionCurve.h"
+#include "../analysis/GainReduction.h"
+#include "../analysis/TimeConstants.h"
+#include "../analysis/CompressionFamily.h"
 
 juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 {
@@ -117,8 +120,17 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             session->setMeasurementType (MeasurementSession::Type::harmonicAnalysis);
         else if (t == Protocol::MeasureType::compression)
             session->setMeasurementType (MeasurementSession::Type::compressionCurve);
+        else if (t == Protocol::MeasureType::grTimeline)
+            session->setMeasurementType (MeasurementSession::Type::grTimeline);
         else
             return Protocol::makeResponse (false, R"("error":"unknown measure type")");
+
+        // The GR timeline needs a recorded dry/wet pair with dynamics:
+        // built-in signal sources have no GR timeline generator.
+        if (t == Protocol::MeasureType::grTimeline
+            && source == MeasurementSession::Source::signal)
+            return Protocol::makeResponse (false,
+                R"("error":"gr_timeline requires a non-signal source")");
 
         // --- source-specific configuration ---
         if (source == MeasurementSession::Source::file)
@@ -258,7 +270,48 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                         exportJson = Export::compressionCurveToJSON (results.compression, ctx);
                         break;
                     }
+
+                    // Unreachable — the parser rejects gr_timeline for
+                    // Source::signal (defensive, keeps the enum switch
+                    // exhaustive).
+                    case MeasurementSession::Type::grTimeline:
+                        return Protocol::makeResponse (false,
+                            R"("error":"gr_timeline requires a non-signal source")");
                 }
+            }
+            else if (t == Protocol::MeasureType::grTimeline)
+            {
+                // GR timeline analysis (T4.4): gain reduction over the
+                // recorded dry/wet pair, then attack/release time constants.
+                //
+                // - GainReduction reports the wet/dry ratio (negative dB for
+                //   a compressor); the exported timeline keeps that convention.
+                // - TimeConstants needs controlled envelope edges: the dynamic
+                //   source has them (auto-detected via CompressionFamily); the
+                //   file/noise sources are real-world material with no
+                //   controlled edges, so their markers stay empty and the tau
+                //   estimate is invalid by design (GR timeline still exported).
+                results.gr = GainReduction::analyze (result.getDryBuffer(),
+                                                     result.getWetBuffer(),
+                                                     result.getSampleRate(),
+                                                     plugin->getLatencySamples());
+
+                TimeConstants::EventMarkers markers;
+                if (source == MeasurementSession::Source::dynamic)
+                {
+                    // detectMarkers expects positive dB = reduction; negate a
+                    // copy of the timeline before detection (CompressionFamily
+                    // pattern — the exported timeline is NOT negated).
+                    auto grPositive = results.gr;
+                    for (auto& p : grPositive.timeline)
+                        p.grDB = -p.grDB;
+                    markers = CompressionFamily::detectMarkers (grPositive);
+                }
+
+                results.tau = TimeConstants::estimate (results.gr, markers,
+                                                       result.getSampleRate());
+
+                exportJson = Export::grTimelineToJSON (results.gr, results.tau, ctx);
             }
             else
             {

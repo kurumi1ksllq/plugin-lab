@@ -151,6 +151,12 @@ ScanEngine::ScanResult ScanEngine::run (const juce::String& paramId,
                                                       session_->getInputLevelsDB());
                 break;
             }
+
+            // The scan command rejects gr_timeline (GR timelines are
+            // measured via the measure command) — defensive case to keep
+            // the enum switch exhaustive.
+            case MeasurementSession::Type::grTimeline:
+                break;
         }
 
         entry.latencySamples = plugin_->getLatencySamples();

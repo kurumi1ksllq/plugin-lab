@@ -118,6 +118,12 @@ bool MeasurementSession::run()
                     gen = std::move (bursts);
                     break;
                 }
+
+                // grTimeline has no signal-source generator — the CommandParser
+                // rejects gr_timeline for Source::signal, so this is defensive
+                // (also keeps the enum switch exhaustive).
+                case Type::grTimeline:
+                    return false;
             }
             break;
         }

@@ -1068,3 +1068,168 @@ TEST_CASE ("CommandParser: scan with noise source runs noise rounds and exports 
     // Cleanup
     exportFile.deleteFile();
 }
+
+//==============================================================================
+// 10. GR timeline (T4.4) — measure gr_timeline: GainReduction over the
+// dry/wet pair + TimeConstants; dynamic source auto-detects the envelope
+// edges, file source has no controlled edges (tau stays invalid).
+//==============================================================================
+
+TEST_CASE ("CommandParser: dynamic source + gr_timeline exports GR timeline JSON",
+           "[commandparser][measure-gr-dynamic]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // Constant -6.02 dB gain: a flat GR timeline with no dynamic edges.
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (0.5);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    std::atomic<bool> callbackFired { false };
+    MeasurementResults capturedResult;
+    parser.setMeasurementCompleteCallback ([&] (const MeasurementResults& r) {
+        callbackFired.store (true);
+        capturedResult = r;
+    });
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_gr_dynamic.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+
+    // ---- Act ----
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","source":"dynamic","type":"gr_timeline","path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    // 1. Response: success, 2 s @ 48 kHz -> 96000 samples.
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"samples\":96000"));
+    REQUIRE (response.contains ("\"export_path\":"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    // 2. Callback carried the grTimeline variant (GR + tau).
+    REQUIRE (callbackFired.load());
+    REQUIRE (capturedResult.type == MeasurementSession::Type::grTimeline);
+    REQUIRE_FALSE (capturedResult.gr.timeline.empty());
+
+    // 3. Export: gr_timeline JSON with a non-empty GR timeline, GR ≈ -6.02 dB
+    //    in the driven region (silence windows report 0 dB, so check the
+    //    deepest reduction), and a tau block whose valid flag is a bool.
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    REQUIRE (exportedJson["type"].toString() == "gr_timeline");
+    REQUIRE (exportedJson["gr"]["timeline"].size() > 0);
+
+    double minGR = 0.0;
+    for (int i = 0; i < exportedJson["gr"]["timeline"].size(); ++i)
+        minGR = std::min (minGR, static_cast<double> (exportedJson["gr"]["timeline"][i]["gr_db"]));
+    REQUIRE (minGR == Catch::Approx (20.0 * std::log10 (0.5)).margin (0.3));
+
+    REQUIRE (exportedJson["tau"]["valid"].isBool());
+    REQUIRE (exportedJson["tau"]["attack_sec"].isDouble());
+    REQUIRE (exportedJson["tau"]["release_sec"].isDouble());
+
+    // Cleanup
+    exportFile.deleteFile();
+}
+
+TEST_CASE ("CommandParser: file source + gr_timeline exports GR timeline without tau",
+           "[commandparser][measure-gr-file]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // Real-vocal-like file: no controlled attack/release edges, so the
+    // markers stay empty and the tau estimate is invalid by design.
+    const auto wavFile = writeSourceTestWav (48000.0, 2, 48000,
+        [] (int ch, int64_t s)
+        {
+            const double t = static_cast<double> (s) / 48000.0;
+            const double freq = (ch == 0) ? 440.0 : 880.0;
+            return static_cast<float> (0.5 * std::sin (2.0 * juce::MathConstants<double>::pi * freq * t));
+        });
+    REQUIRE (wavFile.existsAsFile());
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    std::atomic<bool> callbackFired { false };
+    MeasurementResults capturedResult;
+    parser.setMeasurementCompleteCallback ([&] (const MeasurementResults& r) {
+        callbackFired.store (true);
+        capturedResult = r;
+    });
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_gr_file.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+
+    // ---- Act ----
+    // "path" names the INPUT audio file; "export_path" the JSON output.
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","source":"file","type":"gr_timeline","path":)")
+        + juce::JSON::toString (wavFile.getFullPathName())
+        + juce::String (R"(,"export_path":)") + juce::JSON::toString (exportPath)
+        + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    // 1. Response: success, 1 s @ 48 kHz -> 48000 samples.
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"samples\":48000"));
+    REQUIRE (response.contains ("\"export_path\":"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    // 2. Callback carried the grTimeline variant with a non-empty GR timeline.
+    REQUIRE (callbackFired.load());
+    REQUIRE (capturedResult.type == MeasurementSession::Type::grTimeline);
+    REQUIRE_FALSE (capturedResult.gr.timeline.empty());
+
+    // 3. Export: GR timeline present; no controlled edges -> tau invalid
+    //    (zeros + valid=false + empty curve families) — a design lock.
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    REQUIRE (exportedJson["type"].toString() == "gr_timeline");
+    REQUIRE (exportedJson["gr"]["timeline"].size() > 0);
+    REQUIRE (! (bool) exportedJson["tau"]["valid"]);
+    REQUIRE (static_cast<double> (exportedJson["tau"]["attack_sec"]) == Catch::Approx (0.0));
+    REQUIRE (static_cast<double> (exportedJson["tau"]["release_sec"]) == Catch::Approx (0.0));
+    REQUIRE (exportedJson["tau"]["attack_by_level"].size() == 0);
+    REQUIRE (exportedJson["tau"]["release_by_level"].size() == 0);
+
+    // Cleanup
+    exportFile.deleteFile();
+    wavFile.deleteFile();
+}

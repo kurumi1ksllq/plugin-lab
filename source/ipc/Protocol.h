@@ -45,6 +45,7 @@ namespace Protocol
         constexpr auto freq        = "frequency_response";
         constexpr auto harmonic    = "harmonic";
         constexpr auto compression = "compression";
+        constexpr auto grTimeline  = "gr_timeline";
     }
 
     //==============================================================================

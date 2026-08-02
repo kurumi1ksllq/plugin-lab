@@ -6,6 +6,8 @@
 #include "../analysis/FreqResponse.h"
 #include "../analysis/HarmonicAnalysis.h"
 #include "../analysis/CompressionCurve.h"
+#include "../analysis/GainReduction.h"
+#include "../analysis/TimeConstants.h"
 #include "../scan/ScanEngine.h"
 
 /**
@@ -13,9 +15,10 @@
  * Exactly one Result field is populated depending on type; the others stay
  * default-constructed (empty).
  *
- * For non-signal input sources (file/noise/dynamic) no analysis runs — the
- * result only carries the raw-capture metadata (source / rawSamples /
- * rawSampleRate); analysis of raw captures is phase 4.
+ * For non-signal input sources (file/noise/dynamic) no analysis runs by
+ * default — the result only carries the raw-capture metadata (source /
+ * rawSamples / rawSampleRate). The exception is Type::grTimeline, which
+ * analyses the dry/wet pair into a GR timeline + tau (gr / tau).
  */
 struct MeasurementResults
 {
@@ -23,6 +26,8 @@ struct MeasurementResults
     FreqResponse::Result freq;
     HarmonicAnalysis::Result harmonic;
     CompressionCurve::Result compression;
+    GainReduction::Result gr;        // populated for Type::grTimeline
+    TimeConstants::Result tau;       // populated for Type::grTimeline
 
     /** Input source that produced this result (Protocol::Source value). */
     juce::String source;

@@ -84,6 +84,14 @@ namespace Export
     juce::String compressionFamilyToJSON (const CompressionFamily::FamilyResult& result,
                                           const Context& context);
 
+    /** Export a gain-reduction timeline (T4.4) to JSON: the GR-over-time
+     *  curve (GainReduction convention — negative dB = reduction) plus the
+     *  attack/release time constants (valid=false when no controlled edges
+     *  were found, e.g. file sources). */
+    juce::String grTimelineToJSON (const GainReduction::Result& gr,
+                                   const TimeConstants::Result& tau,
+                                   const Context& context);
+
     /** Write a JSON string to a file. Returns true on success. */
     bool writeToFile (const juce::String& json,
                       const juce::File& file);
