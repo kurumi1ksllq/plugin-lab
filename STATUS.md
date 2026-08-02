@@ -81,8 +81,10 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 - **T3 数据记录系统**（2026-08-02 定稿，详见 DESIGN.md §8）：
   - **阶段 1 ✅ 已完成（2026-08-02）**：测试设施 + 4 bug 修复 + IPC 恢复 + EQ 测量接通 + 右面板曲线 + Pro-Q 4 验收通过（见下"阶段 1 完成记录"）
-  - 阶段 2：FilePlayback（vocal 回放）+ AnalysisStrategy + ParameterTimeline + WAV 双轨导出 + **CaptureBuffer 增量落盘（Bug4 移至此，依赖 WavExporter）**
-  - 阶段 3：GR 表头逐块回调 + 边测边画增量曲线
+  - **阶段 2 ✅ 已完成**：输入源（FilePlayback/noise/dynamic，6054e57）
+  - **阶段 3 ✅ 已完成（2026-08-02）**：参数扫描（ScanEngine + GUI 扫描面板 + HSL 色板 + CompressionFamily 网格，5d2c86b..7fa3068）
+  - **阶段 4 ✅ 已完成（2026-08-02）**：动态压缩行为（GR 时间线 gr_timeline + τ 估计 + 实时 GR 表头，995fc54；见下"阶段 3+4 完成记录"）
+  - 阶段 5（剩余）：建模与数据整合（数据包 + 反推验证）
 - T2 稳定加固（EditorCrashGuard /EHa TU、Generic 编辑器兜底、观察者指针清理）— 当前已足够稳定，可按需实施
 
 ## 阶段 1 完成记录（2026-08-02）
@@ -105,6 +107,21 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 **测试基础设施**：Catch2 v3.8.0 + `unit_tests` console target（tests/，含 TestPlugin 假插件），**29/29 全绿**。
 **新增工具**：`tools/ipc_client.ps1`（NamedPipe 客户端）、`tools/verify_export.py`（JSON 反推频点/Q/增益）。
 **提交**：feat/phase1-freq-response 分支 11 commits（5584f1a..0fe3626）。
+
+## 阶段 3+4 完成记录（2026-08-02）
+
+**commit 范围**：`5d2c86b` → `995fc54`（阶段 3 扫描 + 阶段 4 动态压缩行为里程碑，HEAD 995fc54 已 push origin/main）
+
+**关键能力**：
+
+- **scan 命令 + GUI 扫描面板 + HSL 色板**（5d2c86b）：ScanEngine 参数扫描（快照/恢复/取消/逐轮延迟）+ scan JSON schema + 右面板多曲线渲染 + HSL 色板
+- **CompressionFamily 电平×速度网格**（7fa3068）：输入电平 × 速度网格，每格一条有效压缩曲线 + GR 时间线
+- **GR 时间线测量路径 `gr_timeline`**（995fc54）：非 signal 源（dynamic/file/noise）→ GainReduction::analyze → CompressionFamily::detectMarkers → TimeConstants::estimate（τ）→ Export::grTimelineToJSON；signal 源拒绝（报错）
+- **实时 GR 表头**（995fc54）：setBlockCallback 累积 dry/wet + 50ms 节流 GainReduction 分析实时刷新；GR 按钮 + grPlot 表头（x=timeSec, y=grDB）
+- **τ 估计 TimeConstants**（34f7db9）：tau 匹配有效 attack + 配置 release
+- **支撑提交**：b2b221e TestCompressorPlugin（可配置 attack/release/threshold/ratio）、df4f82d ScanEngine、d08b94b tail pad + block callback + GainReduction、3c01add scan family JSON schema + body 重构
+
+**测试**：**107/107 全绿**（Catch2，`ctest --timeout 180` 连跑 2 次；scan-happy ~78s 固有慢），Debug 构建 0 警告（/W4 /WX）：unit_tests + PluginLab。
 
 ## Oracle 架构审查（2026-08-02）
 
