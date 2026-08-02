@@ -19,9 +19,12 @@ void CaptureBuffer::clear()
 }
 
 void CaptureBuffer::append (const juce::AudioBuffer<float>& dry,
-                           const juce::AudioBuffer<float>& wet)
+                           const juce::AudioBuffer<float>& wet,
+                           int numSamples)
 {
-    int numNewSamples = dry.getNumSamples();
+    const int numNewSamples = juce::jmin (numSamples,
+                                          dry.getNumSamples(),
+                                          wet.getNumSamples());
 
     if (numNewSamples <= 0)
         return;

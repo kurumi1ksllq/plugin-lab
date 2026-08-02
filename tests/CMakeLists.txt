@@ -15,6 +15,8 @@ juce_generate_juce_header(unit_tests)
 target_sources(unit_tests PRIVATE
     ../source/signal/SignalGenerator.cpp ../source/signal/SineSweep.cpp
     ../source/signal/MultiTone.cpp ../source/signal/ToneBurst.cpp ../source/signal/Impulse.cpp
+    ../source/signal/FilePlayback.cpp ../source/signal/NoiseGenerator.cpp
+    ../source/signal/EnvelopeSignal.cpp
     ../source/capture/AudioBuffer.cpp ../source/capture/SweepRunner.cpp
     ../source/capture/MeasurementSession.cpp
     ../source/analysis/FreqResponse.cpp ../source/analysis/HarmonicAnalysis.cpp
@@ -25,9 +27,11 @@ target_sources(unit_tests PRIVATE
     ../source/host/PluginManager.cpp
     CommandParserStubs.cpp
     TestPlugin.h TestPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp FreqResponseTests.cpp ExportTests.cpp
-    CommandParserTests.cpp PipeServerTests.cpp)
+    CommandParserTests.cpp PipeServerTests.cpp
+    FilePlaybackTests.cpp NoiseGeneratorTests.cpp EnvelopeSignalTests.cpp)
 target_link_libraries(unit_tests PRIVATE
     juce::juce_audio_basics juce::juce_audio_processors juce::juce_audio_utils juce::juce_dsp
+    juce::juce_audio_formats
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags
     Catch2::Catch2WithMain)
 if(MSVC)

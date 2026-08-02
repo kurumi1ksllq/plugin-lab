@@ -114,6 +114,40 @@ public:
         };
         addAndMakeVisible (measureCompressionButton.get());
 
+        // Input source selector (signal | file | noise | dynamic). The source
+        // decides which signal is generated; non-signal sources are captured
+        // raw (no analysis — that is phase 4).
+        sourceCombo.reset (new juce::ComboBox ("Source"));
+        sourceCombo->addItem ("Signal", 1);
+        sourceCombo->addItem ("File", 2);
+        sourceCombo->addItem ("Noise", 3);
+        sourceCombo->addItem ("Dynamic", 4);
+        sourceCombo->setSelectedId (1);
+        sourceCombo->onChange = [this]
+        {
+            updateSourceControls();
+            clearMeasurementDisplay();
+        };
+        addAndMakeVisible (sourceCombo.get());
+
+        // File source: input-file picker (only visible for the file source).
+        chooseFileButton.reset (new juce::TextButton ("Choose WAV..."));
+        chooseFileButton->onClick = [this] { chooseAudioFile(); };
+        chooseFileButton->setVisible (false);
+        addAndMakeVisible (chooseFileButton.get());
+
+        // Noise source: duration entry (only visible for the noise source).
+        noiseDurationLabel.reset (new juce::Label ("NoiseDuration", "Duration:"));
+        noiseDurationLabel->setFont (juce::FontOptions (12.0f));
+        noiseDurationLabel->setJustificationType (juce::Justification::centredRight);
+        noiseDurationLabel->setVisible (false);
+        addAndMakeVisible (noiseDurationLabel.get());
+
+        noiseDurationBox.reset (new juce::TextEditor ("NoiseDurationBox"));
+        noiseDurationBox->setText ("2.0");
+        noiseDurationBox->setVisible (false);
+        addAndMakeVisible (noiseDurationBox.get());
+
         pluginManager.reset (new PluginManager());
         threadPool = std::make_unique<juce::ThreadPool> (2);
 
@@ -188,18 +222,33 @@ public:
             pluginListBox->setBounds (leftPanel);
         }
 
-        // Right panel: measurement control row on top (~30 px), then the
-        // magnitude plot (~65%) and phase plot (~35%) below.
+        // Right panel: measurement controls on top (source/type row +
+        // source-parameter row), then the magnitude plot (~65%) and phase
+        // plot (~35%) below.
         auto plotArea = area;
-        auto measureRow = plotArea.removeFromTop (30).reduced (0, 2);
+        auto controls = plotArea.removeFromTop (92).reduced (0, 2);
         {
             const int gap = 6;
-            const int btnW = (measureRow.getWidth() - 2 * gap) / 3;
-            measureFreqButton->setBounds (measureRow.removeFromLeft (btnW));
-            measureRow.removeFromLeft (gap);
-            measureHarmonicButton->setBounds (measureRow.removeFromLeft (btnW));
-            measureRow.removeFromLeft (gap);
-            measureCompressionButton->setBounds (measureRow);
+
+            // Row 1: source combo (right) + the three measure buttons.
+            auto row1 = controls.removeFromTop (30);
+            const int comboW = 110;
+            sourceCombo->setBounds (row1.removeFromRight (comboW));
+            row1.removeFromRight (gap);
+            const int btnW = (row1.getWidth() - 2 * gap) / 3;
+            measureFreqButton->setBounds (row1.removeFromLeft (btnW));
+            row1.removeFromLeft (gap);
+            measureHarmonicButton->setBounds (row1.removeFromLeft (btnW));
+            row1.removeFromLeft (gap);
+            measureCompressionButton->setBounds (row1);
+
+            // Row 2: source-specific parameters (file chooser / noise duration).
+            controls.removeFromTop (4);
+            auto row2 = controls.removeFromTop (26);
+            chooseFileButton->setBounds (row2.removeFromLeft (120).reduced (0, 2));
+            row2.removeFromLeft (gap);
+            noiseDurationLabel->setBounds (row2.removeFromLeft (70).reduced (0, 2));
+            noiseDurationBox->setBounds (row2.removeFromLeft (56).reduced (0, 2));
         }
 
         auto phaseArea = plotArea.removeFromBottom (juce::roundToInt (plotArea.getHeight() * 0.35f));
@@ -315,17 +364,26 @@ public:
             measureHarmonicButton->setEnabled (true);
             measureCompressionButton->setEnabled (true);
 
-            switch (measurementResult.type)
+            // Non-signal sources are captured raw — show the capture summary
+            // instead of analysis plots (analysis is phase 4).
+            if (measurementResult.source == juce::String (Protocol::Source::signal))
             {
-                case MeasurementSession::Type::frequencyResponse:
-                    renderFrequencyResponse();
-                    break;
-                case MeasurementSession::Type::harmonicAnalysis:
-                    renderHarmonicAnalysis();
-                    break;
-                case MeasurementSession::Type::compressionCurve:
-                    renderCompressionCurve();
-                    break;
+                switch (measurementResult.type)
+                {
+                    case MeasurementSession::Type::frequencyResponse:
+                        renderFrequencyResponse();
+                        break;
+                    case MeasurementSession::Type::harmonicAnalysis:
+                        renderHarmonicAnalysis();
+                        break;
+                    case MeasurementSession::Type::compressionCurve:
+                        renderCompressionCurve();
+                        break;
+                }
+            }
+            else
+            {
+                renderRawCapture();
             }
         }
     }
@@ -664,15 +722,37 @@ private:
         if (measurementInProgress)
             return;
 
+        const auto sourceStr = selectedSourceString();
+
+        // Source-specific prerequisites.
+        if (sourceStr == juce::String (Protocol::Source::file)
+            && ! selectedFile.existsAsFile())
+        {
+            statusLabel->setText ("Choose an audio file first", juce::dontSendNotification);
+            return;
+        }
+
         measurementInProgress = true;
         measureFreqButton->setEnabled (false);
         measureHarmonicButton->setEnabled (false);
         measureCompressionButton->setEnabled (false);
         statusLabel->setText ("Measuring...", juce::dontSendNotification);
 
+        // Build the measure command with the source field + source params.
+        juce::String json = R"({"cmd":"measure","type":")" + type
+                          + R"(","source":")" + sourceStr + R"(")";
+        if (sourceStr == juce::String (Protocol::Source::file))
+            json += R"(,"path":)" + juce::JSON::toString (selectedFile.getFullPathName());
+        else if (sourceStr == juce::String (Protocol::Source::noise))
+        {
+            const double duration = noiseDurationBox->getText().getDoubleValue();
+            if (duration > 0.0)
+                json += R"(,"duration":)" + juce::String (duration);
+        }
+        json += "}";
+
         // Synchronous on the message thread (no IPC involved from the GUI).
-        auto response = commandParser->handleCommand (
-            R"({"cmd":"measure","type":")" + type + R"("})");
+        auto response = commandParser->handleCommand (json);
 
         // Surface errors (e.g. "measurement failed").  Success is reported by
         // handleAsyncUpdate once the result has been rendered to the plots.
@@ -691,6 +771,88 @@ private:
                     juce::dontSendNotification);
             }
         }
+    }
+
+    //==============================================================================
+    // Input-source helpers.
+
+    MeasurementSession::Source selectedSource() const
+    {
+        switch (sourceCombo->getSelectedId())
+        {
+            case 2: return MeasurementSession::Source::file;
+            case 3: return MeasurementSession::Source::noise;
+            case 4: return MeasurementSession::Source::dynamic;
+            default: return MeasurementSession::Source::signal;
+        }
+    }
+
+    juce::String selectedSourceString() const
+    {
+        switch (selectedSource())
+        {
+            case MeasurementSession::Source::file:    return juce::String (Protocol::Source::file);
+            case MeasurementSession::Source::noise:   return juce::String (Protocol::Source::noise);
+            case MeasurementSession::Source::dynamic: return juce::String (Protocol::Source::dynamic);
+            default: return juce::String (Protocol::Source::signal);
+        }
+    }
+
+    void updateSourceControls()
+    {
+        const bool isFile  = selectedSource() == MeasurementSession::Source::file;
+        const bool isNoise = selectedSource() == MeasurementSession::Source::noise;
+        chooseFileButton->setVisible (isFile);
+        noiseDurationLabel->setVisible (isNoise);
+        noiseDurationBox->setVisible (isNoise);
+    }
+
+    /** Drop the previous measurement result when the source changes, so the
+     *  plots never mix stale results from a different input source. */
+    void clearMeasurementDisplay()
+    {
+        hasMeasurement = false;
+        measurementResult = MeasurementResults{};
+        magPlot->clear();
+        magPlot->repaint();
+        phasePlot->clear();
+        phasePlot->repaint();
+    }
+
+    void chooseAudioFile()
+    {
+        // Kept alive as a member: the native dialog runs async on the message
+        // thread and the chooser must outlive this call.
+        fileChooser = std::make_unique<juce::FileChooser> (
+            "Select audio file",
+            juce::File::getCurrentWorkingDirectory(),
+            "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg", true);
+        fileChooser->launchAsync (juce::FileBrowserComponent::openMode
+                                  | juce::FileBrowserComponent::canSelectFiles,
+            [this] (const juce::FileChooser& fc)
+            {
+                auto f = fc.getResult();
+                if (f.existsAsFile())
+                {
+                    selectedFile = f;
+                    statusLabel->setText ("File: " + f.getFileName(),
+                                          juce::dontSendNotification);
+                }
+            });
+    }
+
+    /** Raw capture (non-signal source): clear both plots and show the
+     *  capture summary in the status bar (analysis is phase 4). */
+    void renderRawCapture() const
+    {
+        magPlot->clear();
+        magPlot->repaint();
+        phasePlot->clear();
+        phasePlot->repaint();
+
+        statusLabel->setText ("Raw capture: " + juce::String (measurementResult.rawSamples)
+            + " samples @ " + juce::String (measurementResult.rawSampleRate, 0) + " Hz",
+            juce::dontSendNotification);
     }
 
     //==============================================================================
@@ -797,6 +959,14 @@ private:
     std::unique_ptr<juce::TextButton> measureFreqButton;
     std::unique_ptr<juce::TextButton> measureHarmonicButton;
     std::unique_ptr<juce::TextButton> measureCompressionButton;
+
+    // Input source selector + source-specific controls
+    std::unique_ptr<juce::ComboBox> sourceCombo;
+    std::unique_ptr<juce::TextButton> chooseFileButton;
+    std::unique_ptr<juce::Label> noiseDurationLabel;
+    std::unique_ptr<juce::TextEditor> noiseDurationBox;
+    std::unique_ptr<juce::FileChooser> fileChooser;  // kept alive during async launch
+    juce::File selectedFile;
     bool pluginLoaded = false;
 
     // Re-entry guard: a measurement runs synchronously on the message thread

@@ -47,6 +47,18 @@ namespace Protocol
     }
 
     //==============================================================================
+    /** Input signal sources. The source determines which signal is generated;
+     *  the measurement type remains an analysis field. Non-signal sources are
+     *  captured raw (no analysis — that is phase 4). */
+    namespace Source
+    {
+        constexpr auto signal  = "signal";
+        constexpr auto file    = "file";
+        constexpr auto noise   = "noise";
+        constexpr auto dynamic = "dynamic";
+    }
+
+    //==============================================================================
     /** Helper to create a response JSON string. */
     inline juce::String makeResponse (bool ok, const juce::String& data = {})
     {

@@ -22,7 +22,10 @@
 #include "../source/analysis/Export.h"
 #include "../source/host/PluginManager.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <functional>
 
 //==============================================================================
 // Helpers
@@ -494,4 +497,366 @@ TEST_CASE ("CommandParser: stop is safe when session is null", "[commandparser][
     CommandParser parser;
     auto response = parser.handleCommand (R"({"cmd":"stop"})");
     REQUIRE (response.contains ("\"ok\":true"));
+}
+
+//==============================================================================
+// 8. Measure — input source axis (signal | file | noise | dynamic)
+//
+// Non-signal sources skip analysis (that is phase 4) and export a
+// raw_capture JSON carrying the source metadata.
+//==============================================================================
+
+/** Writes a test .wav into the temp directory; 24-bit PCM. Mirrors the
+ *  helper in FilePlaybackTests. */
+static juce::File writeSourceTestWav (double sampleRate, int numChannels, int64_t numSamples,
+                                      const std::function<float (int ch, int64_t sample)>& sampleFn)
+{
+    const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                          .getChildFile ("commandparser_source_" + juce::Uuid().toString() + ".wav");
+
+    auto* stream = new juce::FileOutputStream (file);
+    if (stream->failedToOpen())
+    {
+        delete stream;
+        return {};
+    }
+
+    juce::WavAudioFormat wavFormat;
+    auto writerOptions = juce::AudioFormatWriterOptions{}
+                             .withSampleRate (sampleRate)
+                             .withNumChannels (numChannels)
+                             .withBitsPerSample (24);
+
+    std::unique_ptr<juce::OutputStream> streamOwner (stream);
+    std::unique_ptr<juce::AudioFormatWriter> writer (
+        wavFormat.createWriterFor (streamOwner, writerOptions));
+
+    if (writer == nullptr)
+        return {};
+
+    constexpr int blockSize = 1024;
+    juce::AudioBuffer<float> block (numChannels, blockSize);
+
+    int64_t written = 0;
+    while (written < numSamples)
+    {
+        const int n = static_cast<int> (std::min<int64_t> (blockSize, numSamples - written));
+        block.clear();
+
+        for (int ch = 0; ch < numChannels; ++ch)
+            for (int s = 0; s < n; ++s)
+                block.setSample (ch, s, sampleFn (ch, written + s));
+
+        writer->writeFromAudioSampleBuffer (block, 0, n);
+        written += n;
+    }
+
+    writer.reset();  // finalises the wav header
+    return file;
+}
+
+TEST_CASE ("CommandParser: file source captures raw audio and exports raw_capture JSON",
+           "[commandparser][source-file]")
+{
+    ensureMessageManager();
+
+    // 1 s stereo 48 kHz wav (tone per channel).
+    const auto wavFile = writeSourceTestWav (48000.0, 2, 48000,
+        [] (int ch, int64_t s)
+        {
+            const double t = static_cast<double> (s) / 48000.0;
+            const double freq = (ch == 0) ? 440.0 : 880.0;
+            return static_cast<float> (0.5 * std::sin (2.0 * juce::MathConstants<double>::pi * freq * t));
+        });
+    REQUIRE (wavFile.existsAsFile());
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    std::atomic<bool> callbackFired { false };
+    MeasurementResults capturedResult;
+    parser.setMeasurementCompleteCallback ([&] (const MeasurementResults& r) {
+        callbackFired.store (true);
+        capturedResult = r;
+    });
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_raw_file.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+
+    // For the file source "path" names the INPUT audio file; the export path
+    // is carried by the disambiguated "export_path" field.
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","source":"file","path":)")
+        + juce::JSON::toString (wavFile.getFullPathName())
+        + juce::String (R"(,"export_path":)") + juce::JSON::toString (exportPath)
+        + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    // 1. Response: success, 1 s @ 48 kHz -> 48000 samples.
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"samples\":48000"));
+    REQUIRE (response.contains ("\"export_path\":"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    // 2. Callback fired with raw-capture metadata (no analysis payload).
+    REQUIRE (callbackFired.load());
+    REQUIRE (capturedResult.source == "file");
+    REQUIRE (capturedResult.rawSamples == 48000);
+    REQUIRE (capturedResult.rawSampleRate == Catch::Approx (48000.0));
+
+    // 3. Export: raw_capture JSON with source metadata.
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    auto* exportObj = exportedJson.getDynamicObject();
+    REQUIRE (exportObj != nullptr);
+    REQUIRE (exportObj->getProperty ("type").toString() == "raw_capture");
+    REQUIRE (static_cast<int64_t> (exportedJson["samples"]) == 48000);
+    REQUIRE (exportedJson["sample_rate"].equals (48000.0));
+    REQUIRE (exportedJson["block_size"].equals (256));
+    REQUIRE (exportedJson["source"]["type"].toString() == "file");
+    REQUIRE (exportedJson["source"]["file_path"].toString() == wavFile.getFullPathName());
+    REQUIRE (exportedJson["source"]["sample_rate"].equals (48000.0));
+    REQUIRE (static_cast<double> (exportedJson["source"]["duration_sec"]) == Catch::Approx (1.0));
+
+    exportFile.deleteFile();
+    wavFile.deleteFile();
+}
+
+TEST_CASE ("CommandParser: noise source captures deterministic noise and exports raw_capture JSON",
+           "[commandparser][source-noise]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_raw_noise.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+
+    // 2 s @ 48 kHz -> 96000 samples; deterministic via seed 42.
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","source":"noise","duration":2,"seed":42,"path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"samples\":96000"));
+    REQUIRE (response.contains ("\"rate\":48000"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    REQUIRE (exportedJson["type"].toString() == "raw_capture");
+    REQUIRE (exportedJson["source"]["type"].toString() == "noise");
+    REQUIRE (exportedJson["source"]["seed"].equals (42));
+    REQUIRE (exportedJson["source"]["noise_type"].toString() == "white");
+    REQUIRE (static_cast<double> (exportedJson["source"]["duration_sec"]) == Catch::Approx (2.0));
+
+    exportFile.deleteFile();
+}
+
+TEST_CASE ("CommandParser: dynamic source wraps carrier in envelope and exports raw_capture JSON",
+           "[commandparser][source-dynamic]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_raw_dynamic.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+
+    // Enveloped 2 s sweep -> 96000 samples.
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","source":"dynamic","path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"samples\":96000"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    REQUIRE (exportedJson["type"].toString() == "raw_capture");
+    REQUIRE (exportedJson["source"]["type"].toString() == "dynamic");
+
+    exportFile.deleteFile();
+}
+
+TEST_CASE ("CommandParser: measure without source defaults to signal and analyses normally",
+           "[commandparser][source-default]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    std::atomic<bool> callbackFired { false };
+    MeasurementResults capturedResult;
+    parser.setMeasurementCompleteCallback ([&] (const MeasurementResults& r) {
+        callbackFired.store (true);
+        capturedResult = r;
+    });
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_default_signal.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+
+    // No "source" field -> identical to the pre-existing signal behaviour.
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","type":"frequency_response","path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"samples\":"));
+    REQUIRE (response.contains ("\"export_path\":"));
+    REQUIRE (callbackFired.load());
+    REQUIRE (capturedResult.type == MeasurementSession::Type::frequencyResponse);
+    REQUIRE (capturedResult.source == "signal");
+    REQUIRE_FALSE (capturedResult.freq.raw.empty());
+    REQUIRE (capturedResult.freq.raw[0].frequency > 0.0);
+
+    // The export carries the signal source metadata block.
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    REQUIRE (exportedJson["type"].toString() == "frequency_response");
+    REQUIRE (exportedJson["source"]["type"].toString() == "signal");
+
+    exportFile.deleteFile();
+}
+
+TEST_CASE ("CommandParser: unknown source returns error", "[commandparser][source-invalid]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    auto response = parser.handleCommand (
+        R"({"cmd":"measure","type":"frequency_response","source":"bogus"})");
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("\"error\""));
+}
+
+TEST_CASE ("CommandParser: file source without path returns error", "[commandparser][source-file-missing]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    auto response = parser.handleCommand (R"({"cmd":"measure","source":"file"})");
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("\"error\""));
+}
+
+TEST_CASE ("CommandParser: file source with nonexistent path returns error without crashing",
+           "[commandparser][source-file-missing]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    auto response = parser.handleCommand (
+        R"({"cmd":"measure","source":"file","path":"Z:\nonexistent\missing.wav"})");
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("\"error\""));
 }

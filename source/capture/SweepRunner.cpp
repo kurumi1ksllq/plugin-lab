@@ -82,8 +82,11 @@ bool SweepRunner::run()
         // Process through plugin
         plugin->processBlock (wetBlock, emptyMidi);
 
-        // Record both
-        result.append (dryBlock, wetBlock);
+        // Record both. Only the actually-generated samples are appended: the
+        // final block is often partial, and the plugin's full-block output
+        // beyond numToGenerate corresponds to silence-padded input that must
+        // not appear in the measurement.
+        result.append (dryBlock, wetBlock, numToGenerate);
 
         samplesGenerated += numToGenerate;
 

@@ -11,6 +11,10 @@
  * Aggregated measurement outcome passed to the UI after analysis + export.
  * Exactly one Result field is populated depending on type; the others stay
  * default-constructed (empty).
+ *
+ * For non-signal input sources (file/noise/dynamic) no analysis runs — the
+ * result only carries the raw-capture metadata (source / rawSamples /
+ * rawSampleRate); analysis of raw captures is phase 4.
  */
 struct MeasurementResults
 {
@@ -18,6 +22,11 @@ struct MeasurementResults
     FreqResponse::Result freq;
     HarmonicAnalysis::Result harmonic;
     CompressionCurve::Result compression;
+
+    /** Input source that produced this result (Protocol::Source value). */
+    juce::String source;
+    int64_t rawSamples = 0;
+    double rawSampleRate = 0.0;
 };
 
 /**
