@@ -29,6 +29,15 @@ void MeasurementSession::setNoiseConfig (NoiseGenerator::Type t, double duration
     noiseSeed = seed;
 }
 
+void MeasurementSession::setDynamicADSR (double attackSec, double decaySec,
+                                         double sustain, double releaseSec)
+{
+    dynamicADSR[0] = attackSec;
+    dynamicADSR[1] = decaySec;
+    dynamicADSR[2] = sustain;
+    dynamicADSR[3] = releaseSec;
+}
+
 void MeasurementSession::captureParameterSnapshot()
 {
     if (plugin == nullptr)
@@ -140,15 +149,20 @@ bool MeasurementSession::run()
 
         case Source::dynamic:
         {
-            // 2 s sine sweep carrier shaped by an ADSR envelope.
+            // 2 s sine sweep (start frequency configurable) shaped by the
+            // (configurable) ADSR envelope. The carrier amplitude, envelope
+            // speed and edge times drive the dynamic level used by the
+            // compression-family sweep (T4.3); the defaults reproduce the
+            // original dynamic-source signal exactly.
             auto sweep = std::make_unique<SineSweep>();
-            sweep->setFrequencyRange (20.0, 20000.0);
+            sweep->setFrequencyRange (dynamicCarrierStartHz, 20000.0);
             sweep->setDuration (2.0);
-            sweep->setAmplitude (0.5);
+            sweep->setAmplitude (dynamicAmplitude);
 
             auto env = std::make_unique<EnvelopeSignal> (std::move (sweep));
             env->setEnvelope (EnvelopeSignal::Envelope::adsr);
-            env->setADSR (0.02, 0.1, 0.8, 0.2);
+            env->setADSR (dynamicADSR[0], dynamicADSR[1], dynamicADSR[2], dynamicADSR[3]);
+            env->setSpeed (dynamicSpeed);
             gen = std::move (env);
             break;
         }

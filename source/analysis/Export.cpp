@@ -2,7 +2,6 @@
 
 namespace Export
 {
-
 static juce::String fmtDouble (double v, int precision = 2)
 {
     return juce::String (v, precision);
@@ -212,6 +211,44 @@ static void appendCompressionBody (juce::String& json, const CompressionCurve::R
     json += "\n";
 }
 
+/** Serialize the gain-reduction timeline body ("gr": sample_rate, num_points
+ *  and the timeline point array). If trailingComma is set, the emitted block
+ *  ends with ",\n" instead of "\n". */
+static void appendGRBody (juce::String& json, const GainReduction::Result& result,
+                          const juce::String& indent, bool trailingComma)
+{
+    json += indent + "\"gr\": {\n";
+    json += indent + "  \"sample_rate\": " + fmtDouble (result.sampleRate, 1) + ",\n";
+    json += indent + "  \"num_points\": " + juce::String (result.numPoints) + ",\n";
+    json += indent + "  \"timeline\": [\n";
+
+    for (size_t i = 0; i < result.timeline.size(); ++i)
+    {
+        json += indent + "    {\"t\": " + fmtDouble (result.timeline[i].timeSec, 4)
+                + ", \"gr_db\": " + fmtDouble (result.timeline[i].grDB) + "}";
+        if (i < result.timeline.size() - 1) json += ",";
+        json += "\n";
+    }
+
+    json += indent + "  ]\n";
+    json += indent + "}";
+    if (trailingComma) json += ",";
+    json += "\n";
+}
+
+/** Serialize the time-constant body ("tau": attack_sec, release_sec). If
+ *  trailingComma is set, the emitted block ends with ",\n" instead of "\n". */
+static void appendTauBody (juce::String& json, const TimeConstants::Result& result,
+                           const juce::String& indent, bool trailingComma)
+{
+    json += indent + "\"tau\": {\n";
+    json += indent + "  \"attack_sec\": " + fmtDouble (result.tauAttackSec, 6) + ",\n";
+    json += indent + "  \"release_sec\": " + fmtDouble (result.tauReleaseSec, 6) + "\n";
+    json += indent + "}";
+    if (trailingComma) json += ",";
+    json += "\n";
+}
+
 juce::String compressionCurveToJSON (const CompressionCurve::Result& result,
                                       const Export::Context& context)
 {
@@ -220,6 +257,37 @@ juce::String compressionCurveToJSON (const CompressionCurve::Result& result,
     json += "  \"type\": \"compression_curve\",\n";
     appendContextFields (json, context, "  ");
     appendCompressionBody (json, result, "  ", false);
+    json += "}\n";
+    return json;
+}
+
+juce::String compressionFamilyToJSON (const CompressionFamily::FamilyResult& result,
+                                      const Export::Context& context)
+{
+    juce::String json;
+    json += "{\n";
+    json += "  \"type\": \"compression_family\",\n";
+    json += "  \"context\": {\n";
+    appendContextFields (json, context, "    ");
+    json = json.dropLastCharacters (2);  // remove trailing ",\n" after source
+    json += "\n";
+    json += "  },\n";
+
+    json += "  \"family\": [\n";
+    for (size_t i = 0; i < result.entries.size(); ++i)
+    {
+        const auto& entry = result.entries[i];
+        json += "    {\n";
+        json += "      \"input_level_db\": " + fmtDouble (entry.inputLevelDB) + ",\n";
+        json += "      \"speed\": " + fmtDouble (entry.speed) + ",\n";
+        appendCompressionBody (json, entry.curve, "      ", true);
+        appendGRBody (json, entry.gr, "      ", true);
+        appendTauBody (json, entry.tau, "      ", false);
+        json += "    }";
+        if (i < result.entries.size() - 1) json += ",";
+        json += "\n";
+    }
+    json += "  ]\n";
     json += "}\n";
     return json;
 }

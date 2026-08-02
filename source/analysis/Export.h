@@ -4,6 +4,7 @@
 #include "FreqResponse.h"
 #include "HarmonicAnalysis.h"
 #include "CompressionCurve.h"
+#include "CompressionFamily.h"
 #include "../scan/ScanEngine.h"
 #include "../capture/MeasurementSession.h"
 
@@ -76,6 +77,12 @@ namespace Export
     juce::String scanToJSON (const ScanEngine::ScanResult& scan,
                              MeasurementSession::Type type,
                              const Context& context);
+
+    /** Export a compression-response family (level × speed grid) to JSON:
+     *  one family entry per cell with the static curve, the GR timeline and
+     *  the attack/release time constants. */
+    juce::String compressionFamilyToJSON (const CompressionFamily::FamilyResult& result,
+                                          const Context& context);
 
     /** Write a JSON string to a file. Returns true on success. */
     bool writeToFile (const juce::String& json,

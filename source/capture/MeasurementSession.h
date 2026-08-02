@@ -64,6 +64,26 @@ public:
     void setDynamicCarrierFreq (double hz)  { dynamicCarrierFreq = hz; }
     double getDynamicCarrierFreq() const    { return dynamicCarrierFreq; }
 
+    // --- dynamic source configuration (T4.3: CompressionFamily) ---
+    // All defaults reproduce the original dynamic-source signal exactly, so
+    // existing dynamic commands are unaffected until a setter is called.
+    /** Carrier amplitude (linear 0..1). Default 0.5. */
+    void setDynamicAmplitude (double amp)   { dynamicAmplitude = amp; }
+    double getDynamicAmplitude() const      { return dynamicAmplitude; }
+
+    /** Envelope speed multiplier (EnvelopeSignal::setSpeed). Default 1.0. */
+    void setDynamicSpeed (double speed)     { dynamicSpeed = speed; }
+    double getDynamicSpeed() const          { return dynamicSpeed; }
+
+    /** ADSR envelope in seconds (attack/decay/sustain/release).
+     *  Default (0.02, 0.1, 0.8, 0.2). */
+    void setDynamicADSR (double attackSec, double decaySec,
+                         double sustain, double releaseSec);
+    /** Sweep start frequency (Hz) of the dynamic carrier. Default 20.0
+     *  (the original 20 Hz..20 kHz sweep). */
+    void setDynamicCarrierStartHz (double hz) { dynamicCarrierStartHz = hz; }
+    double getDynamicCarrierStartHz() const   { return dynamicCarrierStartHz; }
+
     /** Set a parameter snapshot — record which values are used. */
     void captureParameterSnapshot();
 
@@ -130,6 +150,12 @@ private:
     double noiseDuration = 2.0;
     uint32_t noiseSeed = 0x2E42A5;
     double dynamicCarrierFreq = 1000.0;
+
+    // T4.3: dynamic-source configuration (defaults = original signal).
+    double dynamicAmplitude = 0.5;
+    double dynamicSpeed = 1.0;
+    double dynamicCarrierStartHz = 20.0;
+    double dynamicADSR[4] = { 0.02, 0.1, 0.8, 0.2 };
 
     // Source metadata populated by run() (file playback only).
     juce::String sourceFilePath;
