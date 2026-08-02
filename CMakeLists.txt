@@ -35,6 +35,9 @@ target_sources(PluginLab PRIVATE
     source/signal/MultiTone.cpp
     source/signal/ToneBurst.cpp
     source/signal/Impulse.cpp
+    source/signal/FilePlayback.cpp
+    source/signal/NoiseGenerator.cpp
+    source/signal/EnvelopeSignal.cpp
     source/capture/AudioBuffer.cpp
     source/capture/SweepRunner.cpp
     source/capture/MeasurementSession.cpp
@@ -57,6 +60,7 @@ target_link_libraries(PluginLab PRIVATE
     juce::juce_audio_basics
     juce::juce_audio_processors
     juce::juce_audio_utils
+    juce::juce_audio_formats
     juce::juce_gui_basics
     juce::juce_dsp
     juce::juce_recommended_config_flags
