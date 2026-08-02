@@ -6,7 +6,8 @@ PluginEditorWindow::PluginEditorWindow (
     std::unique_ptr<juce::AudioPluginInstance> instance,
     juce::AudioProcessorEditor* editor,
     const juce::String& pluginName,
-    std::function<void()> onWindowClosedCb)
+    std::function<void()> onWindowClosedCb,
+    juce::Rectangle<int> preferredArea)
     : DocumentWindow (pluginName,
                       juce::Desktop::getInstance().getDefaultLookAndFeel()
                           .findColour (juce::ResizableWindow::backgroundColourId),
@@ -31,7 +32,31 @@ PluginEditorWindow::PluginEditorWindow (
     pluginInstance = std::move (instance);
     this->onWindowClosed = std::move (onWindowClosedCb);
 
-    centreWithSize (getWidth(), getHeight());
+    // Place the editor window beside the main window (preferredArea) instead
+    // of centring it, so it never covers the main window's right panel.
+    // Preferred spot: right of the main window; if it would leave the screen,
+    // below it; only then fall back to centring.
+    if (preferredArea.isEmpty())
+    {
+        centreWithSize (getWidth(), getHeight());
+    }
+    else if (auto* display = juce::Desktop::getInstance().getDisplays()
+                                 .getDisplayForRect (preferredArea))
+    {
+        auto screen = display->userBounds;
+        int x = preferredArea.getRight() + 8;
+        int y = preferredArea.getY() + 8;
+        if (x + getWidth() > screen.getRight())
+        {
+            x = preferredArea.getX();
+            y = preferredArea.getBottom() + 8;
+        }
+        setBounds (juce::Rectangle<int> (x, y, getWidth(), getHeight()));
+    }
+    else
+    {
+        centreWithSize (getWidth(), getHeight());
+    }
     setVisible (true);
 
     CRASH_LOG_INFO ("Editor window created",

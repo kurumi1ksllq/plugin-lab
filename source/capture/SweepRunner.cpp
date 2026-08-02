@@ -87,6 +87,15 @@ bool SweepRunner::run()
 
         samplesGenerated += numToGenerate;
 
+        // The measurement runs on the message thread (Pro-Q 4 thread-affinity
+        // requirement); yield the message loop 2 ms per block so the UI stays
+        // responsive (dragging, repaints, button clicks) during the sweep.
+        // Never triggered on other threads (e.g. unit tests on std::thread).
+        if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+        {
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (2);
+        }
+
         // Report progress
         if (progressCallback && (samplesGenerated % reportInterval == 0))
         {

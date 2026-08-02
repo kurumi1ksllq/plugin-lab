@@ -23,11 +23,15 @@ public:
      *  @param editor         Plugin editor (ownership transferred to setContentOwned)
      *  @param pluginName     Window title
      *  @param onWindowClosed Callback invoked when the close button is pressed
+     *  @param preferredArea  Screen rectangle to place the window next to
+     *                        (typically the main window's bounds).  When empty,
+     *                        falls back to centring the window on screen.
      */
     PluginEditorWindow (std::unique_ptr<juce::AudioPluginInstance> instance,
                         juce::AudioProcessorEditor* editor,
                         const juce::String& pluginName,
-                        std::function<void()> onWindowClosed);
+                        std::function<void()> onWindowClosed,
+                        juce::Rectangle<int> preferredArea = {});
 
     /** Destructor.
      *

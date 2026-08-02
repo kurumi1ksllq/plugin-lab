@@ -308,6 +308,13 @@ public:
         {
             hasMeasurement = false;
 
+            // Measurement finished: re-arm the re-entry guard and re-enable
+            // the measure buttons (empty-result path below also returns here).
+            measurementInProgress = false;
+            measureFreqButton->setEnabled (true);
+            measureHarmonicButton->setEnabled (true);
+            measureCompressionButton->setEnabled (true);
+
             // Empty-result guard: leave the plots untouched.
             if (measurementResult.raw.empty())
             {
@@ -542,7 +549,17 @@ private:
             return;
         }
 
-        statusLabel->setText ("Measuring...", juce::dontSendNotification);
+        // Re-entry guard: the sweep runs synchronously on the message thread
+        // (~5 s).  With the message loop yielding during the sweep (SweepRunner)
+        // the button stays clickable, so ignore a second click while running.
+        if (measurementInProgress)
+            return;
+
+        measurementInProgress = true;
+        measureFreqButton->setEnabled (false);
+        measureHarmonicButton->setEnabled (false);
+        measureCompressionButton->setEnabled (false);
+        statusLabel->setText ("Measuring... (~5s)", juce::dontSendNotification);
 
         // Synchronous on the message thread (no IPC involved from the GUI).
         auto response = commandParser->handleCommand (
@@ -550,10 +567,16 @@ private:
 
         // Surface errors (e.g. "measurement failed").  Success is reported by
         // handleAsyncUpdate once the result has been rendered to the plots.
+        // On failure the completion callback never fires, so re-arm the
+        // guard here (otherwise the measure buttons stay locked forever).
         if (auto* obj = juce::JSON::parse (response).getDynamicObject())
         {
             if (! (bool) obj->getProperty (Protocol::Status::ok))
             {
+                measurementInProgress = false;
+                measureFreqButton->setEnabled (true);
+                measureHarmonicButton->setEnabled (true);
+                measureCompressionButton->setEnabled (true);
                 statusLabel->setText ("Measure failed: "
                     + obj->getProperty (Protocol::Status::error).toString(),
                     juce::dontSendNotification);
@@ -596,9 +619,13 @@ private:
 
         if (editor)
         {
+            // Place the editor window next to the main window (right of it,
+            // or below when the screen is too narrow) so it never covers the
+            // right panel where the measurement plots live.
             editorWindow = std::make_unique<PluginEditorWindow> (
                 std::move (instance), editor, name,
-                [this] { onPluginWindowClosed(); });
+                [this] { onPluginWindowClosed(); },
+                getScreenBounds());
 
             // Wire the loaded plugin into the IPC pipeline
             auto* rawInstance = editorWindow->getPluginInstance();
@@ -662,6 +689,10 @@ private:
     std::unique_ptr<juce::TextButton> measureHarmonicButton;
     std::unique_ptr<juce::TextButton> measureCompressionButton;
     bool pluginLoaded = false;
+
+    // Re-entry guard: a measurement runs synchronously on the message thread
+    // (~5 s), so a second click must be ignored while one is in progress.
+    bool measurementInProgress = false;
 
     // Right-panel frequency-response plots
     std::unique_ptr<PlotWidget> magPlot;

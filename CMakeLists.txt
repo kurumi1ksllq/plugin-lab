@@ -73,6 +73,9 @@ if(WIN32)
     target_compile_definitions(PluginLab PRIVATE
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_PLUGINHOST_VST3=1
+        # SweepRunner yields the message loop during measurement via
+        # MessageManager::runDispatchLoopUntil (only declared when this is 1).
+        JUCE_MODAL_LOOPS_PERMITTED=1
     )
 endif()
 
