@@ -500,8 +500,12 @@ public:
     {
         try
         {
-            pluginListBox->updateContent();
-            pluginListBox->repaint();
+            // 节流（未响应修复）：addType 每插件触发一次 change；Debug 下每次
+            // updateContent+repaint 开销大，扫描期逐插件刷新会淹没消息线程
+            // （用户操作排队 → Windows 判"未响应"）。经 AsyncUpdater 合并
+            // （≤50ms 一次刷新），扫描期消息线程负担降一个数量级。
+            pluginListUpdatePending = true;
+            triggerAsyncUpdate();
         }
         catch (...)
         {
@@ -516,6 +520,22 @@ public:
      */
     void handleAsyncUpdate() override
     {
+        // Incremental list refresh (throttled via AsyncUpdater merge — see
+        // changeListenerCallback; processed before the scan-complete block so
+        // the list is fresh when a plugin-load selects a row).
+        if (pluginListUpdatePending)
+        {
+            pluginListUpdatePending = false;
+            try
+            {
+                pluginListBox->updateContent();
+            }
+            catch (...)
+            {
+                CRASH_LOG_ERR ("Plugin list update", "exception caught");
+            }
+        }
+
         // Process scan result — always first so the list is refreshed before a
         // plugin-load tries to select the right row.
         if (scanUpdatePending.exchange (false))
@@ -666,6 +686,7 @@ private:
     // gates), so a single slot per category is safe.
     std::atomic<bool> scanUpdatePending { false };
     std::atomic<bool> loadUpdatePending { false };
+    bool pluginListUpdatePending = false;   // 消息线程专用（增量列表刷新，AsyncUpdater 合并节流）
     std::atomic<int>  scannedCount { 0 };
     std::unique_ptr<juce::AudioPluginInstance> pendingInstance;
     juce::String pendingName;

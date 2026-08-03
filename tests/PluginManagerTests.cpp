@@ -458,6 +458,7 @@ TEST_CASE ("PluginManager: loadPlugin times out and blacklists the plugin",
     // Arrange: the override swallows the callback → creation "hangs"
     TempCacheDir tmp;
     PluginManager mgr;
+    mgr.setCacheFile (tmp.cacheFile());   // CRITICAL: saveCache on timeout must not touch the real %APPDATA% cache
     mgr.setLoadTimeoutMs (50);
     mgr.setAsyncCreateOverride ([] (const juce::PluginDescription&, double, int,
                                     PluginManager::PluginCreationCallback)
@@ -481,6 +482,7 @@ TEST_CASE ("PluginManager: loadPlugin timeout blacklists the bundle key for inne
     // bundle paths) actually hits.
     TempCacheDir tmp;
     PluginManager mgr;
+    mgr.setCacheFile (tmp.cacheFile());   // CRITICAL: saveCache on timeout must not touch the real cache
     mgr.setLoadTimeoutMs (50);
     mgr.setAsyncCreateOverride ([] (const juce::PluginDescription&, double, int,
                                     PluginManager::PluginCreationCallback) {});
@@ -501,6 +503,7 @@ TEST_CASE ("PluginManager: loadPlugin ignores late callbacks from a stale genera
     // is saved and only invoked after a second load bumped the generation.
     TempCacheDir tmp;
     PluginManager mgr;
+    mgr.setCacheFile (tmp.cacheFile());   // CRITICAL: handleScanHang saveCache must not touch the real cache
     mgr.setLoadTimeoutMs (50);
     PluginManager::PluginCreationCallback stale;
     mgr.setAsyncCreateOverride ([&] (const juce::PluginDescription&, double, int,
@@ -645,6 +648,7 @@ TEST_CASE ("PluginManager: scanAborted blocks further progress writes (verifier 
     // Arrange
     TempCacheDir tmp;
     PluginManager mgr;
+    mgr.setCacheFile (tmp.cacheFile());   // CRITICAL: handleScanHang saveCache must not touch the real cache
     mgr.beginScan();
     mgr.updateScanProgress (0.5f, "C:\\plugins\\Mid.vst3");
 
