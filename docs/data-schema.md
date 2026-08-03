@@ -176,6 +176,21 @@
 
 **用途**：非信号源的原始录音元数据（原始音频不随 JSON 导出）；记录"从哪段音频、以何配置录得"。
 
+### raw_capture 的伴随 WAV 镜像（CaptureBuffer 增量 flush）
+
+`CaptureBuffer`（`source/capture/AudioBuffer.*`）支持把 dry/wet 录音增量镜像到 24-bit PCM WAV：采集期间每 `intervalSec` 写盘一次，插件崩溃（进程被杀）最多丢末段音频。
+
+| 项         | 值                                                                                                                          |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------- |
+| 格式       | 单文件交织 24-bit PCM；声道数 = 2 × 插件声道；布局 `[dry ch0..N-1, wet ch0..N-1]`（立体声插件 → 4 声道：dry L/R + wet L/R） |
+| 头部       | 44 字节标准 RIFF，byteRate/blockAlign 按标准计算；每次 flush 边界回填尺寸 → 任意时刻文件有效可读                            |
+| flush 间隔 | `setFlushConfig(path, intervalSec)` 由调用方给定；空 path 禁用（默认关闭）                                                  |
+| 崩溃语义   | 已 flush 前缀在盘上且可读；末个间隔内的采样丢失（≤ intervalSec）；分析器仍以内存 dry/wet 为完整真值                         |
+| 分析输入   | **不是**分析输入——内存 `getDryBuffer`/`getWetBuffer` 是唯一分析真值；WAV 仅作崩溃恢复 + 事后试听                            |
+| 写盘实现   | 手写 RIFF 写入器（非 `juce::WavAudioFormatWriter`——其仅析构时 finalise 头部，崩溃后文件不可读）                             |
+
+**✅ 接线状态（2026-08-03）**：flush 机制已在 CaptureBuffer 落地（`tests/CaptureBufferTests.cpp` 单测），并**已接入 IPC**——measure/scan 命令在运行前调用 `session->getResult().setFlushConfig (wavPathFor (exportPath), kDefaultFlushIntervalSec)`，成功响应携带 `wav_path` 字段（导出 JSON 路径 `.json→.wav` 派生，默认 flush 间隔 5s）。scan 多轮复用同一会话 → 每轮首 append 覆盖 .wav（最后轮胜出）。
+
 ---
 
 ## 5. scan
