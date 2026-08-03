@@ -31,6 +31,7 @@ target_sources(unit_tests PRIVATE
     CommandParserStubs.cpp
     TestPlugin.h TestPluginTests.cpp TestCompressorPlugin.h TestCompressorPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp CaptureBufferTests.cpp FreqResponseTests.cpp ExportTests.cpp
     CommandParserTests.cpp PipeServerTests.cpp
+    PluginManagerTests.cpp
     FilePlaybackTests.cpp NoiseGeneratorTests.cpp EnvelopeSignalTests.cpp
     GainReductionTests.cpp ScanEngineTests.cpp
     TimeConstantsTests.cpp
