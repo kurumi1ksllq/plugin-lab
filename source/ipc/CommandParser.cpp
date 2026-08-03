@@ -7,6 +7,12 @@
 #include "../analysis/TimeConstants.h"
 #include "../analysis/CompressionFamily.h"
 
+// Crash-protection WAV mirror: every measure/scan command flushes the
+// captured dry/wet audio to a 24-bit .wav file (see CaptureBuffer::
+// setFlushConfig) so a plugin crash — which kills the process — still
+// leaves the audio recorded up to the last flush boundary.
+constexpr double kDefaultFlushIntervalSec = 5.0;
+
 // Maps the protocol source string to the session source enum. Returns false
 // when the value is not a known protocol source; callers respond with the
 // "unknown source" error.
@@ -94,6 +100,18 @@ static juce::String resolveExportPath (const juce::DynamicObject& obj, Measureme
                    .getChildFile (defaultFileName)
                    .getFullPathName();
     return path;
+}
+
+// Derives the crash-protection WAV path for a command's export path: a
+// trailing ".json" is swapped for ".wav" (e.g. "pluginlab_scan.json" →
+// "pluginlab_scan.wav"); a path without a ".json" suffix gets ".wav"
+// appended. The WAV mirrors the captured dry/wet audio (see CaptureBuffer::
+// setFlushConfig) so a plugin crash still yields audio.
+static juce::File wavPathFor (const juce::String& exportPath)
+{
+    if (exportPath.endsWith (".json"))
+        return juce::File (exportPath).withFileExtension (".wav");
+    return juce::File (exportPath + ".wav");
 }
 
 // Builds the export context for a measurement/scan: plugin identity and
@@ -314,6 +332,12 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                                            ? "pluginlab_freq_response.json"
                                            : "pluginlab_raw_capture.json");
 
+        // Crash protection: mirror the captured dry/wet audio to a WAV file
+        // next to the export JSON. Set before the run (safe on either thread —
+        // the sync and async dispatch paths both run after this point); a
+        // plugin crash then loses at most kDefaultFlushIntervalSec of audio.
+        session->getResult().setFlushConfig (wavPathFor (path), kDefaultFlushIntervalSec);
+
         if (statusCallback)
             juce::MessageManager::callAsync ([this] { statusCallback ("Measuring..."); });
 
@@ -448,7 +472,8 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
             juce::String d = R"("samples":)" + juce::String (result.getNumRecordedSamples())
                            + R"(,"rate":)"    + juce::String (result.getSampleRate())
-                           + R"(,"export_path":")" + path.quoted() + R"(")";
+                           + R"(,"export_path":")" + path.quoted() + R"(")"
+                           + R"(,"wav_path":")" + wavPathFor (path).getFullPathName().quoted() + R"(")";
             return Protocol::makeResponse (true, d);
         };
 
@@ -554,6 +579,12 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         // --- export path (default pluginlab_scan.json) ---
         auto path = resolveExportPath (*obj, source, "pluginlab_scan.json");
 
+        // Crash protection: same WAV mirror as the measure command. Set once
+        // here — the ScanEngine reuses this session for every round, so the
+        // config persists across rounds (each round's first append re-opens /
+        // truncates the .wav; acceptable for crash-protection purposes).
+        session->getResult().setFlushConfig (wavPathFor (path), kDefaultFlushIntervalSec);
+
         if (statusCallback)
             juce::MessageManager::callAsync ([this] { statusCallback ("Scanning..."); });
 
@@ -595,7 +626,8 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 scanCompleteCallback (scanResult);
 
             juce::String d = R"("runs":)" + juce::String (static_cast<int> (scanResult.family.size()))
-                           + R"(,"export_path":")" + path.quoted() + R"(")";
+                           + R"(,"export_path":")" + path.quoted() + R"(")"
+                           + R"(,"wav_path":")" + wavPathFor (path).getFullPathName().quoted() + R"(")";
             return Protocol::makeResponse (true, d);
         };
 
