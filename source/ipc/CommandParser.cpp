@@ -210,9 +210,19 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             auto p = params[i];
             auto n = p->getName (128);
             auto v = p->getValue();
+
+            // Stable parameter ID, resolved the same way the scan command
+            // does (see the "scan" case below): hosted parameters expose a
+            // stable ID that survives display-name changes; anything else
+            // gets an empty id.
+            juce::String paramId;
+            if (auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (p))
+                paramId = hosted->getParameterID();
+
             data += R"({"index":)" + juce::String (i)
                   + R"(,"name":")" + n.quoted()
-                  + R"(","value":)" + juce::String (v, 4) + R"(})";
+                  + R"(","value":)" + juce::String (v, 4)
+                  + R"(,"param_id":")" + paramId + R"("})";
             if (i < params.size() - 1) data += ",";
         }
         data += "]";
