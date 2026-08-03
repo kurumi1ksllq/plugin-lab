@@ -375,6 +375,46 @@ TEST_CASE ("CommandParser: loadPlugin returns error for unknown plugin", "[comma
     REQUIRE (response.contains ("\"error\""));
 }
 
+TEST_CASE ("CommandParser: loadPlugin matches name case-insensitively",
+           "[commandparser][loadPlugin-case-insensitive]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // Registered under "TestVST3" — the request addresses it in lowercase.
+    PluginManager pm;
+    juce::PluginDescription desc;
+    desc.name             = "TestVST3";
+    desc.pluginFormatName = "VST3";
+    desc.fileOrIdentifier = "TestVST3.vst3";
+    desc.uniqueId         = 0xABCD1234;
+    desc.numInputChannels  = 2;
+    desc.numOutputChannels = 2;
+    pm.getKnownPlugins().addType (desc);
+
+    CommandParser parser;
+    parser.setPluginManager (&pm);
+
+    std::atomic<bool> callbackFired { false };
+    juce::PluginDescription capturedDesc;
+    parser.setLoadPluginCallback ([&] (const juce::PluginDescription& d) {
+        callbackFired.store (true);
+        capturedDesc = d;
+    });
+
+    // ---- Act ----
+    auto response = parser.handleCommand (R"({"cmd":"loadPlugin","path":"testvst3"})");
+
+    // Flush MessageManager for the callAsync in loadPlugin
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (callbackFired.load());
+    REQUIRE (capturedDesc.name == "TestVST3");
+    REQUIRE (capturedDesc.fileOrIdentifier == "TestVST3.vst3");
+}
+
 TEST_CASE ("CommandParser: loadPlugin requires path parameter", "[commandparser][loadPlugin]")
 {
     PluginManager pm;
