@@ -465,6 +465,57 @@ TEST_CASE ("CommandParser: setParam returns error for unknown parameter", "[comm
     REQUIRE (response.contains ("\"error\""));
 }
 
+TEST_CASE ("CommandParser: setParam resolves by param_id with ambiguity lock",
+           "[commandparser][setParam-param-id]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // Four EQ-band-like parameters whose stable IDs differ from their display
+    // names; every name starts with "Band 1" so name-only resolution is
+    // ambiguous. Distinct starting values make "untouched" assertions exact.
+    TestPlugin plugin;
+    auto* pUsed = plugin.addTestParameter ("b1used", "Band 1 Used", 1.0f);
+    auto* pFreq = plugin.addTestParameter ("b1freq", "Band 1 Frequency", 0.5f);
+    auto* pGain = plugin.addTestParameter ("b1gain", "Band 1 Gain", 0.5f);
+    auto* pQ    = plugin.addTestParameter ("b1q", "Band 1 Q", 0.5f);
+
+    pUsed->setValue (0.1f);
+    pFreq->setValue (0.2f);
+    pGain->setValue (0.3f);
+    pQ->setValue (0.4f);
+
+    CommandParser parser;
+    parser.setPluginInstance (&plugin);
+
+    // ---- Act / Assert ----
+    // (i) param_id alone must select the Q parameter by stable ID, never the
+    //     gain parameter that an empty-name contains-match would hit.
+    auto resp1 = parser.handleCommand (R"({"cmd":"setParam","param_id":"b1q","value":0.5})");
+    REQUIRE (resp1.contains ("\"ok\":true"));
+    REQUIRE (pQ->getValue() == Catch::Approx (0.5f));
+    REQUIRE (pUsed->getValue() == Catch::Approx (0.1f));  // untouched
+
+    // (ii) param_id + ambiguous name: the stable ID wins. Must NOT hit
+    //      "Band 1 Gain" via name nor "Band 1 Used" via the contains fallback.
+    auto resp2 = parser.handleCommand (R"({"cmd":"setParam","param_id":"b1gain","name":"Band 1","value":0.9})");
+    REQUIRE (resp2.contains ("\"ok\":true"));
+    REQUIRE (pGain->getValue() == Catch::Approx (0.9f));
+    REQUIRE (pUsed->getValue() == Catch::Approx (0.1f));  // untouched
+    REQUIRE (pQ->getValue() == Catch::Approx (0.5f));     // untouched
+
+    // (iii) exact display name without param_id still resolves.
+    auto resp3 = parser.handleCommand (R"({"cmd":"setParam","name":"Band 1 Used","value":0.25})");
+    REQUIRE (resp3.contains ("\"ok\":true"));
+    REQUIRE (pUsed->getValue() == Catch::Approx (0.25f));
+
+    // (iv) ambiguous name without param_id keeps the legacy first-contains
+    //      behaviour ("Band 1 Used" is the first parameter containing "Band 1").
+    auto resp4 = parser.handleCommand (R"({"cmd":"setParam","name":"Band 1","value":0.15})");
+    REQUIRE (resp4.contains ("\"ok\":true"));
+    REQUIRE (pUsed->getValue() == Catch::Approx (0.15f));
+}
+
 //==============================================================================
 // 5. getParams — returns parameter list
 //==============================================================================
