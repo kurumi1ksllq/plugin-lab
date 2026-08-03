@@ -161,7 +161,10 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
         for (auto& d : types)
         {
-            if (d.fileOrIdentifier == path || d.name == path)
+            // fileOrIdentifier matches exactly (it is a canonical path/ID);
+            // the display name matches case-insensitively so callers can
+            // address a plugin by a loosely-cased name.
+            if (d.fileOrIdentifier == path || d.name.equalsIgnoreCase (path))
             {
                 if (loadPluginCallback)
                 {
