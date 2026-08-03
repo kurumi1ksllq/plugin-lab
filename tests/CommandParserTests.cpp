@@ -83,6 +83,7 @@ TEST_CASE ("CommandParser: measure performs frequency analysis, exports JSON, an
 
     // Clean up from previous runs
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // ---- Act ----
     // Build JSON manually with proper escaping of the path string
@@ -122,6 +123,7 @@ TEST_CASE ("CommandParser: measure performs frequency analysis, exports JSON, an
 
     // Cleanup
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
 
 //==============================================================================
@@ -162,6 +164,7 @@ TEST_CASE ("CommandParser: measure harmonic analysis exports JSON and fires call
 
     // Clean up from previous runs
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // ---- Act ----
     const juce::String jsonCmd =
@@ -202,6 +205,7 @@ TEST_CASE ("CommandParser: measure harmonic analysis exports JSON and fires call
 
     // Cleanup
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
 
 //==============================================================================
@@ -242,6 +246,7 @@ TEST_CASE ("CommandParser: measure compression curve exports JSON and fires call
 
     // Clean up from previous runs
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // ---- Act ----
     const juce::String jsonCmd =
@@ -292,6 +297,7 @@ TEST_CASE ("CommandParser: measure compression curve exports JSON and fires call
 
     // Cleanup
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
 
 //==============================================================================
@@ -709,6 +715,7 @@ TEST_CASE ("CommandParser: file source captures raw audio and exports raw_captur
             .getChildFile ("test_measure_raw_file.json")
             .getFullPathName();
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // For the file source "path" names the INPUT audio file; the export path
     // is carried by the disambiguated "export_path" field.
@@ -750,6 +757,7 @@ TEST_CASE ("CommandParser: file source captures raw audio and exports raw_captur
     REQUIRE (static_cast<double> (exportedJson["source"]["duration_sec"]) == Catch::Approx (1.0));
 
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
     wavFile.deleteFile();
 }
 
@@ -776,6 +784,7 @@ TEST_CASE ("CommandParser: noise source captures deterministic noise and exports
             .getChildFile ("test_measure_raw_noise.json")
             .getFullPathName();
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // 2 s @ 48 kHz -> 96000 samples; deterministic via seed 42.
     const juce::String jsonCmd =
@@ -801,6 +810,68 @@ TEST_CASE ("CommandParser: noise source captures deterministic noise and exports
     REQUIRE (static_cast<double> (exportedJson["source"]["duration_sec"]) == Catch::Approx (2.0));
 
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+}
+
+TEST_CASE ("CommandParser: measure with noise source flushes dry/wet capture to a WAV file",
+           "[commandparser][measure-flush-wav]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // Explicit export path inside the temp directory; the crash-protection
+    // WAV mirror is derived from it by swapping ".json" for ".wav".
+    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                   .getChildFile ("pluginlab_flush_measure_test");
+    tempDir.createDirectory();
+    const juce::File jsonPath = tempDir.getChildFile ("flush_measure_test.json");
+    const juce::File wavPath  = tempDir.getChildFile ("flush_measure_test.wav");
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+
+    // 2 s @ 48 kHz -> 96000 samples; short enough that no 5 s flush boundary
+    // is crossed mid-capture (the file is still created — SweepRunner's
+    // result.trim() finalises it).
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","source":"noise","duration":2,"seed":42,"path":)")
+        + juce::JSON::toString (jsonPath.getFullPathName()) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"samples\":96000"));
+    REQUIRE (response.contains ("\"wav_path\":"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    // The derived .wav must exist and be readable as a WAV: 2 plugin
+    // channels -> 4 interleaved channels (dry 2 + wet 2), 2 s @ 48 kHz.
+    REQUIRE (wavPath.existsAsFile());
+    juce::WavAudioFormat wavFormat;
+    std::unique_ptr<juce::AudioFormatReader> reader (
+        wavFormat.createReaderFor (new juce::FileInputStream (wavPath), true));
+    REQUIRE (reader != nullptr);
+    REQUIRE (reader->numChannels == 4);
+    REQUIRE (reader->sampleRate == Catch::Approx (48000.0));
+    REQUIRE (reader->lengthInSamples == 96000);
+
+    // Clean up
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+    tempDir.deleteRecursively();
 }
 
 TEST_CASE ("CommandParser: dynamic source wraps carrier in envelope and exports raw_capture JSON",
@@ -826,6 +897,7 @@ TEST_CASE ("CommandParser: dynamic source wraps carrier in envelope and exports 
             .getChildFile ("test_measure_raw_dynamic.json")
             .getFullPathName();
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // Enveloped 2 s sweep -> 96000 samples.
     const juce::String jsonCmd =
@@ -847,6 +919,7 @@ TEST_CASE ("CommandParser: dynamic source wraps carrier in envelope and exports 
     REQUIRE (exportedJson["source"]["type"].toString() == "dynamic");
 
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
 
 TEST_CASE ("CommandParser: measure without source defaults to signal and analyses normally",
@@ -880,6 +953,7 @@ TEST_CASE ("CommandParser: measure without source defaults to signal and analyse
             .getChildFile ("test_measure_default_signal.json")
             .getFullPathName();
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // No "source" field -> identical to the pre-existing signal behaviour.
     const juce::String jsonCmd =
@@ -907,6 +981,7 @@ TEST_CASE ("CommandParser: measure without source defaults to signal and analyse
     REQUIRE (exportedJson["source"]["type"].toString() == "signal");
 
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
 
 TEST_CASE ("CommandParser: unknown source returns error", "[commandparser][source-invalid]")
@@ -1016,6 +1091,7 @@ TEST_CASE ("CommandParser: scan sweeps gain across 3 values and exports family J
             .getChildFile ("test_scan_output.json")
             .getFullPathName();
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // ---- Act ----
     // 3 gain values (all non-zero so every round yields a valid response).
@@ -1059,6 +1135,7 @@ TEST_CASE ("CommandParser: scan sweeps gain across 3 values and exports family J
 
     // Cleanup
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
 
 TEST_CASE ("CommandParser: scan fails for unknown param_id", "[commandparser][scan-unknown-param]")
@@ -1151,6 +1228,7 @@ TEST_CASE ("CommandParser: scan with noise source runs noise rounds and exports 
             .getChildFile ("test_scan_noise.json")
             .getFullPathName();
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // ---- Act ----
     // 2 gain values, 1 s deterministic white noise per round (seed 42).
@@ -1180,6 +1258,7 @@ TEST_CASE ("CommandParser: scan with noise source runs noise rounds and exports 
 
     // Cleanup
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
 
 //==============================================================================
@@ -1220,6 +1299,7 @@ TEST_CASE ("CommandParser: dynamic source + gr_timeline exports GR timeline JSON
             .getChildFile ("test_measure_gr_dynamic.json")
             .getFullPathName();
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // ---- Act ----
     const juce::String jsonCmd =
@@ -1261,6 +1341,7 @@ TEST_CASE ("CommandParser: dynamic source + gr_timeline exports GR timeline JSON
 
     // Cleanup
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
 
 TEST_CASE ("CommandParser: file source + gr_timeline exports GR timeline without tau",
@@ -1305,6 +1386,7 @@ TEST_CASE ("CommandParser: file source + gr_timeline exports GR timeline without
             .getChildFile ("test_measure_gr_file.json")
             .getFullPathName();
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // ---- Act ----
     // "path" names the INPUT audio file; "export_path" the JSON output.
@@ -1344,6 +1426,7 @@ TEST_CASE ("CommandParser: file source + gr_timeline exports GR timeline without
 
     // Cleanup
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
     wavFile.deleteFile();
 }
 
@@ -1379,6 +1462,7 @@ TEST_CASE ("CommandParser: measure dynamic honours explicit carrier_start_hz",
             .getChildFile ("test_measure_dynamic_carrier_start.json")
             .getFullPathName();
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // 2.5 kHz sweep start — must be forwarded to the session configuration.
     const juce::String jsonCmd =
@@ -1395,6 +1479,7 @@ TEST_CASE ("CommandParser: measure dynamic honours explicit carrier_start_hz",
     juce::File exportFile (exportPath);
     REQUIRE (exportFile.existsAsFile());
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
 
 TEST_CASE ("CommandParser: measure dynamic defaults carrier_start_hz to 10000 Hz",
@@ -1420,6 +1505,7 @@ TEST_CASE ("CommandParser: measure dynamic defaults carrier_start_hz to 10000 Hz
             .getChildFile ("test_measure_dynamic_carrier_default.json")
             .getFullPathName();
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // No carrier_start_hz: the parser must apply the 10000 Hz default so the
     // GR timeline is measurable out of the box (matching CompressionFamily).
@@ -1437,6 +1523,7 @@ TEST_CASE ("CommandParser: measure dynamic defaults carrier_start_hz to 10000 Hz
     juce::File exportFile (exportPath);
     REQUIRE (exportFile.existsAsFile());
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
 
 TEST_CASE ("CommandParser: gr_timeline on dynamic source yields valid tau with high carrier start",
@@ -1470,6 +1557,7 @@ TEST_CASE ("CommandParser: gr_timeline on dynamic source yields valid tau with h
             .getChildFile ("test_measure_gr_tau_valid.json")
             .getFullPathName();
     juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     const juce::String jsonCmd =
         juce::String (R"({"cmd":"measure","source":"dynamic","type":"gr_timeline","carrier_start_hz":10000,"path":)")
@@ -1500,4 +1588,5 @@ TEST_CASE ("CommandParser: gr_timeline on dynamic source yields valid tau with h
     REQUIRE (static_cast<double> (exportedJson["tau"]["release_sec"]) >= 0.0);
 
     exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
