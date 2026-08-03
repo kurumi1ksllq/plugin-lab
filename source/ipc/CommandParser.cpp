@@ -184,9 +184,37 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (false, R"("error":"no plugin loaded")");
 
         auto name = obj->getProperty ("name").toString();
+        auto paramId = obj->getProperty ("param_id").toString();
         double value = obj->getProperty ("value");
 
         auto& params = plugin->getParameters();
+
+        // Parameter resolution order (documented):
+        //   1. param_id (stable hosted-parameter ID) — authoritative when
+        //      present. Display names are ambiguous across EQ bands ("Band 1
+        //      Gain" / "Band 1 Used" both contain "Band 1"), so an id that
+        //      matches nothing returns "parameter not found" rather than
+        //      falling back to a name guess (ambiguity lock; mirrors the
+        //      scan command's strict id lookup).
+        //   2. name match — legacy single pass over getParameters() in order,
+        //      first parameter whose display name equals OR contains the given
+        //      name wins (== is checked per parameter before contains, but an
+        //      earlier contains-hit still beats a later exact hit).
+        if (paramId.isNotEmpty())
+        {
+            for (auto* candidate : params)
+            {
+                auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (candidate);
+                if (hosted != nullptr && hosted->getParameterID() == paramId)
+                {
+                    candidate->setValueNotifyingHost (static_cast<float> (value));
+                    return Protocol::makeResponse (true, R"("param":")" + candidate->getName (128).quoted()
+                                                     + R"(","value":)" + juce::String (value, 4));
+                }
+            }
+            return Protocol::makeResponse (false, R"("error":"parameter not found")");
+        }
+
         for (int i = 0; i < params.size(); ++i)
         {
             auto n = params[i]->getName (128);
