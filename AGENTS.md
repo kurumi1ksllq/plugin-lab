@@ -1,0 +1,99 @@
+# Plugin Lab — 项目知识库
+
+**生成:** 2026-08-03 · **Commit:** b3e1813 · **Branch:** main
+
+## OVERVIEW
+
+VST3 插件黑盒测量实验室（Windows 桌面 GUI，C++20 + JUCE 9 + CMake + Catch2）。AI 通过 Named Pipe IPC（`\\.\pipe\PluginLab`）驱动 GUI：加载插件 → 测量（扫频/谐波/压缩/GR 时间线）→ JSON 导出 → 反推插件参数。纯黑盒原则——不依赖插件内部先验知识。设计/状态文档：`DESIGN.md`（方法论+协议）、`STATUS.md`（决策史+阶段记录）、`docs/data-schema.md`（8 类导出 JSON schema）。
+
+## STRUCTURE
+
+```
+PluginLab/
+├── source/            # 全部生产代码（58 文件，9 模块）——见 source/AGENTS.md
+│   ├── Main.cpp       # 入口 + 装配中枢（1629 行 god file）
+│   ├── host/          # VST3 扫描/加载（/EHa 崩溃保护 + 黑名单）
+│   ├── signal/        # 信号生成器接口 + 7 生成器
+│   ├── capture/       # 采集管线（SweepRunner 冻结 / MeasurementSession）
+│   ├── scan/          # 参数扫描引擎 ScanEngine
+│   ├── analysis/      # 7 分析器 + Export JSON 层
+│   ├── ipc/           # Named Pipe 服务器 + 命令解析
+│   ├── ui/            # PlotWidget + PluginEditorWindow
+│   └── utils/         # FftHelper / MathUtils / CrashLog
+├── tests/             # Catch2 单元测试（113+ 绿）——见 tests/AGENTS.md
+├── tools/             # VST3Scanner(死代码) + PS/Python 工具脚本
+├── docs/              # data-schema.md / plan-phase2-5.md
+└── samples/take01.wav # vocal 测试素材（未入库）
+```
+
+## WHERE TO LOOK
+
+| 任务                      | 位置                                                 | 备注                                       |
+| ------------------------- | ---------------------------------------------------- | ------------------------------------------ |
+| 插件扫描/加载/崩溃保护    | `source/host/PluginManager.cpp`                      | /EHa + Pianoteq 黑名单                     |
+| 测量执行（4 类型 × 4 源） | `source/capture/MeasurementSession.*`                | 类型: freq/harmonic/compression/grTimeline |
+| 参数扫描                  | `source/scan/ScanEngine.*`                           | 快照/恢复/取消 RAII                        |
+| 信号生成（新增生成器）    | `source/signal/`                                     | 实现 `SignalGenerator` 接口                |
+| JSON 导出/格式化          | `source/analysis/Export.cpp`                         | 手写转义，非 juce::JSON                    |
+| IPC 命令                  | `source/ipc/` + `docs/data-schema.md`                | 协议契约                                   |
+| 实时曲线渲染              | `source/ui/PlotWidget.cpp`                           | 增量绘制 + 50ms 节流                       |
+| 崩溃日志/minidump         | `source/utils/CrashLog.cpp`                          | `%TEMP%\pluginlab_crashlog.txt`            |
+| 导出 JSON 反推验证        | `tools/reverse_derive.py`                            | stdlib-only                                |
+| 测试设施（假插件）        | `tests/TestPlugin.h`、`tests/TestCompressorPlugin.h` | 确定性 ground truth                        |
+
+## CODE MAP
+
+| 符号                                            | 类型         | 位置               | 角色                                                                 |
+| ----------------------------------------------- | ------------ | ------------------ | -------------------------------------------------------------------- |
+| `PluginLabApplication` / `MainContentComponent` | class        | `source/Main.cpp`  | 入口；装配 PluginManager/Session/CommandParser/PipeServer/ThreadPool |
+| `PluginManager`                                 | class        | `source/host/`     | VST3 扫描（线程池）+ loadPlugin + createEditorSafe（/EHa）           |
+| `CommandParser::handleCommand`                  | method       | `source/ipc/`      | 命令唯一入口（GUI 与 IPC 双路径汇聚）                                |
+| `PipeServer`                                    | class        | `source/ipc/`      | `\\.\pipe\PluginLab`，后台线程，JSON 行协议                          |
+| `MeasurementSession`                            | class        | `source/capture/`  | 测量编排（type + source），51 符号                                   |
+| `SweepRunner`                                   | class        | `source/capture/`  | 冻结的 generate→process→capture 管线（不改）                         |
+| `ScanEngine`                                    | class        | `source/scan/`     | 参数多轮扫描，返回曲线族                                             |
+| `Export` / `datasetToJSON`                      | namespace/fn | `source/analysis/` | 手写 JSON + 数据包聚合                                               |
+| `PlotWidget`                                    | class        | `source/ui/`       | EQ/压缩/谐波/GR 四种图                                               |
+
+## COMMANDS
+
+```bash
+# 构建（MSVC，/W4 /permissive- /WX /utf-8 警告即错误）
+cmake -S . -B build && cmake --build build --config Release
+# 运行
+build\PluginLab_artefacts\Release\Plugin Lab.exe
+# 测试（BUILD_TESTS 默认 OFF；连跑 2 次验稳定）
+cmake -S . -B build -DBUILD_TESTS=ON && cmake --build build --config Release
+ctest --test-dir build -C Release --timeout 180
+# 无 CI、无 Makefile、无 package.json scripts（勿引用）
+```
+
+## CONVENTIONS
+
+- **无 clang-format**——风格人工维护：JUCE 惯例（PascalCase、`jmax/jmin`、`JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR`、`//===` 80 列分栏）
+- **新增 .cpp 必须同时加进根 `CMakeLists.txt` 和 `tests/CMakeLists.txt` 的 target_sources**（无静态库，双编译）
+- 命名带单位：`thresholdDB`、`grDB`、`attackSec`、`carrierStartHz`；测试常量 `k` 前缀
+- 头文件 `#pragma once`；include 相对当前文件（`"../analysis/Export.h"`）
+- 错误处理：生产路径不用 C++ 异常——IPC 返回 `{"ok":false,"error":"..."}`；崩溃保护用 `/EHa` + `catch(...)` + CRASH_LOG
+- JSON 手写 raw string literal + `escapeJsonString`（曾因 `juce::JSON` 转义 bug 弃用）
+- Git：Conventional Commits（`feat(ipc): ...`），提交消息英文、文档中文
+- 线程铁律：`prepareToPlay/processBlock` 必须在测量线程；编辑器创建必须在消息线程（`callAsync`）；后台用 ThreadPool + AsyncUpdater（**禁 `std::thread::detach`**）
+
+## ANTI-PATTERNS (THIS PROJECT)
+
+- **空 catch / 吞异常**——全库唯一违规在 `source/Main.cpp:414`；每个 catch 必须 CRASH_LOG（参照 `PluginManager.cpp:27,82`）
+- **递归锁同一 mutex**（曾致 std::system_error 必现崩溃）——锁内只拷贝，锁外加载
+- **`JUCE_TRY`/`JUCE_CATCH_EXCEPTION`**——会重抛，禁止（用 /EHa + catch(...)）
+- **`getTotalLength()` 返回 -1**——无限长会触发 SweepRunner 静默 10s 兜底
+- **改 `SweepRunner`**——冻结边界；测量目的感知放 MeasurementSession，为什么测放上层
+- **每 block 刷 UI**——必须 AsyncUpdater ~50ms 节流
+- **混用 THD/IMD 信号**（多音谐波峰交叠）、**过度设计**（"不做过度设计"为明示原则）
+- **/WX 下的任何编译警告**——提交门禁
+
+## NOTES
+
+- 模块边界由根 CMakeLists.txt 单一清单强制（目录不自包含）；工具 `VST3Scanner` 是死代码（扫描在进程内）
+- Debug 构建带 `JUCE_DISABLE_ASSERTIONS=1`（JUCE 9 扫描器断言消息线程）
+- DESIGN.md 中 vocal 素材路径写 `take01.wav`，实际在 `samples/take01.wav`（未入库）
+- 构建产物：`build/`（MSVC）与 `cmake-build-debug/`（CLion Ninja）并存
+- 知识库分层：本文件（根）+ `source/AGENTS.md` + 各模块子文件 + `tests/AGENTS.md`
