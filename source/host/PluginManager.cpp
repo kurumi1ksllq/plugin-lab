@@ -174,6 +174,22 @@ void PluginManager::scanDirectory (const juce::File& directory, const juce::File
 
     while (true)
     {
+        // 看门狗进度（计划步骤 4）：每迭代报告 progress + 当前文件路径（bundle
+        // key，经 pathByName 映射）——消息线程 Timer 据此检测无进展超时。必须放在
+        // skip 检查之前：全跳过（热扫）路径也推进 progress/currentFile，否则快照
+        // 恒显示 beginScan 初值（verifier V1）。
+        {
+            const auto prog = scanner.getProgress();
+            juce::String currentPath;
+            if (scanner.getProgress() < 1.0f)
+            {
+                const auto it = pathByName.find (scanner.getNextPluginFileThatWillBeScanned());
+                if (it != pathByName.end())
+                    currentPath = it->second;
+            }
+            updateScanProgress (prog, currentPath);
+        }
+
         // 扫描阶段黑名单（步骤 6，启动卡顿修复）：Pianoteq 等宿主杀手插件在扫描
         // 时无 desc.name 可用（还没构造），按待扫文件名拦截——直接 skip，不
         // LoadLibrary/InitDll。此前 prune 把它们从内存列表删除 → getTypeForFile
@@ -199,20 +215,6 @@ void PluginManager::scanDirectory (const juce::File& directory, const juce::File
             }
         }
 
-        // 看门狗进度（计划步骤 4）：每文件报告 progress + 当前文件路径（bundle
-        // key，经 pathByName 映射）——消息线程 Timer 据此检测无进展超时。
-        {
-            const auto prog = scanner.getProgress();
-            juce::String currentPath;
-            if (scanner.getProgress() < 1.0f)
-            {
-                const auto it = pathByName.find (scanner.getNextPluginFileThatWillBeScanned());
-                if (it != pathByName.end())
-                    currentPath = it->second;
-            }
-            updateScanProgress (prog, currentPath);
-        }
-
         juce::String name;
         bool ok = false;
         try { ok = scanner.scanNextFile (true, name); }
@@ -226,6 +228,7 @@ void PluginManager::beginScan()
 {
     scanRunning = true;
     scanProgress = 0.0f;
+    scanAborted = false;
     lastScanProgressMs = juce::Time::getMillisecondCounter();
     {
         std::lock_guard<std::mutex> lock (scanFileLock);
@@ -235,6 +238,8 @@ void PluginManager::beginScan()
 
 void PluginManager::updateScanProgress (float progress, const juce::String& currentFile)
 {
+    if (scanAborted.load())
+        return;                            // 看门狗已 abandon：解挂线程的写入不再污染新扫描
     scanProgress = progress;
     lastScanProgressMs = juce::Time::getMillisecondCounter();
     {
@@ -255,13 +260,42 @@ juce::String PluginManager::getCurrentScanFile() const
     return currentScanFile;
 }
 
+PluginManager::ScanStatusSnapshot PluginManager::getScanStatusSnapshot() const
+{
+    // getScanStatus 快照（verifier M1）：IPC 线程调用。count 走 KnownPluginList
+    // 内部加锁的 getNumTypes()；blacklisted 在 knownListGuard 下读（与所有
+    // addToBlacklistLocked 写互斥；JUCE 死马踏板在 scanner 构造时的注入是一次性
+    // 窗口，接受并文档化）。currentFile 走 scanFileLock。
+    ScanStatusSnapshot s;
+    s.running = scanRunning.load();
+    s.progress = scanProgress.load();
+    s.hangCount = scanHangCount.load();
+    s.count = knownPlugins.getNumTypes();
+    {
+        std::lock_guard<std::mutex> lock (knownListGuard);
+        s.blacklisted = knownPlugins.getBlacklistedFiles().size();
+    }
+    s.currentFile = getCurrentScanFile();
+    s.done = ! s.running && s.progress >= 0.999f;
+    return s;
+}
+
+void PluginManager::addToBlacklistLocked (const juce::String& pluginID)
+{
+    std::lock_guard<std::mutex> lock (knownListGuard);
+    knownPlugins.addToBlacklist (pluginID);
+}
+
 bool PluginManager::handleScanHang()
 {
     // 看门狗（计划步骤 4）：扫描线程卡在某个插件 DLL 里（scanNextFile 永不返回），
     // 无法从进程内终止。把当前文件加入黑名单（bundle key——与扫描枚举路径一致，
     // 见 cacheIsCurrent），并立即持久化（卡死的扫描永远到不了 saveCache，不持久化
     // 则重启会再次挂同一插件）。挂起计数封顶 kMaxScanHangs：每次挂起泄漏一个扫描
-    // 线程 + 锁住一个 DLL，必须封顶。
+    // 线程 + 锁住一个 DLL，必须封顶。scanAborted 置位：万一挂起线程解挂，其后续
+    // updateScanProgress 写入被忽略（verifier L4）。
+    scanAborted = true;
+
     const auto file = getCurrentScanFile();
     if (file.isNotEmpty())
     {
@@ -269,7 +303,7 @@ bool PluginManager::handleScanHang()
         const auto contentsIdx = blacklistKey.indexOf ("\\Contents");
         if (contentsIdx > 0)
             blacklistKey = blacklistKey.substring (0, contentsIdx);
-        knownPlugins.addToBlacklist (blacklistKey);
+        addToBlacklistLocked (blacklistKey);
         saveCache();          // 立即持久化——重启不重挂同一插件
     }
 
@@ -371,12 +405,15 @@ std::unique_ptr<juce::AudioPluginInstance> PluginManager::loadPlugin (
     {
         state->alive = false;
         // 超时：等待线程脱出。黑名单 key 用 bundle 路径（内层 DLL 路径枚举时
-        // 不匹配；bundle 路径与扫描枚举一致，见 cacheIsCurrent）。
+        // 不匹配；bundle 路径与扫描枚举一致，见 cacheIsCurrent），并立即持久化
+        // （verifier M2）：不持久化则重启 loadCache 恢复后同一插件再次尝试、再次
+        // 挂起——与 handleScanHang 的"立即持久化"语义对齐。
         auto blacklistKey = desc.fileOrIdentifier;
         const auto contentsIdx = blacklistKey.indexOf ("\\Contents");
         if (contentsIdx > 0)
             blacklistKey = blacklistKey.substring (0, contentsIdx);
-        knownPlugins.addToBlacklist (blacklistKey);
+        addToBlacklistLocked (blacklistKey);
+        saveCache();
 
         CRASH_LOG_WARN ("Plugin load timeout",
             desc.name + " - creation did not finish in "

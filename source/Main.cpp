@@ -857,6 +857,11 @@ private:
             const bool capReached = pluginManager->handleScanHang();
             stopTimer();
 
+            // M3（verifier）：abandon 后补 endScan()——卡死的扫描线程永不执行
+            // endScan，否则 PluginManager.scanRunning 恒 true，getScanStatus 快照
+            // 失真（running=true 但 UI 已显示 interrupted）。
+            pluginManager->endScan();
+
             // abandon 卡死的扫描线程：绝不 join（与析构同语义）。
             if (scanThread && scanThread->joinable())
                 scanThread.release();

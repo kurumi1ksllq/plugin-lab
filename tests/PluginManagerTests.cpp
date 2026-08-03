@@ -608,3 +608,74 @@ TEST_CASE ("PluginManager: handleScanHang persists the blacklist immediately",
     // Assert: blacklist survived the restart
     REQUIRE (fresh.getKnownPlugins().getBlacklistedFiles().contains ("C:\\plugins\\Hung.vst3"));
 }
+
+TEST_CASE ("PluginManager: getScanStatusSnapshot reports consistent scan state",
+           "[pluginmanager][watchdog][snapshot]")
+{
+    // Arrange: mid-scan with one blacklisted entry
+    TempCacheDir tmp;
+    PluginManager mgr;
+    mgr.getKnownPlugins().addType (makeDesc ("One", "C:\\plugins\\One.vst3", 2101));
+    mgr.addToBlacklistLocked ("C:\\plugins\\Bad.vst3");
+    mgr.beginScan();
+    mgr.updateScanProgress (0.5f, "C:\\plugins\\Mid.vst3");
+
+    // Act
+    const auto s = mgr.getScanStatusSnapshot();
+
+    // Assert
+    REQUIRE (s.running);
+    REQUIRE_FALSE (s.done);
+    REQUIRE (s.progress == Catch::Approx (0.5f));
+    REQUIRE (s.count == 1);
+    REQUIRE (s.blacklisted == 1);
+    REQUIRE (s.currentFile == "C:\\plugins\\Mid.vst3");
+
+    // Act: scan finishes
+    mgr.endScan();
+    const auto finished = mgr.getScanStatusSnapshot();
+    REQUIRE_FALSE (finished.running);
+    REQUIRE (finished.done);
+    REQUIRE (finished.progress == Catch::Approx (1.0f));
+}
+
+TEST_CASE ("PluginManager: scanAborted blocks further progress writes (verifier L4)",
+           "[pluginmanager][watchdog]")
+{
+    // Arrange
+    TempCacheDir tmp;
+    PluginManager mgr;
+    mgr.beginScan();
+    mgr.updateScanProgress (0.5f, "C:\\plugins\\Mid.vst3");
+
+    // Act: watchdog abandon path (handleScanHang sets scanAborted)
+    mgr.handleScanHang();
+    mgr.updateScanProgress (0.8f, "C:\\plugins\\Late.vst3");   // stale thread wakes up
+
+    // Assert: stale write is ignored
+    REQUIRE (mgr.getScanProgress() == Catch::Approx (0.5f));
+    REQUIRE (mgr.getCurrentScanFile() == "C:\\plugins\\Mid.vst3");
+}
+
+TEST_CASE ("PluginManager: loadPlugin timeout persists the blacklist (verifier M2)",
+           "[pluginmanager][load][timeout]")
+{
+    // Arrange: a hung load blacklists AND persists — verify by reloading
+    TempCacheDir tmp;
+    PluginManager mgr;
+    mgr.setCacheFile (tmp.cacheFile());
+    mgr.setLoadTimeoutMs (50);
+    mgr.setAsyncCreateOverride ([] (const juce::PluginDescription&, double, int,
+                                    PluginManager::PluginCreationCallback) {});
+
+    auto inst = mgr.loadPlugin (makeDesc ("Fake", "C:\\fake\\fake.vst3", 2110), 48000.0, 512);
+    REQUIRE (inst == nullptr);
+
+    // Act: fresh manager reloads the cache
+    PluginManager fresh;
+    fresh.setCacheFile (tmp.cacheFile());
+    fresh.loadCache();
+
+    // Assert: blacklist survived (restart won't retry the hung plugin)
+    REQUIRE (fresh.getKnownPlugins().getBlacklistedFiles().contains ("C:\\fake\\fake.vst3"));
+}

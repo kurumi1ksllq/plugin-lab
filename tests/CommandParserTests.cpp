@@ -365,12 +365,16 @@ TEST_CASE ("CommandParser: getScanStatus reports an in-progress scan",
     // ---- Act ----
     auto response = parser.handleCommand (R"({"cmd":"getScanStatus"})");
 
-    // ---- Assert ----
-    REQUIRE (response.contains ("\"running\":true"));
-    REQUIRE (response.contains ("\"done\":false"));
-    REQUIRE (response.contains ("\"progress\":0.500"));
-    REQUIRE (response.contains ("\"currentFile\""));
-    REQUIRE (response.contains ("Mid.vst3"));
+    // ---- Assert: the response must PARSE as valid JSON (verifier V1: Windows
+    // backslash paths break .quoted(); substring asserts can't catch it) ----
+    auto json = juce::JSON::parse (response);
+    auto* obj = json.getDynamicObject();
+    REQUIRE (obj != nullptr);
+    REQUIRE (obj->getProperty ("ok") == juce::var (true));
+    REQUIRE (obj->getProperty ("running") == juce::var (true));
+    REQUIRE (obj->getProperty ("done") == juce::var (false));
+    REQUIRE (obj->getProperty ("progress") == juce::var (0.5));
+    REQUIRE (obj->getProperty ("currentFile").toString() == "C:\\plugins\\Mid.vst3");
 }
 
 TEST_CASE ("CommandParser: getScanStatus reports a finished scan",
@@ -389,10 +393,13 @@ TEST_CASE ("CommandParser: getScanStatus reports a finished scan",
     // ---- Act ----
     auto response = parser.handleCommand (R"({"cmd":"getScanStatus"})");
 
-    // ---- Assert ----
-    REQUIRE (response.contains ("\"running\":false"));
-    REQUIRE (response.contains ("\"done\":true"));
-    REQUIRE (response.contains ("\"progress\":1.000"));
+    // ---- Assert: parse as JSON too (finished state must also be valid) ----
+    auto json = juce::JSON::parse (response);
+    auto* obj = json.getDynamicObject();
+    REQUIRE (obj != nullptr);
+    REQUIRE (obj->getProperty ("running") == juce::var (false));
+    REQUIRE (obj->getProperty ("done") == juce::var (true));
+    REQUIRE (obj->getProperty ("progress") == juce::var (1.0));
 }
 
 TEST_CASE ("CommandParser: getScanStatus errors without a plugin manager",

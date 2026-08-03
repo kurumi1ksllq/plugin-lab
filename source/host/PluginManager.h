@@ -139,6 +139,34 @@ public:
         risk R4/R7: a once-hung plugin may have been fixed). */
     void clearBlacklist()              { knownPlugins.clearBlacklistedFiles(); }
 
+    //==============================================================================
+    // Snapshot + blacklist sync (verifier-review M1): KnownPluginList's
+    // getBlacklistedFiles()/addToBlacklist() are UNLOCKED in JUCE, so IPC-thread
+    // reads race the scan/load threads' writes. All our blacklist writes go
+    // through addToBlacklistLocked(); getScanStatusSnapshot() reads under the
+    // same guard (JUCE's own dead-man's-pedal injection at scanner construction
+    // is a one-shot, scan-start-only window and is accepted/documented).
+
+    /** Scan-state snapshot for the getScanStatus IPC command (and any reader on
+        a non-scan thread). Fields are consistent at one instant; count comes
+        from the internally-locked getNumTypes(), blacklisted from the guarded
+        blacklist snapshot. */
+    struct ScanStatusSnapshot
+    {
+        bool running = false;
+        bool done = false;
+        float progress = 0.0f;
+        int count = 0;
+        int blacklisted = 0;
+        int hangCount = 0;
+        juce::String currentFile;
+    };
+    ScanStatusSnapshot getScanStatusSnapshot() const;
+
+    /** Thread-safe blacklist add (guard vs IPC-thread getBlacklistedFiles reads;
+        JUCE's own addToBlacklist is unlocked). */
+    void addToBlacklistLocked (const juce::String& pluginID);
+
 private:
     /** Remove ghost entries (plugin files that no longer exist) and
         host-killing plugins from the in-memory list. */
@@ -156,8 +184,10 @@ private:
     std::atomic<float> scanProgress { 0.0f };
     std::atomic<int> scanHangCount { 0 };
     std::atomic<int64> lastScanProgressMs { 0 };
+    std::atomic<bool> scanAborted { false };   // watchdog-abandoned: ignore further progress writes
     mutable std::mutex scanFileLock;     // mutable: locked from const getCurrentScanFile()
     juce::String currentScanFile;
+    mutable std::mutex knownListGuard;   // blacklist write/read guard (verifier M1)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginManager)
 };

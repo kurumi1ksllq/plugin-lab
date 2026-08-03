@@ -7,6 +7,32 @@
 #include "../analysis/TimeConstants.h"
 #include "../analysis/CompressionFamily.h"
 
+namespace
+{
+/** Escape a string for embedding inside a JSON string literal. juce::String::quoted()
+    only doubles quote chars — backslashes (Windows paths!) stay unescaped, which
+    yields INVALID JSON (`\P`, `\C` are illegal escapes). See verifier V1 finding and
+    analysis/AGENTS.md (Oracle P0-4: pluginName.quoted() 不转内部引号). */
+juce::String escapeJsonString (const juce::String& s)
+{
+    juce::String out;
+    out.preallocateBytes (s.getNumBytesAsUTF8() + 16);
+    for (auto c : s)
+    {
+        switch (c)
+        {
+            case '\\': out += "\\\\"; break;
+            case '"':  out += "\\\""; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:   out += c;      break;
+        }
+    }
+    return out;
+}
+}  // namespace
+
 // Crash-protection WAV mirror: every measure/scan command flushes the
 // captured dry/wet audio to a 24-bit .wav file (see CaptureBuffer::
 // setFlushConfig) so a plugin crash — which kills the process — still
@@ -173,21 +199,18 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         if (pluginManager == nullptr)
             return Protocol::makeResponse (false, R"("error":"no plugin manager")");
 
-        const bool running = pluginManager->isScanRunning();
-        const float progress = pluginManager->getScanProgress();
-        const bool done = ! running && progress >= 0.999f;
-        const int count = pluginManager->getKnownPlugins().getNumTypes();
-        const int blacklisted = pluginManager->getKnownPlugins().getBlacklistedFiles().size();
-        const int hangCount = pluginManager->getScanHangCount();
+        // 快照方法内部加锁（verifier M1）：count 走 KnownPluginList 内部锁，
+        // blacklisted 走 knownListGuard，IPC 线程读与扫描/加载线程写互斥。
+        const auto s = pluginManager->getScanStatusSnapshot();
 
         return Protocol::makeResponse (true,
-            R"("running":)" + juce::String (running ? "true" : "false")
-            + R"(,"done":)" + juce::String (done ? "true" : "false")
-            + R"(,"progress":)" + juce::String (progress, 3)
-            + R"(,"count":)" + juce::String (count)
-            + R"(,"blacklisted":)" + juce::String (blacklisted)
-            + R"(,"hangCount":)" + juce::String (hangCount)
-            + R"(,"currentFile":)" + pluginManager->getCurrentScanFile().quoted());
+            R"("running":)" + juce::String (s.running ? "true" : "false")
+            + R"(,"done":)" + juce::String (s.done ? "true" : "false")
+            + R"(,"progress":)" + juce::String (s.progress, 3)
+            + R"(,"count":)" + juce::String (s.count)
+            + R"(,"blacklisted":)" + juce::String (s.blacklisted)
+            + R"(,"hangCount":)" + juce::String (s.hangCount)
+            + R"(,"currentFile":")" + escapeJsonString (s.currentFile) + "\"");
     }
 
     // --- loadPlugin ---
