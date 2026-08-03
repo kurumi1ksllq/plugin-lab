@@ -11,7 +11,9 @@
 #include "analysis/GainReduction.h"
 #include "scan/ScanEngine.h"
 #include <atomic>
+#include <memory>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 //==============================================================================
@@ -218,8 +220,9 @@ public:
         scanProgressLabel->setFont (juce::FontOptions (12.0f));
         addAndMakeVisible (scanProgressLabel.get());
 
-        pluginManager.reset (new PluginManager());
-        threadPool = std::make_unique<juce::ThreadPool> (2);
+        pluginManager = std::make_shared<PluginManager>();
+        scanAlive = std::make_shared<std::atomic<bool>> (true);
+        loadAlive = std::make_shared<std::atomic<bool>> (true);
 
         // --- IPC pipeline setup ---
         measurementSession = std::make_unique<MeasurementSession>();
@@ -304,10 +307,37 @@ public:
         if (pipeServer)
             pipeServer->shutdown();
 
-        // 4. Join all background jobs BEFORE member destructors run.
-        //    ThreadPool destructor blocks until every running/queued job completes,
-        //    guaranteeing no ThreadPoolJob accesses this->* after this point.
-        threadPool = nullptr;
+        // 4. Mark the message-thread completion lambdas dead, then abandon the
+        //    dedicated scan/load threads WITHOUT joining (P0, plan step 0): a
+        //    plugin DLL hung in DllMain/InitDll/GetPluginFactory can never be
+        //    terminated in-process, and joining it blocks process exit forever.
+        //    Each worker only touches state it owns (shared_ptr), and its final
+        //    completion lambda runs on the message thread where the alive check
+        //    is serialized with this destructor — so an abandoned worker's late
+        //    return never touches destroyed members.
+        *scanAlive = false;
+        *loadAlive = false;
+
+        // Join a worker only if it has already signalled completion; otherwise
+        // it is (or may be) stuck inside a plugin DLL — abandon it via release()
+        // (never join → no std::terminate). The OS thread keeps running until
+        // the DLL returns; its callAsync is then discarded by the message queue.
+        // The leaked std::thread object is bounded (≤3/session by the step-4
+        // watchdog hang cap) and documented in STATUS.md.
+        if (scanThread && scanThread->joinable())
+        {
+            if (scanOutcome && scanOutcome->ready.load())
+                scanThread->join();
+            else
+                scanThread.release();
+        }
+        if (loadThread && loadThread->joinable())
+        {
+            if (loadOutcome && loadOutcome->ready.load())
+                loadThread->join();
+            else
+                loadThread.release();
+        }
 
         // Discard any handleAsyncUpdate that was triggered during job finalisation.
         // cancelPendingUpdate() blocks if the callback is currently in-flight
@@ -560,89 +590,31 @@ public:
 
 private:
     //==============================================================================
-    // Background-thread job helpers — nested classes have access to all private
-    // members of MainContentComponent (C++11 implicit friend).
+    // Background-thread completion channels (plan step 0). Each dedicated worker
+    // writes ONLY into these shared_ptr-owned structs (never into members of
+    // MainContentComponent directly), so an abandoned thread's late completion
+    // is safe: the message-thread notify lambda checks the alive flag (serialized
+    // with the destructor) before copying results into this->*.
 
-    struct ScanJob final : public juce::ThreadPoolJob
+    struct ScanOutcome
     {
-        MainContentComponent& owner;
-
-        ScanJob (MainContentComponent& o)
-            : ThreadPoolJob ("PluginScan"), owner (o) {}
-
-        JobStatus runJob() override
-        {
-            try
-            {
-                CRASH_LOG_INFO ("Scan start", {});
-                owner.pluginManager->scanSystemDirectories();
-
-                int count = 0;
-                {
-                    std::lock_guard<std::mutex> lock (owner.listLock);
-                    count = owner.pluginManager->getKnownPlugins().getNumTypes();
-                }
-
-                CRASH_LOG_INFO ("Scan done", juce::String (count) + " plugins");
-                owner.scanDone = true;
-                owner.scanRunning = false;
-                owner.scannedCount = count;
-            }
-            catch (...)
-            {
-                CRASH_LOG_ERR ("Scan thread", "exception caught");
-                owner.scanRunning = false;
-                // scanDone stays false → handleAsyncUpdate shows "Scan error"
-            }
-
-            owner.scanUpdatePending = true;
-            owner.triggerAsyncUpdate();
-            return jobHasFinished;
-        }
+        std::atomic<bool> done { false };   // true = scan completed, false = crash
+        std::atomic<bool> ready { false };  // worker finished; join() is then safe
     };
 
-    struct LoadJob final : public juce::ThreadPoolJob
+    struct LoadOutcome
     {
-        MainContentComponent& owner;
-        juce::PluginDescription desc;
+        std::unique_ptr<juce::AudioPluginInstance> instance;
         juce::String name;
-        double sampleRate;
-        int blockSize;
-
-        LoadJob (MainContentComponent& o,
-                 const juce::PluginDescription& d,
-                 juce::String n,
-                 double sr,
-                 int bs)
-            : ThreadPoolJob ("PluginLoad"),
-              owner (o), desc (d), name (std::move (n)),
-              sampleRate (sr), blockSize (bs) {}
-
-        JobStatus runJob() override
-        {
-            try
-            {
-                auto instance = owner.pluginManager->loadPlugin (desc, sampleRate, blockSize);
-                owner.pendingInstance = std::move (instance);
-                owner.pendingName = name;
-            }
-            catch (...)
-            {
-                CRASH_LOG_ERR ("Load thread", "exception caught for " + name);
-                owner.pendingInstance.reset();      // nullptr → openEditorWindowFor shows failure
-                owner.pendingName = name;
-            }
-
-            owner.loadUpdatePending = true;
-            owner.triggerAsyncUpdate();
-            return jobHasFinished;
-        }
+        std::atomic<bool> ready { false };
     };
 
     //==============================================================================
     std::atomic<bool> scanDone { false };
     std::atomic<bool> scanRunning { false };
     std::atomic<bool> loadingRunning { false };
+    std::atomic<int> scanGeneration { 0 };   // stale-completion guard for scans
+    std::atomic<int> loadGeneration { 0 };   // stale-completion guard for loads
     std::mutex listLock;
 
     // IPC between background threads (write) and handleAsyncUpdate (read).
@@ -829,8 +801,56 @@ private:
         statusLabel->setText ("Scanning VST3 plugins...", juce::dontSendNotification);
         scanButton->setEnabled (false);
 
-        // Ownership of the job transfers to the pool; job is auto-deleted after runJob().
-        threadPool->addJob (new ScanJob (*this), true);
+        // Reap the previous scan thread (gated: it already completed — a hung
+        // scan would still hold scanRunning=true and the gate would have
+        // returned above), then spawn a fresh dedicated one-shot thread.
+        if (scanThread && scanThread->joinable())
+            scanThread->join();
+
+        const int generation = ++scanGeneration;
+        scanOutcome = std::make_shared<ScanOutcome>();
+        auto pm = pluginManager;
+        auto alive = scanAlive;
+        auto out = scanOutcome;
+
+        // Completion is delivered via the message thread where the alive check
+        // is serialized with the destructor — a late callback from an abandoned
+        // thread never touches destroyed members. The generation check discards
+        // stale callbacks if a newer scan has been started.
+        auto notify = [alive, out, this, generation]
+        {
+            if (! alive->load() || scanGeneration.load() != generation)
+                return;
+
+            scanDone = out->done.load();
+            scanRunning = false;
+            {
+                std::lock_guard<std::mutex> lock (listLock);
+                scannedCount = pluginManager->getKnownPlugins().getNumTypes();
+            }
+            scanUpdatePending = true;
+            triggerAsyncUpdate();
+        };
+
+        scanThread = std::make_unique<std::thread> ([pm, out, notify]() mutable
+        {
+            bool ok = true;
+            try
+            {
+                CRASH_LOG_INFO ("Scan start", {});
+                pm->scanSystemDirectories();
+                CRASH_LOG_INFO ("Scan done", {});
+            }
+            catch (...)
+            {
+                CRASH_LOG_ERR ("Scan thread", "exception caught");
+                ok = false;
+            }
+
+            out->done = ok;
+            out->ready = true;
+            juce::MessageManager::callAsync (notify);
+        });
     }
 
     //==============================================================================
@@ -846,8 +866,46 @@ private:
         constexpr double sr = 48000.0;
         constexpr int bs = 512;
 
-        // Ownership of the job transfers to the pool; job is auto-deleted after runJob().
-        threadPool->addJob (new LoadJob (*this, desc, safeName, sr, bs), true);
+        // Reap the previous load thread (gated by loadingRunning — it already
+        // completed), then spawn a fresh dedicated one-shot thread.
+        if (loadThread && loadThread->joinable())
+            loadThread->join();
+
+        const int generation = ++loadGeneration;
+        loadOutcome = std::make_shared<LoadOutcome>();
+        auto pm = pluginManager;
+        auto alive = loadAlive;
+        auto out = loadOutcome;
+
+        auto notify = [alive, out, this, generation]
+        {
+            if (! alive->load() || loadGeneration.load() != generation)
+                return;
+
+            pendingInstance = std::move (out->instance);
+            pendingName = out->name;
+            loadUpdatePending = true;
+            triggerAsyncUpdate();
+        };
+
+        loadThread = std::make_unique<std::thread> ([pm, desc, safeName, sr, bs, out, notify]() mutable
+        {
+            try
+            {
+                auto instance = pm->loadPlugin (desc, sr, bs);
+                out->instance = std::move (instance);
+                out->name = safeName;
+            }
+            catch (...)
+            {
+                CRASH_LOG_ERR ("Load thread", "exception caught for " + safeName);
+                out->instance.reset();      // nullptr → openEditorWindowFor shows failure
+                out->name = safeName;
+            }
+
+            out->ready = true;
+            juce::MessageManager::callAsync (notify);
+        });
     }
 
     //==============================================================================
@@ -1497,12 +1555,15 @@ private:
 
     //==============================================================================
     // Member destruction order = REVERSE declaration order:
-    //   threadPool is destroyed first → joins all background jobs,
-    //   then UI members, then pluginManager, then IPC members,
-    //   then atomics / mutex.
-    // The explicit cleanup in ~MainContentComponent (cancel→shutdown→nullThreadPool)
-    // runs BEFORE natural destruction, so IPC members are guaranteed alive
-    // during shutdown.
+    //   the UI members below are destroyed first, then pluginManager (declared
+    //   above the UI block), then the IPC members (declared first, destroyed
+    //   last), then the atomics / mutex.
+    // The explicit cleanup in ~MainContentComponent (cancel→shutdown→abandon
+    // threads) runs BEFORE natural destruction, so IPC members are guaranteed
+    // alive during shutdown. Abandoned scan/load workers hold their own
+    // shared_ptr to PluginManager, so it stays alive until they finish and no
+    // worker ever touches a destroyed member (its completion lambda is
+    // alive-guarded on the message thread).
 
     // --- IPC pipeline (declared before pool/mgr for reverse-destruction order) ---
     std::unique_ptr<MeasurementSession> measurementSession;
@@ -1514,8 +1575,21 @@ private:
     bool hasMeasurement = false;
 
     // --- Core ---
-    std::unique_ptr<PluginManager> pluginManager;
-    std::unique_ptr<juce::ThreadPool> threadPool;
+    // Shared: an abandoned scan/load worker keeps the manager alive until the
+    // hung DLL call returns (plan step 0; see the destructor comments).
+    std::shared_ptr<PluginManager> pluginManager;
+
+    // Dedicated one-shot worker threads (plan step 0) — the ThreadPool no longer
+    // carries scan/load jobs. The destructor abandons a hung worker via
+    // release() instead of joining (bounded by the step-4 watchdog hang cap);
+    // the alive flags are checked on the message thread, serialized with the
+    // destructor, so abandoned workers can never touch destroyed members.
+    std::unique_ptr<std::thread> scanThread;
+    std::unique_ptr<std::thread> loadThread;
+    std::shared_ptr<std::atomic<bool>> scanAlive;
+    std::shared_ptr<std::atomic<bool>> loadAlive;
+    std::shared_ptr<ScanOutcome> scanOutcome;
+    std::shared_ptr<LoadOutcome> loadOutcome;
 
     std::unique_ptr<juce::ListBox> pluginListBox;
     std::unique_ptr<juce::Label> statusLabel;
