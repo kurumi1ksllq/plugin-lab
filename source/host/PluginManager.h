@@ -1,6 +1,8 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <atomic>
+#include <functional>
 
 //==============================================================================
 /**
@@ -81,6 +83,28 @@ public:
         terminates the host process; see STATUS.md). */
     static bool isBlacklistedName (const juce::String& name);
 
+    //==============================================================================
+    // Load timeout (plan step 3): loadPlugin runs creation asynchronously with a
+    // WaitableEvent timeout so a hung plugin creation can't block the loader
+    // thread forever. On timeout the plugin is blacklisted (preventive — the
+    // next scan/load skips it). A real hang still freezes the message thread
+    // (JUCE creates instances there); that is documented as out of reach
+    // (kill process) and mitigated by the blacklist + dead-man's pedal.
+
+    /** Default creation timeout. */
+    static constexpr int kLoadTimeoutMs = 30000;
+
+    using PluginCreationCallback = juce::AudioPluginFormat::PluginCreationCallback;
+    using AsyncCreateFn = std::function<void (const juce::PluginDescription&, double, int,
+                                              PluginCreationCallback)>;
+
+    /** Test seam: override the creation-timeout duration. */
+    void setLoadTimeoutMs (int ms)                 { loadTimeoutMs = ms; }
+
+    /** Test seam: substitute the async creation call (unit tests can't load
+        real VST3 DLLs). */
+    void setAsyncCreateOverride (AsyncCreateFn fn) { asyncCreateOverride = std::move (fn); }
+
 private:
     /** Remove ghost entries (plugin files that no longer exist) and
         host-killing plugins from the in-memory list. */
@@ -89,6 +113,8 @@ private:
     juce::AudioPluginFormatManager formatManager;
     juce::KnownPluginList knownPlugins;
     juce::File cacheFile;
+    int loadTimeoutMs = kLoadTimeoutMs;
+    AsyncCreateFn asyncCreateOverride;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginManager)
 };

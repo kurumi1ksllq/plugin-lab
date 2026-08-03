@@ -1,6 +1,7 @@
 #include <JuceHeader.h>
 #include <catch2/catch_test_macros.hpp>
 #include "../source/host/PluginManager.h"
+#include "TestPlugin.h"
 
 namespace
 {
@@ -405,4 +406,117 @@ TEST_CASE ("PluginManager: dedupeKnownPlugins keeps single entries and distinct 
 
     // Assert: nothing removed
     REQUIRE (mgr.getKnownPlugins().getNumTypes() == 3);
+}
+
+//==============================================================================
+// Step 3 (load timeout): loadPlugin runs creation asynchronously with a
+// WaitableEvent timeout; on timeout it blacklists the plugin (bundle key) and
+// returns nullptr; late callbacks from a stale generation are ignored.
+
+TEST_CASE ("PluginManager: loadPlugin returns the instance when creation succeeds",
+           "[pluginmanager][load]")
+{
+    // Arrange
+    TempCacheDir tmp;
+    PluginManager mgr;
+    mgr.setAsyncCreateOverride ([] (const juce::PluginDescription&, double, int,
+                                    PluginManager::PluginCreationCallback cb)
+    {
+        cb (std::make_unique<TestPlugin>(), juce::String());
+    });
+
+    // Act
+    auto inst = mgr.loadPlugin (makeDesc ("Fake", "C:\\fake\\fake.vst3", 3001), 48000.0, 512);
+
+    // Assert
+    REQUIRE (inst != nullptr);
+}
+
+TEST_CASE ("PluginManager: loadPlugin returns nullptr when creation fails fast",
+           "[pluginmanager][load]")
+{
+    // Arrange
+    TempCacheDir tmp;
+    PluginManager mgr;
+    mgr.setAsyncCreateOverride ([] (const juce::PluginDescription&, double, int,
+                                    PluginManager::PluginCreationCallback cb)
+    {
+        cb (nullptr, "cannot load");
+    });
+
+    // Act
+    auto inst = mgr.loadPlugin (makeDesc ("Fake", "C:\\fake\\fake.vst3", 3002), 48000.0, 512);
+
+    // Assert
+    REQUIRE (inst == nullptr);
+}
+
+TEST_CASE ("PluginManager: loadPlugin times out and blacklists the plugin",
+           "[pluginmanager][load][timeout]")
+{
+    // Arrange: the override swallows the callback → creation "hangs"
+    TempCacheDir tmp;
+    PluginManager mgr;
+    mgr.setLoadTimeoutMs (50);
+    mgr.setAsyncCreateOverride ([] (const juce::PluginDescription&, double, int,
+                                    PluginManager::PluginCreationCallback)
+    {
+        // never invoke the callback
+    });
+
+    // Act
+    auto inst = mgr.loadPlugin (makeDesc ("Fake", "C:\\fake\\fake.vst3", 3003), 48000.0, 512);
+
+    // Assert: nullptr + blacklisted
+    REQUIRE (inst == nullptr);
+    REQUIRE (mgr.getKnownPlugins().getBlacklistedFiles().contains ("C:\\fake\\fake.vst3"));
+}
+
+TEST_CASE ("PluginManager: loadPlugin timeout blacklists the bundle key for inner-DLL descriptions",
+           "[pluginmanager][load][timeout]")
+{
+    // Arrange: description uses the inner DLL path — the blacklist key must be
+    // the bundle path so the scan-stage blacklist check (which enumerates
+    // bundle paths) actually hits.
+    TempCacheDir tmp;
+    PluginManager mgr;
+    mgr.setLoadTimeoutMs (50);
+    mgr.setAsyncCreateOverride ([] (const juce::PluginDescription&, double, int,
+                                    PluginManager::PluginCreationCallback) {});
+
+    // Act
+    auto inst = mgr.loadPlugin (makeDesc ("Fake",
+        "C:\\fake\\Fake.vst3\\Contents\\x86_64-win\\Fake.vst3", 3004), 48000.0, 512);
+
+    // Assert
+    REQUIRE (inst == nullptr);
+    REQUIRE (mgr.getKnownPlugins().getBlacklistedFiles().contains ("C:\\fake\\Fake.vst3"));
+}
+
+TEST_CASE ("PluginManager: loadPlugin ignores late callbacks from a stale generation",
+           "[pluginmanager][load][timeout]")
+{
+    // Arrange: both loads hang (callback swallowed); the first load's callback
+    // is saved and only invoked after a second load bumped the generation.
+    TempCacheDir tmp;
+    PluginManager mgr;
+    mgr.setLoadTimeoutMs (50);
+    PluginManager::PluginCreationCallback stale;
+    mgr.setAsyncCreateOverride ([&] (const juce::PluginDescription&, double, int,
+                                     PluginManager::PluginCreationCallback cb)
+    {
+        if (! stale)   // keep only the FIRST (generation 1) callback
+            stale = std::move (cb);
+    });
+
+    auto first = mgr.loadPlugin (makeDesc ("Fake", "C:\\fake\\fake.vst3", 3005), 48000.0, 512);
+    REQUIRE (first == nullptr);
+    auto second = mgr.loadPlugin (makeDesc ("Fake", "C:\\fake\\fake.vst3", 3006), 48000.0, 512);
+    REQUIRE (second == nullptr);
+
+    // Act: the stale (first-generation) callback finally arrives
+    REQUIRE_NOTHROW (stale (std::make_unique<TestPlugin>(), juce::String()));
+
+    // Assert: no crash, blacklist intact
+    REQUIRE (mgr.getKnownPlugins().getBlacklistedFiles().contains ("C:\\fake\\fake.vst3"));
 }

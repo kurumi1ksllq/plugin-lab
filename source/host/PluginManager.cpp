@@ -245,26 +245,73 @@ std::unique_ptr<juce::AudioPluginInstance> PluginManager::loadPlugin (
         return nullptr;
     }
 
-    juce::String errorMessage;
-    try
+    auto* format = formatManager.getFormat (0);
+    if (format == nullptr)
     {
-        auto instance = formatManager.createPluginInstance (desc, sampleRate, blockSize, errorMessage);
-        if (!instance)
-        {
-            CRASH_LOG_WARN ("Plugin load failed", desc.name + ": " + errorMessage);
-            return nullptr;
-        }
-        // prepareToPlay is deferred to the measurement thread (SweepRunner::run)
-        // to ensure it and processBlock run on the same thread — required by some
-        // VST3 plugins (e.g. FabFilter Pro-Q 4).
-        CRASH_LOG_INFO ("Plugin load ok", desc.name);
-        return instance;
-    }
-    catch (...)
-    {
-        CRASH_LOG_ERR ("Plugin load crash", "caught");
+        CRASH_LOG_ERR ("Plugin load", "no format");
         return nullptr;
     }
+
+    // 加载超时（计划步骤 3）：显式 createPluginInstanceAsync + WaitableEvent 超时。
+    // JUCE 同步 createInstanceFromDescription 从后台线程调用时内部就是
+    // postMessage(AsyncCreateMessage) + 无限 wait() —— 插件 initialise 挂起会让
+    // 等待线程永久阻塞。这里换成我们自己带超时的 wait：超时→线程脱出 + 预防性
+    // 黑名单（下次扫描/加载跳过）。注意真正挂起时消息线程（创建执行处）仍冻结
+    // —— 进程内不可恢复（只能杀进程），由黑名单 + 死马踏板预防下次，文档化限制。
+    // 迟到回调防护：LoadState 由 shared_ptr 持有（回调侧与调用侧共享），loadPlugin
+    // 返回（超时）时置 alive=false —— 之后消息线程才完成的创建回调被丢弃，且不会
+    // 触碰任何已析构状态（状态本身由回调的 shared_ptr 保活）。回调不捕获 this。
+    struct LoadState
+    {
+        std::unique_ptr<juce::AudioPluginInstance> instance;
+        juce::String error;
+        juce::WaitableEvent done;
+        std::atomic<bool> alive { true };
+    };
+    auto state = std::make_shared<LoadState>();
+
+    auto onCreated = [state] (std::unique_ptr<juce::AudioPluginInstance> instance,
+                              const juce::String& errorMessage) mutable
+    {
+        if (! state->alive.load())
+            return;                          // 迟到回调（loadPlugin 已超时返回）→ 忽略
+        state->instance = std::move (instance);
+        state->error = errorMessage;
+        state->done.signal();
+    };
+
+    if (asyncCreateOverride)
+        asyncCreateOverride (desc, sampleRate, blockSize, std::move (onCreated));
+    else
+        format->createPluginInstanceAsync (desc, sampleRate, blockSize, std::move (onCreated));
+
+    if (! state->done.wait (loadTimeoutMs))
+    {
+        state->alive = false;
+        // 超时：等待线程脱出。黑名单 key 用 bundle 路径（内层 DLL 路径枚举时
+        // 不匹配；bundle 路径与扫描枚举一致，见 cacheIsCurrent）。
+        auto blacklistKey = desc.fileOrIdentifier;
+        const auto contentsIdx = blacklistKey.indexOf ("\\Contents");
+        if (contentsIdx > 0)
+            blacklistKey = blacklistKey.substring (0, contentsIdx);
+        knownPlugins.addToBlacklist (blacklistKey);
+
+        CRASH_LOG_WARN ("Plugin load timeout",
+            desc.name + " - creation did not finish in "
+            + juce::String (loadTimeoutMs) + "ms, blacklisted for next run");
+        return nullptr;
+    }
+
+    if (! state->instance)
+    {
+        CRASH_LOG_WARN ("Plugin load failed", desc.name + ": " + state->error);
+        return nullptr;
+    }
+    // prepareToPlay is deferred to the measurement thread (SweepRunner::run)
+    // to ensure it and processBlock run on the same thread — required by some
+    // VST3 plugins (e.g. FabFilter Pro-Q 4).
+    CRASH_LOG_INFO ("Plugin load ok", desc.name);
+    return std::move (state->instance);
 }
 
 juce::AudioProcessorEditor* PluginManager::createEditorSafe (juce::AudioPluginInstance* plugin)
