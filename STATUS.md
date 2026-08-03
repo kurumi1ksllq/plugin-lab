@@ -1,4 +1,4 @@
-# Plugin Lab — 当前状态 (2026-08-01)
+# Plugin Lab — 当前状态 (2026-08-03)
 
 ## 已验证通过 ✅
 
@@ -85,8 +85,9 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
   - **阶段 3 ✅ 已完成（2026-08-02）**：参数扫描（ScanEngine + GUI 扫描面板 + HSL 色板 + CompressionFamily 网格，5d2c86b..7fa3068）
   - **阶段 4 ✅ 已完成（2026-08-02）**：动态压缩行为（GR 时间线 gr_timeline + τ 估计 + 实时 GR 表头，995fc54；见下"阶段 3+4 完成记录"）
   - **阶段 5 ✅ 已完成（2026-08-02）**：建模与数据整合（datasetToJSON 数据包 + data-schema.md + reverse_derive.py 反推验证，2698068；见下"阶段 5 完成记录"）
-  - **剩余（用户确认项 / 可选）**：GR τ 修复（IPC 暴露 carrier_start_hz，默认 10000）待用户确认后实施；5 个待改进项详见阶段 5 完成记录
-- T2 稳定加固（EditorCrashGuard /EHa TU、Generic 编辑器兜底、观察者指针清理）— 当前已足够稳定，可按需实施
+  - **收尾修复 ✅ 已完成（2026-08-02 深夜，957e597..b3e1813）**：GR τ 修复（IPC 暴露 carrier_start_hz 默认 10000 + GainReduction 1ms RMS 窗口 + 正 dB 副本估计，Pro-C 3 实测 τ 有效）+ ipc_client.ps1 响应超时 + JSON 解析悬挂/param_id 转义修复 + measure/scan helper 抽取 + schema 文档修正（见下"收尾修复记录"）
+  - **剩余（可选）**：5 个待改进项见"收尾修复记录"末尾
+- **T2 稳定加固**（EditorCrashGuard /EHa TU、Generic 编辑器兜底、观察者指针清理）— 当前已足够稳定，可按需实施
 
 ## 阶段 1 完成记录（2026-08-02）
 
@@ -141,12 +142,32 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 - Pro-Q 4：反推 freq 987.3Hz（1.27% 误差）、gain 6.00dB（0 误差）、Q 0.90（10.2%，容差 20% PASS）
 - Pro-C 3：threshold ±1dB PASS；ratio 14.3-23.5%（容差 25% PASS，偏因真实插件 burst 未充分压缩 + soft knee）
 
-**已知局限与建议**（本任务不修生产代码，记入待办）：
+**已知局限与建议**（阶段 5 交付时记录；其中 GR τ 已于收尾修复落地，见下）：
 
-- **GR τ 真实插件失效**：dynamic 源 20Hz 起始扫频低频段污染 GR 沿 + IPC 无法设 carrier_start_hz → tau.valid=false。修复建议：**IPC 暴露 carrier_start_hz（默认 10000）**——待用户确认的后续项
+- **GR τ 真实插件失效 → ✅ 已修复（957e597）**：IPC 暴露 `carrier_start_hz`（默认 10000，匹配 CompressionFamily）+ GainReduction 改 1ms RMS 窗口 + TimeConstants 在正 dB 副本上估计 → Pro-C 3 实测 `tau.valid=true, attack=3.9ms, release=39.7ms`
 - **ratio 25% 容差说明**：真实插件 burst 未充分压缩 + soft knee 造成的系统性偏差，25% 容差内可接受
-- **loadPlugin name 匹配说明**：按名称匹配插件 description，大小写/别名可能不命中
-- **待改进项（5 个）**：data-schema.md scan 结构描述与实现差异、loadPlugin name 匹配、carrier_start_hz IPC 暴露、Pro-Q 4 Band 1 Used、getParams 不带 param_id
+- **loadPlugin name 匹配说明**：按名称匹配插件 description，大小写/别名可能不命中（待改进项 2）
+- **待改进项（4 个，见"收尾修复记录"）**：data-schema.md scan 结构描述与实现差异、loadPlugin name 匹配、Pro-Q 4 Band 1 Used、getParams 不带 param_id
+
+## 收尾修复记录（2026-08-02 深夜，957e597 → b3e1813）
+
+**commit 范围**：`957e597` → `b3e1813`（HEAD 已 push origin/main），阶段 5 后的收尾清理 + 遗留修复。
+
+**关键修复**：
+
+| #   | Commit    | 内容                                                                                                                                                                                                                                                                                                                                  |
+| --- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `957e597` | **GR τ 修复**（三件套）：IPC 解析 `carrier_start_hz`（默认 10000 匹配 CompressionFamily）；GainReduction 改 1ms RMS 窗口（默认 5ms 模糊 ms 级 attack 沿）；TimeConstants 在正 dB 副本上估计（匹配 detectMarkers 约定）。Pro-C 3 实测 `tau.valid=true, attack=3.9ms, release=39.7ms`（此前 valid=false）。新增 3 个 CommandParser 测试 |
+| 2   | `50d6d68` | ipc_client.ps1 加可配置响应超时（scan 同步 60s 不再挂起）                                                                                                                                                                                                                                                                             |
+| 3   | `3cc6235` | 修 startScan/startMeasurement 悬挂 JSON parse + scan param_id 转义                                                                                                                                                                                                                                                                    |
+| 4   | `dab0607` | 抽 `parseSource`/`configureSessionSource`/`resolveExportPath`/`buildExportContext` helper，去重 measure/scan 路径                                                                                                                                                                                                                     |
+| 5   | `c9089fe` | data-schema.md 修正 compression_family gr_db 示例（正 dB = 压缩量）                                                                                                                                                                                                                                                                   |
+| 6   | `e5ffe5e` | data-schema.md 补充 export_path 语义、type 缺省、dry/wet 对齐说明                                                                                                                                                                                                                                                                     |
+| 7   | `b3e1813` | chore：清理过时 handoff/token 文档、monitor.ps1 移入 tools/、gitignore 测量产物                                                                                                                                                                                                                                                       |
+
+**测试**：`116/116 全绿`（阶段 5 的 113 + 3 新增），`/W4 /WX` 双 target 零警告。
+
+**待改进项（4 个，未做）**：data-schema.md scan 结构描述与实现差异（部分已修，待最终核对）、loadPlugin name 大小写/别名匹配、Pro-Q 4 Band 1 Used 状态、getParams 响应不带 param_id。
 
 ## Oracle 架构审查（2026-08-02）
 
