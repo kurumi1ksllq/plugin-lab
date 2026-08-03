@@ -25,7 +25,8 @@
 ### 测量上下文（Context 块）
 
 `frequency_response` / `harmonic_analysis` / `compression_curve` 的上下文字段平铺在顶层；
-`scan` / `gr_timeline` / `compression_family` / `dataset` 嵌套在 `"context": {...}` 内。
+`scan` / `gr_timeline` / `compression_family` / `dataset` 的测量上下文字段收集在顶层 `"context": {...}`
+对象中，数据块（`scan` / `family` / `gr` / `tau` 等）与 `context` 平级（sibling）。
 `raw_capture` 只带 plugin/class_id/latency/parameter_snapshot/source。
 
 | 字段                 | 类型   | 说明                                                                                                                                                          |
@@ -35,7 +36,7 @@
 | `latency_samples`    | int    | 测量时观测的插件延迟（采样点）                                                                                                                                |
 | `sample_rate`        | number | 测量采样率（Hz）                                                                                                                                              |
 | `measurement`        | object | `sample_rate` + `block_size`（处理块大小）                                                                                                                    |
-| `parameter_snapshot` | object | 测量时全部参数归一化值快照（可复现参数状态）                                                                                                                  |
+| `parameter_snapshot` | object | 测量时全部参数归一化值快照（可复现参数状态）。键为参数显示名（display name），非 param_id（param_id 经 getParams 响应暴露）                                   |
 | `source`             | object | 输入源元数据：`type`（signal/noise/file/dynamic）、`file_path`、`sample_rate`、`resample_ratio`、`duration_sec`、`noise_type`、`seed`（固定种子，噪声可复现） |
 
 **为什么需要**：AI 复刻插件行为时，同一插件的同一参数状态在不同采样率/块大小/源下表现不同；
@@ -46,6 +47,7 @@
 - 频率：1 位小数（`fmtDouble(v, 1)`）；幅度/相位/曲线：2 位小数。
 - THD/谐波百分比：4 位小数；扫描参数值：6 位小数；τ：6 位小数；时间：4 位小数。
 - 导出测试锁定"无精度损失往返"（`[export][precision]` 等）。
+- 示例 JSON 中的数值为结构示意，实际输出精度以「数值精度」表为准。
 
 ---
 
@@ -59,7 +61,7 @@
   "latency_samples": 64,
   "sample_rate": 48000.0,
   "measurement": { "sample_rate": 48000.0, "block_size": 512 },
-  "parameter_snapshot": { "gain": 0.5 },
+  "parameter_snapshot": { "Gain": 0.5 },
   "source": { "type": "signal" },
   "raw": [
     { "f": 100.0, "mag": -3.0, "phase": 12.0 },
@@ -189,7 +191,7 @@
     "latency_samples": 64,
     "sample_rate": 48000.0,
     "measurement": { "sample_rate": 48000.0, "block_size": 512 },
-    "parameter_snapshot": { "gain": 0.5 },
+    "parameter_snapshot": { "Gain": 0.5 },
     "source": { "type": "signal" }
   },
   "scan": {
@@ -333,7 +335,7 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
     "latency_samples": 64,
     "sample_rate": 48000.0,
     "measurement": { "sample_rate": 48000.0, "block_size": 512 },
-    "parameter_snapshot": { "gain": 0.5 },
+    "parameter_snapshot": { "Gain": 0.5 },
     "source": { "type": "signal" }
   },
   "note": "detected peak 993Hz +6.0dB -> likely bell @1k Q1",
