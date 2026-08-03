@@ -834,6 +834,12 @@ private:
 
         scanThread = std::make_unique<std::thread> ([pm, out, notify]() mutable
         {
+#ifdef JUCE_WINDOWS
+            // 后台扫描线程降优先级（步骤 6 启动卡顿修复）：插件 DLL 初始化可能
+            // CPU 密集（UA 系列等，实测单插件峰值多核满载），普通优先级会与用户
+            // 前台操作抢占 CPU 导致整机卡顿。降为 BELOW_NORMAL 后扫描让位于前台。
+            ::SetThreadPriority (::GetCurrentThread (), THREAD_PRIORITY_BELOW_NORMAL);
+#endif
             bool ok = true;
             try
             {
@@ -890,6 +896,10 @@ private:
 
         loadThread = std::make_unique<std::thread> ([pm, desc, safeName, sr, bs, out, notify]() mutable
         {
+#ifdef JUCE_WINDOWS
+            // 同扫描线程：插件构造可能 CPU 密集/耗时，降优先级避免抢占用户前台。
+            ::SetThreadPriority (::GetCurrentThread (), THREAD_PRIORITY_BELOW_NORMAL);
+#endif
             try
             {
                 auto instance = pm->loadPlugin (desc, sr, bs);

@@ -1,6 +1,7 @@
 #include "PluginManager.h"
 #include "EditorCrashGuard.h"
 #include "../utils/CrashLog.h"
+#include <map>
 
 PluginManager::PluginManager()
 {
@@ -44,6 +45,7 @@ bool PluginManager::loadCache()
         return false;                       // 旧版缓存 → 调用方回退全量重扫
 
     knownPlugins.recreateFromXml (*xml);
+    dedupeKnownPlugins();
     pruneKnownPlugins();
     return true;
 }
@@ -63,6 +65,76 @@ void PluginManager::saveCache()
     auto temp = cacheFile.withFileExtension (".xml.tmp");
     if (temp.replaceWithText (xml->toString()))
         temp.replaceFileIn (cacheFile);
+}
+
+bool PluginManager::cacheIsCurrent (const juce::String& fileOrIdentifier) const
+{
+    // 增量跳过判断（步骤 6，启动卡顿修复）：目录型 VST3 bundle 无
+    // moduleinfo.json 时扫描走慢路径，缓存条目用内层 DLL 路径
+    // （...\Contents\x86_64-win\X.vst3）+ 内层 DLL 的 mtime；而目录枚举产出
+    // bundle 路径（...\X.vst3）。KnownPluginList::getTypeForFile 的精确匹配
+    // 对此永不命中 → 这些 bundle 每轮热启动全量重扫（LoadLibrary + InitDll，
+    // 每插件 1-3s——31.2s 热扫的主体）。这里把枚举路径同时匹配"精确"与
+    // "bundle\Contents 前缀"条目，并按条目自己的 mtime 基准比较：
+    //   - 内层/单文件条目：文件 mtime（正确的更新检测基准——touch DLL 即重扫）
+    //   - bundle 目录条目：先按目录 mtime（快路径 moduleinfo.json 语义）；
+    //     不符则回退 bundle 内第一个 .vst3（normalize 遗留条目的 lastFileModTime
+    //     是内层 DLL mtime，目录 mtime 永远不相等）
+    auto types = knownPlugins.getTypes();
+    for (const auto& d : types)
+    {
+        const bool samePath = d.fileOrIdentifier == fileOrIdentifier
+                           || d.fileOrIdentifier.startsWith (fileOrIdentifier + "\\Contents");
+        if (samePath)
+        {
+            auto probe = juce::File (d.fileOrIdentifier);
+            if (probe.isDirectory())
+            {
+                if (probe.getLastModificationTime() == d.lastFileModTime)
+                    return true;
+                juce::Array<juce::File> dlls;
+                probe.findChildFiles (dlls, juce::File::findFiles, true, "*.vst3");
+                for (const auto& f : dlls)
+                    if (f.getLastModificationTime() == d.lastFileModTime)
+                        return true;
+                return false;
+            }
+            return probe.getLastModificationTime() == d.lastFileModTime;
+        }
+    }
+    return false;
+}
+
+void PluginManager::dedupeKnownPlugins()
+{
+    // 扫描后清理（步骤 6）：KnownPluginList::scanAndAddFile 只 addType、从不删除
+    // 旧条目——重扫一个"已存在 legacy bundle 路径条目"的文件会叠加一条新的
+    // inner 条目，同一插件在列表/缓存里出现两次。按 bundle 归一化 key 去重，
+    // 优先保留 inner 条目（mtime 基准 = 内层 DLL，正确），移除同 key 的
+    // bundle 目录条目（normalize 遗留或快路径产物）。
+    auto keyOf = [] (const juce::String& id)
+    {
+        const auto idx = id.indexOf ("\\Contents");
+        return idx > 0 ? id.substring (0, idx) : id;
+    };
+
+    auto types = knownPlugins.getTypes();
+    juce::StringArray innerKeys;
+    for (const auto& d : types)
+        if (d.fileOrIdentifier.contains ("Contents"))
+            innerKeys.add (keyOf (d.fileOrIdentifier));
+
+    juce::StringArray kept;
+    for (const auto& d : types)
+    {
+        const auto key = keyOf (d.fileOrIdentifier);
+        const bool isInner = d.fileOrIdentifier.contains ("Contents");
+        if (kept.contains (key)
+            || (! isInner && innerKeys.contains (key)))
+            knownPlugins.removeType (d);
+        else
+            kept.add (key);
+    }
 }
 
 void PluginManager::pruneKnownPlugins()
@@ -89,8 +161,43 @@ void PluginManager::scanDirectory (const juce::File& directory, const juce::File
         juce::FileSearchPath (directory.getFullPathName()),
         true, deadMansPedalFile, true);
 
+    // 步骤 6（启动卡顿修复）：PluginDirectoryScanner 只暴露下一个待扫文件的
+    // 名字（getNextPluginFileThatWillBeScanned），而增量跳过（cacheIsCurrent）
+    // 需要完整路径。这里用与 scanner 队列同源的 searchPathsForPlugins 枚举
+    // 目录，建 名字→路径 映射（getNextPluginFileThatWillBeScanned 内部同样走
+    // getNameOfPluginFromIdentifier，key 一致）。
+    std::map<juce::String, juce::String> pathByName;
+    for (const auto& p : vst3Format->searchPathsForPlugins (
+             juce::FileSearchPath (directory.getFullPathName()), true, true))
+        pathByName[vst3Format->getNameOfPluginFromIdentifier (p)] = p;
+
     while (true)
     {
+        // 扫描阶段黑名单（步骤 6，启动卡顿修复）：Pianoteq 等宿主杀手插件在扫描
+        // 时无 desc.name 可用（还没构造），按待扫文件名拦截——直接 skip，不
+        // LoadLibrary/InitDll。此前 prune 把它们从内存列表删除 → getTypeForFile
+        // 永不命中 → 每轮热启动都全量重扫（InitDll 授权检查 CPU 密集，实测
+        // 单插件 8s + 多核满载）。注意 getNextPluginFileThatWillBeScanned 在
+        // nextIndex=0 时越界（JUCE Array[-1]），用 getProgress() < 1.0 保证
+        // 队列非空。
+        if (scanner.getProgress() < 1.0f)
+        {
+            const auto nextName = scanner.getNextPluginFileThatWillBeScanned();
+            if (isBlacklistedName (nextName))
+            {
+                scanner.skipNextFile();
+                continue;
+            }
+            // 增量跳过（cacheIsCurrent 用内层 DLL 的 mtime 精确判断；目录型
+            // bundle 的 bundle 路径可命中缓存的 inner 前缀条目）。
+            const auto it = pathByName.find (nextName);
+            if (it != pathByName.end() && cacheIsCurrent (it->second))
+            {
+                scanner.skipNextFile();
+                continue;
+            }
+        }
+
         juce::String name;
         bool ok = false;
         try { ok = scanner.scanNextFile (true, name); }
@@ -121,6 +228,8 @@ void PluginManager::scanSystemDirectories()
         .getChildFile ("Programs\\Common\\VST3");
     if (localDir.isDirectory()) scanDirectory (localDir, pedal);
 
+    // 扫描可能叠加了重复条目（scanAndAddFile 只加不删）→ 去重后再落盘。
+    dedupeKnownPlugins();
     saveCache();
 }
 

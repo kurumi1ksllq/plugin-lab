@@ -60,6 +60,23 @@ public:
         (temp file + rename). */
     void saveCache();
 
+    /** True if the cache already has a current (mtime-consistent) entry for the
+        given scan identifier (a directory-bundle path or a single-file path).
+        Directory VST3 bundles without moduleinfo.json are cached under their
+        inner DLL path (...\\Contents\\x86_64-win\\X.vst3) while enumeration
+        produces the bundle path — so this matches the bundle path against both
+        exact and inner-prefix entries, comparing the inner DLL's mtime (the
+        correct update-detection baseline). The scan loop skips identifiers this
+        returns true for, fixing the hot-start lag from re-scanning the same
+        12 bundles every launch (plan step 6). */
+    bool cacheIsCurrent (const juce::String& fileOrIdentifier) const;
+
+    /** Remove duplicate entries for the same plugin (scanAndAddFile only adds,
+        never replaces — re-scanning a file that already has a legacy bundle-path
+        entry piles up a second inner-DLL entry). Keyed by the bundle path; the
+        inner-DLL entry (correct mtime baseline) is kept over the bundle-path one. */
+    void dedupeKnownPlugins();
+
     /** True if a plugin name is in the host-killing blacklist (Pianoteq family
         terminates the host process; see STATUS.md). */
     static bool isBlacklistedName (const juce::String& name);

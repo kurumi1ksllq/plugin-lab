@@ -236,3 +236,173 @@ TEST_CASE ("PluginManager: saveCache writes a versioned, parseable cache atomica
     REQUIRE (xml->hasTagName ("KNOWNPLUGINS"));
     REQUIRE (xml->getIntAttribute ("version", -1) == PluginManager::kCacheVersion);
 }
+
+//==============================================================================
+// Step 6 (startup lag): cacheIsCurrent — directory VST3 bundles without
+// moduleinfo.json are cached under their inner DLL path (...\Contents\x86_64-win\X.vst3)
+// while enumeration always produces the bundle path (...\X.vst3). The incremental
+// scan must therefore match bundle paths against both exact and inner-prefix
+// entries, comparing the inner DLL's mtime (the correct update-detection
+// baseline) — otherwise these bundles are re-scanned on every hot start (1-3s
+// each, the 31s hot-scan root cause).
+
+TEST_CASE ("PluginManager: cacheIsCurrent matches a bundle path to its inner-DLL cache entry",
+           "[pluginmanager][cache][incremental]")
+{
+    // Arrange: real bundle directory structure with an inner DLL
+    TempCacheDir tmp;
+    auto bundle = tmp.dir.getChildFile ("MyBundle.vst3");
+    bundle.createDirectory();
+    auto arch = bundle.getChildFile ("Contents").getChildFile ("x86_64-win");
+    arch.createDirectory();
+    auto inner = arch.getChildFile ("MyBundle.vst3");
+    inner.replaceWithText ("marker");
+
+    auto desc = makeDesc ("MyBundle", inner.getFullPathName(), 2001);
+    desc.lastFileModTime = inner.getLastModificationTime();
+    PluginManager mgr;
+    mgr.getKnownPlugins().addType (desc);
+
+    // Act / Assert: the bundle enumeration path matches the inner entry
+    REQUIRE (mgr.cacheIsCurrent (bundle.getFullPathName()));
+    // and the inner path itself matches exactly
+    REQUIRE (mgr.cacheIsCurrent (inner.getFullPathName()));
+}
+
+TEST_CASE ("PluginManager: cacheIsCurrent returns false when the inner DLL was updated",
+           "[pluginmanager][cache][incremental]")
+{
+    // Arrange
+    TempCacheDir tmp;
+    auto bundle = tmp.dir.getChildFile ("MyBundle.vst3");
+    bundle.createDirectory();
+    auto arch = bundle.getChildFile ("Contents").getChildFile ("x86_64-win");
+    arch.createDirectory();
+    auto inner = arch.getChildFile ("MyBundle.vst3");
+    inner.replaceWithText ("marker");
+
+    auto desc = makeDesc ("MyBundle", inner.getFullPathName(), 2002);
+    desc.lastFileModTime = inner.getLastModificationTime();
+    PluginManager mgr;
+    mgr.getKnownPlugins().addType (desc);
+    REQUIRE (mgr.cacheIsCurrent (bundle.getFullPathName()));
+
+    // Act: touch the inner DLL (simulates a plugin update)
+    inner.setLastModificationTime (juce::Time (juce::Time::currentTimeMillis() + 5000));
+
+    // Assert: no longer current → must re-scan
+    REQUIRE_FALSE (mgr.cacheIsCurrent (bundle.getFullPathName()));
+}
+
+TEST_CASE ("PluginManager: cacheIsCurrent returns false for unknown paths",
+           "[pluginmanager][cache][incremental]")
+{
+    // Arrange / Act / Assert
+    TempCacheDir tmp;
+    PluginManager mgr;
+    REQUIRE_FALSE (mgr.cacheIsCurrent (tmp.dir.getChildFile ("Nope.vst3").getFullPathName()));
+}
+
+TEST_CASE ("PluginManager: cacheIsCurrent matches a single-file path exactly",
+           "[pluginmanager][cache][incremental]")
+{
+    // Arrange
+    TempCacheDir tmp;
+    auto pluginFile = createTempPluginFile (tmp.dir, "Flat.vst3");
+    auto desc = makeDesc ("Flat", pluginFile.getFullPathName(), 2003);
+    desc.lastFileModTime = pluginFile.getLastModificationTime();
+    PluginManager mgr;
+    mgr.getKnownPlugins().addType (desc);
+
+    // Act / Assert
+    REQUIRE (mgr.cacheIsCurrent (pluginFile.getFullPathName()));
+}
+
+TEST_CASE ("PluginManager: cacheIsCurrent returns false when the cached mtime is stale",
+           "[pluginmanager][cache][incremental]")
+{
+    // Arrange: cache mtime deliberately older than the file
+    TempCacheDir tmp;
+    auto pluginFile = createTempPluginFile (tmp.dir, "Flat2.vst3");
+    auto desc = makeDesc ("Flat2", pluginFile.getFullPathName(), 2004);
+    desc.lastFileModTime = juce::Time (pluginFile.getLastModificationTime().toMilliseconds() - 100000);
+    PluginManager mgr;
+    mgr.getKnownPlugins().addType (desc);
+
+    // Act / Assert
+    REQUIRE_FALSE (mgr.cacheIsCurrent (pluginFile.getFullPathName()));
+}
+
+TEST_CASE ("PluginManager: cacheIsCurrent handles a bundle-path entry whose mtime is the inner DLL's",
+           "[pluginmanager][cache][incremental]")
+{
+    // Arrange: legacy entry — fileOrIdentifier is the bundle directory but
+    // lastFileModTime is the inner DLL's (produced by the pre-step-6 normalize).
+    // File(bundle).mtime (directory) != lastFileModTime, so the check must probe
+    // the bundle's inner DLL before deciding.
+    TempCacheDir tmp;
+    auto bundle = tmp.dir.getChildFile ("MyBundle.vst3");
+    bundle.createDirectory();
+    auto arch = bundle.getChildFile ("Contents").getChildFile ("x86_64-win");
+    arch.createDirectory();
+    auto inner = arch.getChildFile ("MyBundle.vst3");
+    inner.replaceWithText ("marker");
+
+    auto desc = makeDesc ("MyBundle", bundle.getFullPathName(), 2010);
+    desc.lastFileModTime = inner.getLastModificationTime();   // bundle path + inner DLL mtime
+    PluginManager mgr;
+    mgr.getKnownPlugins().addType (desc);
+
+    // Act / Assert
+    REQUIRE (mgr.cacheIsCurrent (bundle.getFullPathName()));
+}
+
+TEST_CASE ("PluginManager: dedupeKnownPlugins keeps one entry per bundle (inner preferred)",
+           "[pluginmanager][cache][dedupe]")
+{
+    // Arrange: inner entry + legacy bundle entry for the same plugin
+    TempCacheDir tmp;
+    auto bundle = tmp.dir.getChildFile ("MyBundle.vst3");
+    bundle.createDirectory();
+    auto arch = bundle.getChildFile ("Contents").getChildFile ("x86_64-win");
+    arch.createDirectory();
+    auto inner = arch.getChildFile ("MyBundle.vst3");
+    inner.replaceWithText ("marker");
+
+    PluginManager mgr;
+    mgr.getKnownPlugins().addType (makeDesc ("MyBundle", inner.getFullPathName(), 2011));
+    mgr.getKnownPlugins().addType (makeDesc ("MyBundle", bundle.getFullPathName(), 2012));
+    REQUIRE (mgr.getKnownPlugins().getNumTypes() == 2);
+
+    // Act
+    mgr.dedupeKnownPlugins();
+
+    // Assert: exactly one entry remains, and it is the inner-DLL one
+    REQUIRE (mgr.getKnownPlugins().getNumTypes() == 1);
+    auto types = mgr.getKnownPlugins().getTypes();
+    REQUIRE (types[0].fileOrIdentifier == inner.getFullPathName());
+}
+
+TEST_CASE ("PluginManager: dedupeKnownPlugins keeps single entries and distinct bundles",
+           "[pluginmanager][cache][dedupe]")
+{
+    // Arrange: two distinct bundles + one plain file, no duplicates
+    TempCacheDir tmp;
+    auto b1 = tmp.dir.getChildFile ("One.vst3");
+    b1.createDirectory();
+    auto b2 = tmp.dir.getChildFile ("Two.vst3");
+    b2.createDirectory();
+    auto plain = createTempPluginFile (tmp.dir, "Plain.vst3");
+
+    PluginManager mgr;
+    mgr.getKnownPlugins().addType (makeDesc ("One", b1.getFullPathName(), 2021));
+    mgr.getKnownPlugins().addType (makeDesc ("Two", b2.getFullPathName(), 2022));
+    mgr.getKnownPlugins().addType (makeDesc ("Plain", plain.getFullPathName(), 2023));
+    REQUIRE (mgr.getKnownPlugins().getNumTypes() == 3);
+
+    // Act
+    mgr.dedupeKnownPlugins();
+
+    // Assert: nothing removed
+    REQUIRE (mgr.getKnownPlugins().getNumTypes() == 3);
+}
