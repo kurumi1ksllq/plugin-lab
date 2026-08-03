@@ -450,6 +450,27 @@ TEST_CASE ("CommandParser: getParams fails when no plugin loaded", "[commandpars
     REQUIRE (response.contains ("\"error\""));
 }
 
+TEST_CASE ("CommandParser: getParams includes stable param_id distinct from display name",
+           "[commandparser][getParams-param-id]")
+{
+    // ---- Arrange ----
+    // TestPlugin exposes two hosted parameters whose stable IDs differ from
+    // their display names: "gain" ↔ "Gain" (index 0), "latency" ↔ "Latency"
+    // (index 1). The param_id field lets callers address parameters without
+    // parsing display names.
+    TestPlugin plugin;
+    CommandParser parser;
+    parser.setPluginInstance (&plugin);
+
+    // ---- Act ----
+    auto response = parser.handleCommand (R"({"cmd":"getParams"})");
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains (R"("param_id":"gain")"));
+    REQUIRE (response.contains (R"("param_id":"latency")"));
+}
+
 //==============================================================================
 // 6. Unknown command
 //==============================================================================
