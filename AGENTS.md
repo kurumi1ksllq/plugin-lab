@@ -28,18 +28,18 @@ PluginLab/
 
 ## WHERE TO LOOK
 
-| 任务                      | 位置                                                 | 备注                                       |
-| ------------------------- | ---------------------------------------------------- | ------------------------------------------ |
-| 插件扫描/加载/崩溃保护    | `source/host/PluginManager.cpp`                      | /EHa + Pianoteq 黑名单                     |
-| 测量执行（4 类型 × 4 源） | `source/capture/MeasurementSession.*`                | 类型: freq/harmonic/compression/grTimeline |
-| 参数扫描                  | `source/scan/ScanEngine.*`                           | 快照/恢复/取消 RAII                        |
-| 信号生成（新增生成器）    | `source/signal/`                                     | 实现 `SignalGenerator` 接口                |
-| JSON 导出/格式化          | `source/analysis/Export.cpp`                         | 手写转义，非 juce::JSON                    |
-| IPC 命令                  | `source/ipc/` + `docs/data-schema.md`                | 协议契约                                   |
-| 实时曲线渲染              | `source/ui/PlotWidget.cpp`                           | 增量绘制 + 50ms 节流                       |
-| 崩溃日志/minidump         | `source/utils/CrashLog.cpp`                          | `%TEMP%\pluginlab_crashlog.txt`            |
-| 导出 JSON 反推验证        | `tools/reverse_derive.py`                            | stdlib-only                                |
-| 测试设施（假插件）        | `tests/TestPlugin.h`、`tests/TestCompressorPlugin.h` | 确定性 ground truth                        |
+| 任务                      | 位置                                                 | 备注                                        |
+| ------------------------- | ---------------------------------------------------- | ------------------------------------------- |
+| 插件扫描/加载/崩溃保护    | `source/host/PluginManager.cpp`                      | /EHa + Pianoteq 黑名单                      |
+| 测量执行（4 类型 × 4 源） | `source/capture/MeasurementSession.*`                | 类型: freq/harmonic/compression/grTimeline  |
+| 参数扫描                  | `source/scan/ScanEngine.*`                           | 快照/恢复/取消 RAII                         |
+| 信号生成（新增生成器）    | `source/signal/`                                     | 实现 `SignalGenerator` 接口                 |
+| JSON 导出/格式化          | `source/analysis/Export.cpp`                         | 手写转义，非 juce::JSON                     |
+| IPC 命令                  | `source/ipc/` + `docs/data-schema.md`                | 协议契约（含 `getScanStatus` 扫描状态快照） |
+| 实时曲线渲染              | `source/ui/PlotWidget.cpp`                           | 增量绘制 + 50ms 节流                        |
+| 崩溃日志/minidump         | `source/utils/CrashLog.cpp`                          | `%TEMP%\pluginlab_crashlog.txt`             |
+| 导出 JSON 反推验证        | `tools/reverse_derive.py`                            | stdlib-only                                 |
+| 测试设施（假插件）        | `tests/TestPlugin.h`、`tests/TestCompressorPlugin.h` | 确定性 ground truth                         |
 
 ## CODE MAP
 
@@ -97,3 +97,5 @@ ctest --test-dir build -C Release --timeout 180
 - DESIGN.md 中 vocal 素材路径写 `take01.wav`，实际在 `samples/take01.wav`（未入库）
 - 构建产物：`build/`（MSVC）与 `cmake-build-debug/`（CLion Ninja）并存
 - 知识库分层：本文件（根）+ `source/AGENTS.md` + 各模块子文件 + `tests/AGENTS.md`
+- **插件缓存**：`%APPDATA%/PluginLab/pluginlist.xml`（根 `version=1`；`loadCache/saveCache` 见 PluginManager；原子写 temp+replaceFileIn）；**黑名单随缓存往返**（`<BLACKLISTED>` 子元素）；**死马踏板** `%APPDATA%/PluginLab/deadMansPedal`（挂起/崩溃插件下次自动黑名单）
+- 扫描/加载线程模型：专用一次性 `std::thread`（**析构不 join**，放弃用 `release()`）；worker 不触碰宿主成员（shared_ptr 状态 + callAsync alive-guard）；扫描看门狗（无进展 60s→黑名单+abandon，上限 3 次）；热扫增量靠 `cacheIsCurrent()`（内层 DLL mtime 基准）

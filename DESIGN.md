@@ -406,3 +406,32 @@ class FilePlayback : public SignalGenerator {
 - [ ] 阶段 4：动态压缩测量（GR 时间线 / attack-release / opto-vari-mu）
 - [ ] 阶段 5：数据整合建模 + 反推验证
 - [ ] 各阶段 GitHub push 存档
+
+## 扫描架构（2026-08-04 更新，计划见 docs/plan-scan-optimization.md）
+
+> 覆盖 VST3 插件扫描/加载两条路径的 P0 死锁/慢启动修复与 P1/P2 增强。
+
+### 扫描流程（方案 1-5 之后）
+
+```
+启动 → 专用扫描线程（BELOW_NORMAL 优先级）
+  → loadCache()：XML 解析 → version 校验 → recreateFromXml → dedupe → prune
+      （损坏/版本不符 → clear 回退全量）
+  → PluginDirectoryScanner × 2 目录（真实死马踏板文件）
+      ─ 每文件：Pianoteq 文件名拦截(skipNextFile) → cacheIsCurrent()(skipNextFile)
+        → scanNextFile(true) → updateScanProgress()
+      ─ 看门狗（消息线程 Timer 500ms）：progress 无变化超 60s → 黑名单+abandon
+  → dedupeKnownPlugins() → saveCache()（原子写）
+  → 完成：callAsync(alive-guarded notify) → 消息线程 UI 更新
+```
+
+### 关键语义
+
+- **增量跳过**：`cacheIsCurrent()`（内层 DLL mtime 基准，bundle 路径精确/前缀匹配）——JUCE `getTypeForFile` 对"枚举 bundle 路径 vs 缓存内层 DLL 路径"永不命中，是热扫 31.2s 的根因。
+- **黑名单三层**：①扫描阶段文件名拦截（Pianoteq，无 desc.name）②加载阶段 `isBlacklistedName` ③`KnownPluginList` 持久化黑名单（`BLACKLISTED` 随缓存往返 + 死马踏板自动注入）。
+- **死马踏板**：挂起/崩溃 = 路径残留 → 下次构造自动黑名单 + 移队尾（JUCE 内部语义）。
+- **关窗语义**：析构**不 join** 后台线程（挂起 DLL 无法终止）——alive 标志 + 消息线程串行化保证晚归回调不触碰已销毁成员；`shared_ptr<PluginManager>` 让放弃的扫描线程持有管理器存活至结束。
+- **加载超时**：`createPluginInstanceAsync` + WaitableEvent(30s)；真挂起=消息线程冻结，进程内不可恢复（文档化限制），黑名单+踏板预防下次。
+- **扫描看门狗**：挂起上限 3 次（每次泄漏一线程+锁一 DLL 必须封顶）；黑名单立即持久化（卡死扫描到不了 saveCache，否则重启重挂）。
+- **IPC**：`getScanStatus` 快照命令（快照+推送双轨的快照侧，中途连接者拿当前状态）。
+- **线程模型**：扫描/加载各专用一次性线程（`unique_ptr<std::thread>` 显式放弃）；worker 不触碰宿主成员（shared_ptr 状态 + callAsync alive-guard）；ThreadPool 不再承担扫描/加载。

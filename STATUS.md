@@ -218,3 +218,26 @@ tools/VST3Scanner         # 独立扫描工具（当前未使用，主进程内�
 monitor.ps1               # 实时监控脚本
 DESIGN.md                 # 设计文档
 ```
+
+## 扫描优化专项（2026-08-03/04，计划见 docs/plan-scan-optimization.md）
+
+> 覆盖 P0 关窗死锁 + P0 慢启动 + P1 增量 UI/加载超时/扫描看门狗 + P2 进度 IPC。
+> 提交：e2d45c0（步骤0）→ 9c2ca4f（步骤1）→ 8f68234（步骤6 性能）→ fa74d45（步骤2）→ 4fb74b1（步骤3）→ cb83c79（步骤4）→ c7f7f9f（步骤5）。155/155 测试绿。
+
+### 决策记录
+
+1. **线程模型**（步骤 0）：扫描/加载从 ThreadPool(2) 改为**专用一次性 std::thread**（`unique_ptr<std::thread>`），析构**显式放弃不 join**（挂起 DLL 无法终止，join=永久阻塞=关窗死锁）。worker 不触碰宿主成员（持 `shared_ptr<PluginManager>` + shared outcome），完成经 `MessageManager::callAsync` + alive 标志（消息线程与析构串行化；`juce_MessageManager.cpp:81-92` post() 在管理器销毁后安全丢弃）。generation token 防旧代写。
+2. **XML 缓存**（步骤 1）：`%APPDATA%/PluginLab/pluginlist.xml`，根 `version="1"` 属性；`createXml/recreateFromXml` 往返（含 BLACKLISTED 子元素）；**原子写** temp + `replaceFileIn`（ReplaceFile）；loadCache 校验 version → 损坏/版本不符回退全量重扫；剪枝 ghost（文件不存在）+ Pianoteq 名。
+3. **死马踏板接线**（步骤 1）：`PluginDirectoryScanner` 第 5 参传真实路径 `%APPDATA%/PluginLab/deadMansPedal`。语义（源码级）：scanNextFile 扫描前写当前插件路径、成功后移除（juce_PluginDirectoryScanner.cpp:108-117）；**挂起/崩溃=路径残留 → 下次构造自动 addToBlacklist + 移队尾**。
+4. **增量跳过**（步骤 6）：`cacheIsCurrent()` 自己实现增量判断（不依赖 JUCE `getTypeForFile` 精确匹配）——枚举 bundle 路径同时匹配"精确"与"`bundle\Contents` 前缀"缓存条目，用**内层 DLL mtime** 比较（正确更新检测基准）；`dedupeKnownPlugins()` 去重（scanAndAddFile 只加不删 → bundle+inner 重复条目，inner 优先保留）。**根因**（explore 团队 3 路调查）：12 个无 moduleinfo.json 的目录型 bundle 走慢路径，缓存存内层 DLL 路径而枚举产 bundle 路径 → getTypeForFile 永不命中 → 每轮热启动全量重扫（1-3s/个）。热扫实测 **31.2s → 0.5s**，CPU 峰值 **521% → 0-3%**。
+5. **扫描阶段黑名单**（步骤 6）：Pianoteq（宿主杀手）按**待扫文件名**拦截（此刻无 desc.name）——`getNextPluginFileThatWillBeScanned()` + `skipNextFile()`；此前 prune 删内存条目 → getTypeForFile null → 每轮重扫（InitDll 授权检查 CPU 密集 8s+）。
+6. **加载超时**（步骤 3）：`loadPlugin` 改显式 `createPluginInstanceAsync` + `WaitableEvent` 超时（默认 30s，`setLoadTimeoutMs` 可注入）→ 超时脱出 + 黑名单（bundle key）+ nullptr；迟到回调由 LoadState.alive 丢弃（回调不捕获 this）。**限制**：真挂起=消息线程冻结（JUCE 创建在消息线程），进程内不可恢复只能杀进程——黑名单+死马踏板预防下次。
+7. **扫描看门狗**（步骤 4）：PluginManager 跟踪扫描状态（beginScan/updateScanProgress/endScan）；Main 消息线程 Timer(500ms) 轮询，progress 无变化超 `kScanHangTimeoutMs`(60s) → `handleScanHang()`（黑名单当前文件 bundle key + **立即持久化**——卡死扫描到不了 saveCache，不持久化则重启重挂）+ abandon 扫描线程 + 复位 scanRunning（UI 可操作）。挂起上限 `kMaxScanHangs`(3)：每次挂起泄漏一线程+锁一 DLL。UI "Clear BL" 按钮（清除黑名单重扫，R4/R7）。
+8. **线程优先级**（步骤 6）：扫描/加载线程 `THREAD_PRIORITY_BELOW_NORMAL`——插件初始化（UA 系列等）CPU 密集，降优先级避免抢占用户前台。
+9. **getScanStatus**（步骤 5）：快照+推送双轨的快照侧——纯推送漏中途连接；`{ok, running, done, progress, count, blacklisted, hangCount, currentFile}`；命名避开参数扫描 `scan` 语义。协议命令非导出 schema。
+10. **明确排除**：子进程扫描（AudioPluginHost 根治方案，ExitProcess 型杀进程插件的唯一根治）——工程量/架构影响大，本轮用「黑名单+踏板+看门狗」覆盖；`CustomScanner` 接口面大职责重叠；JUCE 钉 tag 另立任务。
+
+### 已知残留
+
+- **CGII.vst3**：0 类型插件，每轮热启动重扫 ~0.5s（未入缓存）。待办：预防性黑名单（0 类型 → addToBlacklist）。
+- **扫描挂起黑名单误伤**（R7）：一次挂起即入黑名单，需 "Clear BL" 入口（已有）解除。
