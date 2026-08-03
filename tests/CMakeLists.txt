@@ -29,7 +29,7 @@ target_sources(unit_tests PRIVATE
     ../source/ipc/PipeServer.cpp
     ../source/host/PluginManager.cpp
     CommandParserStubs.cpp
-    TestPlugin.h TestPluginTests.cpp TestCompressorPlugin.h TestCompressorPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp FreqResponseTests.cpp ExportTests.cpp
+    TestPlugin.h TestPluginTests.cpp TestCompressorPlugin.h TestCompressorPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp CaptureBufferTests.cpp FreqResponseTests.cpp ExportTests.cpp
     CommandParserTests.cpp PipeServerTests.cpp
     FilePlaybackTests.cpp NoiseGeneratorTests.cpp EnvelopeSignalTests.cpp
     GainReductionTests.cpp ScanEngineTests.cpp
