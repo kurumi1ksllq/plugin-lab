@@ -164,6 +164,32 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
     auto cmd = obj->getProperty ("cmd").toString();
 
+    // --- getScanStatus (计划步骤 5)：插件扫描状态快照。快照+推送双轨中的快照
+    // 侧——纯推送漏掉中途连接的客户端，中途连接者用此命令拿当前状态。
+    // 命名避开参数扫描（scan）语义。字段：running/done/progress/count/
+    // currentFile/blacklisted/hangCount。
+    if (cmd == Protocol::Command::getScanStatus)
+    {
+        if (pluginManager == nullptr)
+            return Protocol::makeResponse (false, R"("error":"no plugin manager")");
+
+        const bool running = pluginManager->isScanRunning();
+        const float progress = pluginManager->getScanProgress();
+        const bool done = ! running && progress >= 0.999f;
+        const int count = pluginManager->getKnownPlugins().getNumTypes();
+        const int blacklisted = pluginManager->getKnownPlugins().getBlacklistedFiles().size();
+        const int hangCount = pluginManager->getScanHangCount();
+
+        return Protocol::makeResponse (true,
+            R"("running":)" + juce::String (running ? "true" : "false")
+            + R"(,"done":)" + juce::String (done ? "true" : "false")
+            + R"(,"progress":)" + juce::String (progress, 3)
+            + R"(,"count":)" + juce::String (count)
+            + R"(,"blacklisted":)" + juce::String (blacklisted)
+            + R"(,"hangCount":)" + juce::String (hangCount)
+            + R"(,"currentFile":)" + pluginManager->getCurrentScanFile().quoted());
+    }
+
     // --- loadPlugin ---
     if (cmd == "loadPlugin")
     {

@@ -27,6 +27,7 @@ namespace Protocol
         constexpr auto scan         = "scan";
         constexpr auto stop         = "stop";
         constexpr auto exportCmd    = "exportData";
+        constexpr auto getScanStatus = "getScanStatus";   // 计划步骤 5：插件扫描状态快照
     }
 
     //==============================================================================

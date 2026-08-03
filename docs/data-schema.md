@@ -4,6 +4,9 @@
 > 消费者：AI 建模（DESIGN.md §9——用测量数据复刻插件行为）。所有导出都必须能被
 > `juce::JSON::parse` 与 python `json.load` 解析，且携带完整测量上下文以便复现。
 > 实现与测试：`source/analysis/Export.cpp`、`tests/ExportTests.cpp`（测试锁定字段与精度）。
+>
+> 2026-08-04 变更记录：新增 IPC 协议命令 `getScanStatus`（扫描状态快照，见
+> `source/ipc/AGENTS.md` 协议表）——属**协议命令**而非导出文档，不入 §9 导出 schema。
 
 ## 导出类型一览
 

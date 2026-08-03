@@ -326,6 +326,92 @@ TEST_CASE ("CommandParser: measure fails when plugin is null", "[commandparser][
 }
 
 //==============================================================================
+// 2b. getScanStatus — plugin-scan state snapshot (plan step 5)
+//==============================================================================
+
+TEST_CASE ("CommandParser: getScanStatus returns pre-scan state",
+           "[commandparser][getScanStatus]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    PluginManager pm;
+    CommandParser parser;
+    parser.setPluginManager (&pm);
+
+    // ---- Act ----
+    auto response = parser.handleCommand (R"({"cmd":"getScanStatus"})");
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"running\":false"));
+    REQUIRE (response.contains ("\"done\":false"));
+    REQUIRE (response.contains ("\"progress\":0.000"));
+    REQUIRE (response.contains ("\"count\":0"));
+}
+
+TEST_CASE ("CommandParser: getScanStatus reports an in-progress scan",
+           "[commandparser][getScanStatus]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    PluginManager pm;
+    pm.beginScan();
+    pm.updateScanProgress (0.5f, "C:\\plugins\\Mid.vst3");
+    CommandParser parser;
+    parser.setPluginManager (&pm);
+
+    // ---- Act ----
+    auto response = parser.handleCommand (R"({"cmd":"getScanStatus"})");
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"running\":true"));
+    REQUIRE (response.contains ("\"done\":false"));
+    REQUIRE (response.contains ("\"progress\":0.500"));
+    REQUIRE (response.contains ("\"currentFile\""));
+    REQUIRE (response.contains ("Mid.vst3"));
+}
+
+TEST_CASE ("CommandParser: getScanStatus reports a finished scan",
+           "[commandparser][getScanStatus]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    PluginManager pm;
+    pm.beginScan();
+    pm.updateScanProgress (0.9f, "C:\\plugins\\Almost.vst3");
+    pm.endScan();
+    CommandParser parser;
+    parser.setPluginManager (&pm);
+
+    // ---- Act ----
+    auto response = parser.handleCommand (R"({"cmd":"getScanStatus"})");
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"running\":false"));
+    REQUIRE (response.contains ("\"done\":true"));
+    REQUIRE (response.contains ("\"progress\":1.000"));
+}
+
+TEST_CASE ("CommandParser: getScanStatus errors without a plugin manager",
+           "[commandparser][getScanStatus]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    CommandParser parser;   // no plugin manager set
+
+    // ---- Act ----
+    auto response = parser.handleCommand (R"({"cmd":"getScanStatus"})");
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("\"error\""));
+}
+
+//==============================================================================
 // 3. loadPlugin — callback fires with matching PluginDescription
 //==============================================================================
 
