@@ -103,6 +103,22 @@ public:
         blockRelease = release;
     }
 
+    /** Adds an extra hosted parameter with a stable ID, a distinct display
+        name, and a default value. The built-in "gain"/"latency" parameters
+        stay at indices 0-1; new parameters are appended after them.
+
+        Returns the created parameter so tests can address it directly.
+    */
+    juce::AudioProcessorParameter* addTestParameter (const juce::String& id,
+                                                     const juce::String& name,
+                                                     float defaultValue)
+    {
+        auto param = std::make_unique<TestParameter> (id, name, defaultValue);
+        auto* raw = param.get();
+        addHostedParameter (std::move (param));
+        return raw;
+    }
+
     //==============================================================================
     // AudioProcessor
     //==============================================================================
