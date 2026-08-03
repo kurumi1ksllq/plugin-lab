@@ -105,6 +105,40 @@ public:
         real VST3 DLLs). */
     void setAsyncCreateOverride (AsyncCreateFn fn) { asyncCreateOverride = std::move (fn); }
 
+    //==============================================================================
+    // Scan watchdog (plan step 4): a plugin DLL hung in DllMain/InitDll/
+    // GetPluginFactory can never be terminated in-process and scanNextFile never
+    // returns — the watchdog (message-thread timer polling scan progress) detects
+    // a stalled scan, blacklists the hung file (persisted immediately), and the
+    // host abandons the stuck scan thread. Hang count is capped so repeated
+    // hangs (each leaks a thread + pins a DLL) can't degrade the process forever.
+
+    static constexpr int kScanHangTimeoutMs = 60000;
+    static constexpr int kMaxScanHangs = 3;
+
+    /** Scan-loop lifecycle: call beginScan() before, endScan() after (also on
+        exception). updateScanProgress() is called per scanned file with the
+        scanner's progress (0..1) and the current file's bundle path. */
+    void beginScan();
+    void updateScanProgress (float progress, const juce::String& currentFile);
+    void endScan();
+
+    bool isScanRunning() const         { return scanRunning.load(); }
+    float getScanProgress() const      { return scanProgress.load(); }
+    int getScanHangCount() const       { return scanHangCount.load(); }
+    int64 getLastScanProgressTimeMs() const { return lastScanProgressMs.load(); }
+    juce::String getCurrentScanFile() const;
+
+    /** Watchdog action after a stall is detected: blacklist the current file
+        (bundle key), persist the blacklist immediately (the stuck scan never
+        reaches saveCache), bump the hang count. Returns true when the hang cap
+        is reached (host should stop auto-rescanning). */
+    bool handleScanHang();
+
+    /** Remove all blacklist entries (UI "clear blacklist and rescan" entry,
+        risk R4/R7: a once-hung plugin may have been fixed). */
+    void clearBlacklist()              { knownPlugins.clearBlacklistedFiles(); }
+
 private:
     /** Remove ghost entries (plugin files that no longer exist) and
         host-killing plugins from the in-memory list. */
@@ -115,6 +149,15 @@ private:
     juce::File cacheFile;
     int loadTimeoutMs = kLoadTimeoutMs;
     AsyncCreateFn asyncCreateOverride;
+
+    // Scan-state members for the watchdog (written by the scan thread, read by
+    // the message-thread timer; atomics + a small mutex-guarded current file).
+    std::atomic<bool> scanRunning { false };
+    std::atomic<float> scanProgress { 0.0f };
+    std::atomic<int> scanHangCount { 0 };
+    std::atomic<int64> lastScanProgressMs { 0 };
+    mutable std::mutex scanFileLock;     // mutable: locked from const getCurrentScanFile()
+    juce::String currentScanFile;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginManager)
 };

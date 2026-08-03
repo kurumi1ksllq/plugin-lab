@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include "../source/host/PluginManager.h"
 #include "TestPlugin.h"
 
@@ -519,4 +520,91 @@ TEST_CASE ("PluginManager: loadPlugin ignores late callbacks from a stale genera
 
     // Assert: no crash, blacklist intact
     REQUIRE (mgr.getKnownPlugins().getBlacklistedFiles().contains ("C:\\fake\\fake.vst3"));
+}
+
+//==============================================================================
+// Step 4 (scan watchdog): PluginManager tracks scan state for a message-thread
+// watchdog; a stalled scan (no progress for kScanHangTimeoutMs) triggers
+// handleScanHang() which blacklists the current file (persisted immediately)
+// and counts hangs up to kMaxScanHangs.
+
+TEST_CASE ("PluginManager: beginScan/updateScanProgress/endScan track scan state",
+           "[pluginmanager][watchdog]")
+{
+    // Arrange
+    TempCacheDir tmp;
+    PluginManager mgr;
+
+    // Act / Assert: idle before the scan
+    REQUIRE_FALSE (mgr.isScanRunning());
+    REQUIRE (mgr.getScanHangCount() == 0);
+
+    // Act: begin
+    mgr.beginScan();
+    REQUIRE (mgr.isScanRunning());
+
+    // Act: progress updates
+    mgr.updateScanProgress (0.5f, "C:\\plugins\\Half.vst3");
+    REQUIRE (mgr.getScanProgress() == Catch::Approx (0.5f));
+    REQUIRE (mgr.getCurrentScanFile() == "C:\\plugins\\Half.vst3");
+    REQUIRE (mgr.getLastScanProgressTimeMs() > 0);
+
+    mgr.updateScanProgress (0.75f, "C:\\plugins\\ThreeQuarter.vst3");
+    REQUIRE (mgr.getScanProgress() == Catch::Approx (0.75f));
+    REQUIRE (mgr.getCurrentScanFile() == "C:\\plugins\\ThreeQuarter.vst3");
+
+    // Act: end
+    mgr.endScan();
+    REQUIRE_FALSE (mgr.isScanRunning());
+}
+
+TEST_CASE ("PluginManager: handleScanHang blacklists the current file and counts toward the cap",
+           "[pluginmanager][watchdog]")
+{
+    // Arrange
+    TempCacheDir tmp;
+    PluginManager mgr;
+    mgr.setCacheFile (tmp.cacheFile());
+    mgr.beginScan();
+    mgr.updateScanProgress (0.4f, "C:\\plugins\\Hung.vst3\\Contents\\x86_64-win\\Hung.vst3");
+
+    // Act: first hang
+    const bool cap1 = mgr.handleScanHang();
+
+    // Assert: blacklisted with the BUNDLE key (inner path normalized), count 1
+    REQUIRE_FALSE (cap1);
+    REQUIRE (mgr.getScanHangCount() == 1);
+    REQUIRE (mgr.getKnownPlugins().getBlacklistedFiles().contains ("C:\\plugins\\Hung.vst3"));
+    REQUIRE_FALSE (mgr.getKnownPlugins().getBlacklistedFiles().contains ("C:\\plugins\\Hung.vst3\\Contents\\x86_64-win\\Hung.vst3"));
+
+    // Act: two more hangs (different files)
+    mgr.updateScanProgress (0.5f, "C:\\plugins\\Hung2.vst3");
+    REQUIRE_FALSE (mgr.handleScanHang());
+    mgr.updateScanProgress (0.6f, "C:\\plugins\\Hung3.vst3");
+    const bool cap3 = mgr.handleScanHang();
+
+    // Assert: cap reached on the third hang
+    REQUIRE (cap3);
+    REQUIRE (mgr.getScanHangCount() == 3);
+}
+
+TEST_CASE ("PluginManager: handleScanHang persists the blacklist immediately",
+           "[pluginmanager][watchdog]")
+{
+    // Arrange: a stalled scan never reaches saveCache, so handleScanHang must
+    // persist the blacklist itself — verify by reloading from disk.
+    TempCacheDir tmp;
+    PluginManager mgr;
+    mgr.setCacheFile (tmp.cacheFile());
+    mgr.beginScan();
+    mgr.updateScanProgress (0.4f, "C:\\plugins\\Hung.vst3");
+    mgr.handleScanHang();
+
+    // Act: fresh manager reloads the cache
+    PluginManager fresh;
+    fresh.setCacheFile (tmp.cacheFile());
+    fresh.loadCache();
+
+    // Assert: blacklist survived the restart
+    REQUIRE (fresh.getKnownPlugins().getBlacklistedFiles().contains ("C:\\plugins\\Hung.vst3"));
 }

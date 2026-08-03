@@ -2,6 +2,7 @@
 #include "EditorCrashGuard.h"
 #include "../utils/CrashLog.h"
 #include <map>
+#include <mutex>
 
 PluginManager::PluginManager()
 {
@@ -198,6 +199,20 @@ void PluginManager::scanDirectory (const juce::File& directory, const juce::File
             }
         }
 
+        // 看门狗进度（计划步骤 4）：每文件报告 progress + 当前文件路径（bundle
+        // key，经 pathByName 映射）——消息线程 Timer 据此检测无进展超时。
+        {
+            const auto prog = scanner.getProgress();
+            juce::String currentPath;
+            if (scanner.getProgress() < 1.0f)
+            {
+                const auto it = pathByName.find (scanner.getNextPluginFileThatWillBeScanned());
+                if (it != pathByName.end())
+                    currentPath = it->second;
+            }
+            updateScanProgress (prog, currentPath);
+        }
+
         juce::String name;
         bool ok = false;
         try { ok = scanner.scanNextFile (true, name); }
@@ -207,30 +222,97 @@ void PluginManager::scanDirectory (const juce::File& directory, const juce::File
     }
 }
 
+void PluginManager::beginScan()
+{
+    scanRunning = true;
+    scanProgress = 0.0f;
+    lastScanProgressMs = juce::Time::getMillisecondCounter();
+    {
+        std::lock_guard<std::mutex> lock (scanFileLock);
+        currentScanFile = {};
+    }
+}
+
+void PluginManager::updateScanProgress (float progress, const juce::String& currentFile)
+{
+    scanProgress = progress;
+    lastScanProgressMs = juce::Time::getMillisecondCounter();
+    {
+        std::lock_guard<std::mutex> lock (scanFileLock);
+        currentScanFile = currentFile;
+    }
+}
+
+void PluginManager::endScan()
+{
+    scanRunning = false;
+    scanProgress = 1.0f;
+}
+
+juce::String PluginManager::getCurrentScanFile() const
+{
+    std::lock_guard<std::mutex> lock (scanFileLock);
+    return currentScanFile;
+}
+
+bool PluginManager::handleScanHang()
+{
+    // 看门狗（计划步骤 4）：扫描线程卡在某个插件 DLL 里（scanNextFile 永不返回），
+    // 无法从进程内终止。把当前文件加入黑名单（bundle key——与扫描枚举路径一致，
+    // 见 cacheIsCurrent），并立即持久化（卡死的扫描永远到不了 saveCache，不持久化
+    // 则重启会再次挂同一插件）。挂起计数封顶 kMaxScanHangs：每次挂起泄漏一个扫描
+    // 线程 + 锁住一个 DLL，必须封顶。
+    const auto file = getCurrentScanFile();
+    if (file.isNotEmpty())
+    {
+        auto blacklistKey = file;
+        const auto contentsIdx = blacklistKey.indexOf ("\\Contents");
+        if (contentsIdx > 0)
+            blacklistKey = blacklistKey.substring (0, contentsIdx);
+        knownPlugins.addToBlacklist (blacklistKey);
+        saveCache();          // 立即持久化——重启不重挂同一插件
+    }
+
+    const int hangs = ++scanHangCount;
+    CRASH_LOG_WARN ("Scan hang detected",
+        file + " - blacklisted (" + juce::String (hangs) + "/"
+        + juce::String (kMaxScanHangs) + ")");
+    return hangs >= kMaxScanHangs;
+}
+
 void PluginManager::scanSystemDirectories()
 {
     // P0 (plan step 1)：增量扫描。绝不能 clear() —— 否则缓存增量被抹掉，每次都
     // 全量重扫。先 loadCache（有效缓存 → scanNextFile(true) 对 mtime 未变的文件
     // 零 DLL 加载，热启动从分钟级降到秒级）；缓存缺失/损坏/版本不符则回退全量。
-    if (! loadCache())
-        knownPlugins.clear();
+    beginScan();
+    try
+    {
+        if (! loadCache())
+            knownPlugins.clear();
 
-    // 确保缓存目录存在——它同时承载死马踏板文件（PluginDirectoryScanner 在
-    // scanNextFile 前把当前插件路径写进踏板，成功后移除；挂起/崩溃 = 路径残留 →
-    // 下次构造 scanner 时自动 addToBlacklist 并移到队尾，见
-    // juce_PluginDirectoryScanner.cpp:73-78,107-117）。
-    cacheFile.getParentDirectory().createDirectory();
-    const auto pedal = cacheFile.getSiblingFile ("deadMansPedal");
+        // 确保缓存目录存在——它同时承载死马踏板文件（PluginDirectoryScanner 在
+        // scanNextFile 前把当前插件路径写进踏板，成功后移除；挂起/崩溃 = 路径残留 →
+        // 下次构造 scanner 时自动 addToBlacklist 并移到队尾，见
+        // juce_PluginDirectoryScanner.cpp:73-78,107-117）。
+        cacheFile.getParentDirectory().createDirectory();
+        const auto pedal = cacheFile.getSiblingFile ("deadMansPedal");
 
-    scanDirectory (juce::File ("C:\\Program Files\\Common Files\\VST3"), pedal);
-    auto localDir = juce::File::getSpecialLocation (
-        juce::File::SpecialLocationType::userApplicationDataDirectory)
-        .getChildFile ("Programs\\Common\\VST3");
-    if (localDir.isDirectory()) scanDirectory (localDir, pedal);
+        scanDirectory (juce::File ("C:\\Program Files\\Common Files\\VST3"), pedal);
+        auto localDir = juce::File::getSpecialLocation (
+            juce::File::SpecialLocationType::userApplicationDataDirectory)
+            .getChildFile ("Programs\\Common\\VST3");
+        if (localDir.isDirectory()) scanDirectory (localDir, pedal);
 
-    // 扫描可能叠加了重复条目（scanAndAddFile 只加不删）→ 去重后再落盘。
-    dedupeKnownPlugins();
-    saveCache();
+        // 扫描可能叠加了重复条目（scanAndAddFile 只加不删）→ 去重后再落盘。
+        dedupeKnownPlugins();
+        saveCache();
+    }
+    catch (...)
+    {
+        CRASH_LOG_ERR ("Scan", "exception in scanSystemDirectories");
+    }
+    endScan();
 }
 
 std::unique_ptr<juce::AudioPluginInstance> PluginManager::loadPlugin (

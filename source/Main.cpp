@@ -65,7 +65,8 @@ struct CrashFilterInstaller
 class MainContentComponent : public juce::Component,
                              private juce::ListBoxModel,
                              private juce::AsyncUpdater,
-                             private juce::ChangeListener
+                             private juce::ChangeListener,
+                             private juce::Timer
 {
 public:
     MainContentComponent()
@@ -82,6 +83,17 @@ public:
         scanButton.reset (new juce::TextButton ("Scan VST3"));
         scanButton->onClick = [this] { scanPlugins(); };
         addAndMakeVisible (scanButton.get());
+
+        // 清除黑名单并全量重扫入口（计划步骤 4，风险 R4/R7）：一次挂起/崩溃被
+        // 黑名单的插件可能已被修复——此按钮清空黑名单（含缓存持久化）后重扫。
+        clearBlacklistButton.reset (new juce::TextButton ("Clear BL"));
+        clearBlacklistButton->onClick = [this]
+        {
+            pluginManager->clearBlacklist();
+            statusLabel->setText ("Blacklist cleared - rescanning", juce::dontSendNotification);
+            scanPlugins();
+        };
+        addAndMakeVisible (clearBlacklistButton.get());
 
         // Right-panel frequency-response plots (magnitude on top, phase below).
         magPlot.reset (new PlotWidget());
@@ -366,6 +378,7 @@ public:
         {
             auto header = leftPanel.removeFromTop (28);
             scanButton->setBounds (header.removeFromRight (75).reduced (2));
+            clearBlacklistButton->setBounds (header.removeFromRight (62).reduced (2));
             statusLabel->setBounds (header);
             pluginListBox->setBounds (leftPanel);
         }
@@ -824,6 +837,44 @@ private:
     }
 
     //==============================================================================
+    /** 扫描看门狗（计划步骤 4）：消息线程 Timer 轮询 PluginManager 的扫描进度。
+     *  若 progress 在 kScanHangTimeoutMs 内无任何变化 → 判定某个插件 DLL 挂起
+     *  （scanNextFile 永不返回，无法进程内终止）→ 黑名单当前文件（立即持久化，
+     *  重启不重挂）+ abandon 卡死线程 + 复位 scanRunning（UI 可操作）+ 挂起计数。
+     *  挂起达到 kMaxScanHangs 后停止自动重扫（每次挂起泄漏一线程+锁一 DLL）。
+     *  扫描正常完成时 notify 会 stopTimer()。 */
+    void timerCallback() override
+    {
+        if (! pluginManager->isScanRunning())
+        {
+            stopTimer();
+            return;
+        }
+
+        const auto now = juce::Time::getMillisecondCounter();
+        if (now - pluginManager->getLastScanProgressTimeMs() > PluginManager::kScanHangTimeoutMs)
+        {
+            const bool capReached = pluginManager->handleScanHang();
+            stopTimer();
+
+            // abandon 卡死的扫描线程：绝不 join（与析构同语义）。
+            if (scanThread && scanThread->joinable())
+                scanThread.release();
+
+            scanRunning = false;
+            scanDone = false;
+            scanButton->setEnabled (true);
+            statusLabel->setText (capReached
+                ? "Scan stopped: too many hung plugins (see crash log)"
+                : "Scan interrupted: hung plugin blacklisted",
+                juce::dontSendNotification);
+            CRASH_LOG_WARN ("Watchdog",
+                capReached ? "hang cap reached - further scans disabled"
+                           : "scan thread abandoned after timeout");
+        }
+    }
+
+    //==============================================================================
     void scanPlugins()
     {
         // scanDone 不再拦截重扫（计划步骤 2）：重扫走增量（cacheIsCurrent 跳过
@@ -854,6 +905,8 @@ private:
         {
             if (! alive->load() || scanGeneration.load() != generation)
                 return;
+
+            stopTimer();   // 看门狗：扫描正常完成，停止轮询
 
             scanDone = out->done.load();
             scanRunning = false;
@@ -890,6 +943,9 @@ private:
             out->ready = true;
             juce::MessageManager::callAsync (notify);
         });
+
+        // 看门狗（计划步骤 4）：扫描期间每 500ms 轮询进度，无进展超时则按挂起处理。
+        startTimer (500);
     }
 
     //==============================================================================
@@ -1637,6 +1693,7 @@ private:
     std::unique_ptr<juce::ListBox> pluginListBox;
     std::unique_ptr<juce::Label> statusLabel;
     std::unique_ptr<juce::TextButton> scanButton;
+    std::unique_ptr<juce::TextButton> clearBlacklistButton;   // 计划步骤 4：清除黑名单重扫
 
     // Measurement control row (right panel, above the plots)
     std::unique_ptr<juce::TextButton> measureFreqButton;
