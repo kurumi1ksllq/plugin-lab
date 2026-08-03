@@ -64,7 +64,8 @@ struct CrashFilterInstaller
 //==============================================================================
 class MainContentComponent : public juce::Component,
                              private juce::ListBoxModel,
-                             private juce::AsyncUpdater
+                             private juce::AsyncUpdater,
+                             private juce::ChangeListener
 {
 public:
     MainContentComponent()
@@ -224,6 +225,12 @@ public:
         scanAlive = std::make_shared<std::atomic<bool>> (true);
         loadAlive = std::make_shared<std::atomic<bool>> (true);
 
+        // 增量 UI 刷新（计划步骤 2）：KnownPluginList : ChangeBroadcaster，每个
+        // 新插件 addType 发一次 change；内部 AsyncUpdater 自动投递消息线程并合并
+        // （≤50ms 天然节流），回调里 updateContent 即可让插件逐条出现，无需手写
+        // 转发。退订见析构（必须先于成员析构）。
+        pluginManager->getKnownPlugins().addChangeListener (this);
+
         // --- IPC pipeline setup ---
         measurementSession = std::make_unique<MeasurementSession>();
         measurementSession->setSampleRate (48000.0);
@@ -296,6 +303,12 @@ public:
 
     ~MainContentComponent() override
     {
+        // 0. Unsubscribe from KnownPluginList changes FIRST — the scan thread's
+        //    addType fires change messages; after this point no callback touches
+        //    pluginListBox (must precede every member tear-down, plan step 2).
+        if (pluginManager)
+            pluginManager->getKnownPlugins().removeChangeListener (this);
+
         // 1. Cancel any in-progress measurement (returns within 1 block).
         if (measurementSession)
             measurementSession->cancel();
@@ -462,6 +475,24 @@ public:
         catch (...)
         {
             CRASH_LOG_ERR ("Row selected", "unknown exception caught");
+        }
+    }
+
+    //==============================================================================
+    /** KnownPluginList : ChangeBroadcaster callback (plan step 2 — incremental UI).
+     *  Runs on the message thread (ChangeBroadcaster posts via its internal
+     *  AsyncUpdater, auto-merged ≤50ms), so every newly discovered plugin refreshes
+     *  the list immediately instead of waiting for the whole scan to finish. */
+    void changeListenerCallback (juce::ChangeBroadcaster*) override
+    {
+        try
+        {
+            pluginListBox->updateContent();
+            pluginListBox->repaint();
+        }
+        catch (...)
+        {
+            CRASH_LOG_ERR ("Plugin list change", "exception caught");
         }
     }
 
@@ -795,7 +826,9 @@ private:
     //==============================================================================
     void scanPlugins()
     {
-        if (scanDone || scanRunning.exchange (true))
+        // scanDone 不再拦截重扫（计划步骤 2）：重扫走增量（cacheIsCurrent 跳过
+        // 已最新插件，秒级完成），且步骤 4 的"清除黑名单并重扫"入口依赖可重复扫描。
+        if (scanRunning.exchange (true))
             return;
 
         statusLabel->setText ("Scanning VST3 plugins...", juce::dontSendNotification);
