@@ -1,6 +1,6 @@
 # Plugin Lab — 项目知识库
 
-**生成:** 2026-08-03 · **Commit:** b3e1813 · **Branch:** main
+**更新:** 2026-08-08 · **Commit:** 81a935d · **Branch:** main
 
 ## OVERVIEW
 
@@ -20,7 +20,7 @@ PluginLab/
 │   ├── ipc/           # Named Pipe 服务器 + 命令解析
 │   ├── ui/            # PlotWidget + PluginEditorWindow
 │   └── utils/         # FftHelper / MathUtils / CrashLog
-├── tests/             # Catch2 单元测试（113+ 绿）——见 tests/AGENTS.md
+├── tests/             # Catch2 单元测试(126/126 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
 ├── tools/             # VST3Scanner(死代码) + PS/Python 工具脚本
 ├── docs/              # data-schema.md / plan-phase2-5.md
 └── samples/take01.wav # vocal 测试素材（未入库）
