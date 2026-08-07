@@ -2086,6 +2086,67 @@ TEST_CASE ("CommandParser: dataset with compression_family embeds grid",
     tempDir.deleteRecursively();
 }
 
+TEST_CASE ("CommandParser: dataset compression_family uses defaults when fields omitted",
+           "[commandparser][dataset][dataset-cf-defaults]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // Same reference compressor as the explicit-grid test.
+    auto plugin = std::make_unique<TestCompressorPlugin>();
+    plugin->setThresholdDB (-30.0);
+    plugin->setRatio (4.0);
+    plugin->setAttackSec (0.005);
+    plugin->setReleaseSec (0.05);
+    plugin->setMakeupGainDB (0.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                   .getChildFile ("pluginlab_dataset_test");
+    tempDir.createDirectory();
+    const juce::File jsonPath = tempDir.getChildFile ("dataset_cf_defaults.json");
+    const juce::File wavPath  = jsonPath.withFileExtension (".wav");
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+
+    // ---- Act ----
+    // No levels_db/speeds -> documented defaults [-12.0, 0.0] x [0.5, 1.0, 2.0]
+    // (plan-batch-pipeline.md §二, compression_family 缺省语义) -> 6 grid cells.
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"dataset","path":)")
+        + juce::JSON::toString (jsonPath.getFullPathName())
+        + R"(,"compression_family":{})" + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    auto respJson = juce::JSON::parse (response);
+    auto* respObj = respJson.getDynamicObject();
+    REQUIRE (respObj != nullptr);
+    REQUIRE (respObj->getProperty ("ok") == juce::var (true));
+    REQUIRE (respObj->getProperty ("compression_family") == juce::var (true));
+
+    // Export: 2 default levels x 3 default speeds -> 6 family entries.
+    REQUIRE (jsonPath.existsAsFile());
+    auto exportedJson = juce::JSON::parse (jsonPath.loadFileAsString());
+    REQUIRE (exportedJson["compression_family"]["family"].size() == 6);
+
+    // Cleanup
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+    tempDir.deleteRecursively();
+}
+
 TEST_CASE ("CommandParser: dataset rejects unknown type",
            "[commandparser][dataset][dataset-unknown-type]")
 {
