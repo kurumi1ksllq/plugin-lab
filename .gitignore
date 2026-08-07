@@ -34,6 +34,10 @@ stdout.txt
 
 # 测量运行产物（不提交）
 pluginlab_*.json
+out/
+
+# Python
+__pycache__/
 
 # CMake 缓存
 CMakeCache.txt

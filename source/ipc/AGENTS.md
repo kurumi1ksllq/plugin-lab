@@ -16,11 +16,14 @@
 | getParams           | `{}` → `{ok, params}`                                                                                                                                                                             |
 | measure             | `{type: frequency_response\|harmonic\|compression\|gr_timeline, source: signal\|file\|noise\|dynamic}` → `{ok, progress...}` 流式推进，完成后 `{ok, export_path, wav_path}`                       |
 | scan                | `{paramId, values}` → `{ok, runs, export_path, wav_path}`（曲线族经 export_path 导出 JSON）                                                                                                       |
+| dataset             | `{path, types?[], scan?{param_id, values, type?}, compression_family?{levels_db, speeds}}` → `{ok, export_path, types{...}, scan, compression_family}`                                    |
 | stop                | `{}` → `{ok}`                                                                                                                                                                                     |
 | exportData          | `{path}` → `{ok}`                                                                                                                                                                                 |
 | getScanStatus       | `{}` → `{ok, running, done, progress, count, blacklisted, hangCount, currentFile}`——插件扫描状态快照（计划步骤 5；快照+推送双轨的快照侧，中途连接者以此拿当前状态；命名避开参数扫描 `scan` 语义） |
 
 - 进度流式推送：measure 期间持续发 `{"ok":true,"progress":0.10}` 行，完成后发最终结果
+- dataset battery 语义：`types` 省略 → 默认全部 4 类型（frequency_response/harmonic/compression/gr_timeline）；source 固定映射——freq/harmonic/compression → signal，gr_timeline → dynamic（保证 τ 有效），v1 不支持覆盖；逐类型失败 → 跳过该块 + 响应 `types[type]=false`；响应单行（无进度流式），IPC 线程整段阻塞——期间 `stop` 不可达（与 scan 一致）；全部失败 → `ok:false` "all measurements failed"
+- dataset 可选块：`scan`（`param_id`+`values` 必填；`type` 省略默认 frequency_response，拒绝 gr_timeline）与 `compression_family`（`levels_db`/`speeds` 可省略，内部默认 `[-12,0]` × `[0.5,1,2]`）；校验失败仅跳过该块，其余照常执行
 - JSON 手写 raw string literal + `escapeJsonString`；`Protocol.h` 持消息类型常量与响应辅助函数
 
 ## RAW-CAPTURE WAV MIRROR（已接 IPC）
@@ -47,7 +50,7 @@
 - `isThisTheMessageThread()` 同步路径（CommandParser 内）避免测试挂起
 - `JUCE_MODAL_LOOPS_PERMITTED=1` 让 SweepRunner 让步循环
 - `MeasurementResults`：按类型恰有一个 Result 字段填充（freq/harmonic/compression/gr/tau）；非信号源只带原始捕获元数据（source/rawSamples/rawSampleRate），grTimeline 例外（分析 dry/wet）
-- 已抽辅助：`parseSource` / `configureSessionSource` / `resolveExportPath` / `buildExportContext`（measure/scan 共用，勿重复实现）
+- 已抽辅助：`parseSource` / `configureSessionSource` / `resolveExportPath` / `buildExportContext`（measure/scan 共用）；`runAndAnalyze` / `exportResultsToJSON`（自 measure case 提取，measure/dataset 共用）——勿重复实现
 
 ## ADDING A COMMAND
 

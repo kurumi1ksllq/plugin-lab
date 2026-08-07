@@ -7,6 +7,12 @@
 >
 > 2026-08-04 变更记录：新增 IPC 协议命令 `getScanStatus`（扫描状态快照，见
 > `source/ipc/AGENTS.md` 协议表）——属**协议命令**而非导出文档，不入 §9 导出 schema。
+>
+> 2026-08-08 变更记录：新增 IPC 协议命令 `dataset`（批量采集 battery，默认跑全部 4 类
+> 测量，见 `source/ipc/AGENTS.md` 协议表）——导出 §8 dataset 文档（type "dataset"）；
+> §8 文档在 scan / compression_family / gr_timeline 之外新增可选 frequency_response /
+> harmonic / compression 三个测量块。battery 校验：逐类型成败记录在命令响应 "types"
+> 对象，不入文档（未跑/失败的块整体省略）。
 
 ## 导出类型一览
 
@@ -416,6 +422,9 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
 | `type`               | string         | 固定 `"dataset"`                                                                                        |
 | `context`            | object         | 完整测量上下文（同 §5-7 嵌套格式）                                                                      |
 | `note`               | string（可选） | 拟合建议/备注（如峰值检测提示），未提供则省略                                                           |
+| `frequency_response` | object（可选） | 频响块：`raw`/`smoothed_1_12`/`smoothed_1_3`（与 §1 body 一致）                                   |
+| `harmonic`           | object（可选） | 谐波块：`tones`（与 §2 body 一致）                                                                |
+| `compression`        | object（可选） | 压缩块：`curve`/`fitted`（与 §3 body 一致）                                                       |
 | `scan`               | object（可选） | 参数扫描块：`param_id`/`param_name`/`values`/`param_texts` + **`family` 内嵌**（与 §5 family 布局一致） |
 | `compression_family` | object（可选） | 压缩响应族块：`family`（与 §7 条目布局一致）                                                            |
 | `gr_timeline`        | object（可选） | GR 块：`gr` + `tau`（与 §6 body 一致，含 valid/details）                                                |
