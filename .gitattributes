@@ -1,0 +1,10 @@
+# 文本统一 LF 存储（autocrlf 检出 CRLF，Windows 开发）
+* text=auto
+
+# 二进制资源（禁止行尾转换）
+*.wav binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.exe binary
+*.dll binary

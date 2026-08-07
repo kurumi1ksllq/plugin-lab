@@ -21,6 +21,7 @@
 .omo/
 .sisyphus/
 .codegraph/
+.cortexkit/
 .agents/
 *.local.md
 
