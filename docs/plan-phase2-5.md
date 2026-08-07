@@ -4,6 +4,8 @@
 > 第二轮：Sisyphus 执行者视角审查 → 补充 4 项落地细节（A/B/C/D）+ 1 项小项（E）。
 > v2 为两轮审查整合定稿。用户确认后开始执行。每阶段：TDD + 实测验证 + push GitHub main。
 
+> **执行状态（2026-08-08 更新）**：阶段 2-5 全部完成并 push main（FilePlayback/Noise/EnvelopeSignal → ScanEngine → GR 时间线/τ → datasetToJSON，完成记录见 STATUS.md「阶段 3+4 / 阶段 5 / 收尾修复记录」）；P2-13 的 RecorderEngine/ParameterTimeline/WavExporter 显式延后未实现（见 DESIGN.md §8.2 注记）。本计划为历史执行依据，当前能力以 STATUS.md 为准。
+
 ---
 
 ## 审查结论（Momus，基于代码核验）

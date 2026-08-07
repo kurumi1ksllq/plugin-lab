@@ -31,6 +31,8 @@
 
 ### 管道协议（JSON 行协议）
 
+> 以下为 2026-07-31 设计草稿示例。**实际协议以 `source/ipc/Protocol.h` + `source/ipc/AGENTS.md` 为准**（命令名：loadPlugin/setParam/getParams/measure/scan/stop/exportData/getScanStatus；measure type 值为 frequency_response/harmonic/compression/gr_timeline；响应含 export_path/wav_path）。
+
 每个请求/响应各占一行 JSON：
 
 ```
@@ -288,9 +290,9 @@ source/ipc/
 | **capture/**    | 新增"实时进度回调"，测量结果逐步推送到 UI                                                                                                               |
 | **analysis/**   | 新增**平滑处理**功能（raw / 1/12 / 1/3 octave）                                                                                                         |
 | **ui/**         | 重大变化：需嵌入 VST3 原生编辑器 UI；曲线改为增量绘制                                                                                                   |
-| **capture/**    | 新增 `RecorderEngine`（顶层协调）、`ParameterTimeline`（参数时间线）、`AnalysisStrategy`（分析分流）；`MeasurementSession` 扩展 sourceType/filePlayback |
+| **capture/**    | 规划 `RecorderEngine`（顶层协调）、`ParameterTimeline`（参数时间线）、`AnalysisStrategy`（分析分流）——**P2-13 延后未实现**；`MeasurementSession` 扩展 sourceType/filePlayback |
 | **signal/**     | 新增 `FilePlayback`（实现 `SignalGenerator` 接口，vocal 音频回放 + 声道映射）                                                                           |
-| **analysis/**   | 新增 `WavExporter`（干/湿/基准多轨 WAV）；`Export` 扩展 `recordingToJSON`；JSON 改用 `juce::JSON::toString()` 转义                                      |
+| **analysis/**   | `WavExporter`（干/湿/基准多轨 WAV）**P2-13 延后未实现**；实际落地为 `CompressionFamily`/`GainReduction`/`TimeConstants` + `Export` 扩展 `datasetToJSON`（手写 raw string literal + `escapeJsonString` 转义，juce::JSON 转义 bug 弃用，2026-08-02 定案） |
 | **控制路径**    | 从 GUI 点击 → IPC 命令驱动，GUI 作为"显示器"                                                                                                            |
 
 ---
@@ -331,6 +333,8 @@ RecorderEngine (新增, source/capture/RecorderEngine.h/cpp)   ← 顶层协调:
 - `MeasurementSession` 感知"测什么"（type + sourceType）→ 扩展
 - `RecorderEngine` 感知"为什么测"（批量扫描/多轮对比），管理 session 生命周期 → 新增
 - 新组件就这三个（RecorderEngine / ParameterTimeline / AnalysisStrategy）+ 两个输入/导出扩展，**不做过度设计**
+
+> **2026-08-08 实现状态注记**：上述 §8.2 为 2026-08-02 定稿设计。实际执行中按 `docs/plan-phase2-5.md` P2-13 决定，**RecorderEngine / ParameterTimeline / WavExporter 显式延后未实现**；AnalysisStrategy 亦未以独立类出现（分析分流由 `MeasurementSession` 的 type+source 二维 + CommandParser 显式 source 指定承担）。阶段 2-5 实际落地为：FilePlayback/NoiseGenerator/EnvelopeSignal（signal 层）、ScanEngine（scan 层）、CompressionFamily 网格 + GR 时间线 + τ 估计（analysis 层）、datasetToJSON 数据包（见 STATUS.md 阶段 2-5 记录）。
 
 ### 8.3 FilePlayback 复用 SignalGenerator 接口
 
@@ -374,7 +378,7 @@ class FilePlayback : public SignalGenerator {
 
 ## 九、用户需求补充与阶段规划（2026-08-02，用户就寝前确认）
 
-> 用户明确的新需求（影响测量方法论与工具能力），必须在后续阶段落实。vocal 测试素材：`D:\Documents\PluginLab\take01.wav`（3.1MB）。
+> 用户明确的新需求（影响测量方法论与工具能力），必须在后续阶段落实。vocal 测试素材：`samples/take01.wav`（48k/16bit/stereo/17.0s，已入库）。
 
 ### 9.1 测量方法论深化（用户要求）
 
@@ -401,11 +405,13 @@ class FilePlayback : public SignalGenerator {
 
 ### 9.3 待办清单（按阶段）
 
-- [ ] 阶段 2：FilePlayback（含 take01.wav 素材管理）+ 全频段信号 + 动态信号 + 输入源选择
-- [ ] 阶段 3：参数扫描引擎 + 连续性数据输出 + GUI 多曲线对比
-- [ ] 阶段 4：动态压缩测量（GR 时间线 / attack-release / opto-vari-mu）
-- [ ] 阶段 5：数据整合建模 + 反推验证
-- [ ] 各阶段 GitHub push 存档
+> 2026-08-08 更新：阶段 2-5 全部完成并 push 存档（完成记录见 STATUS.md「阶段 3+4 / 阶段 5 / 收尾修复记录」），勾选归档。
+
+- [x] 阶段 2：FilePlayback（含 take01.wav 素材管理）+ 全频段信号 + 动态信号 + 输入源选择
+- [x] 阶段 3：参数扫描引擎 + 连续性数据输出 + GUI 多曲线对比
+- [x] 阶段 4：动态压缩测量（GR 时间线 / attack-release / opto-vari-mu）
+- [x] 阶段 5：数据整合建模 + 反推验证
+- [x] 各阶段 GitHub push 存档
 
 ## 扫描架构（2026-08-04 更新，计划见 docs/plan-scan-optimization.md）
 

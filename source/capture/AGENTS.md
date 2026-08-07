@@ -24,9 +24,9 @@ generate → process → capture 三段式 I/O 管线，按 block 循环直至�
 | frequencyResponse | ✓            | -    | -     | -       |
 | harmonicAnalysis  | ✓            | -    | -     | -       |
 | compressionCurve  | ✓            | -    | -     | -       |
-| grTimeline        | 分析 dry/wet | ✓    | ✓     | ✓       |
+| grTimeline        | ✗（拒绝）    | ✓    | ✓     | ✓       |
 
-- 分析（freq/谐波/压缩）仅 `Source::signal`；`grTimeline` 仅非 signal 源有效，由 dry/wet 反推 GR 时间线 + attack/release τ
+- 分析（freq/谐波/压缩）仅 `Source::signal`；`grTimeline` 仅非 signal 源有效（signal 源被 CommandParser 拒绝，`"gr_timeline requires a non-signal source"`），由 dry/wet 反推 GR 时间线 + attack/release τ
 
 ### 生命周期
 

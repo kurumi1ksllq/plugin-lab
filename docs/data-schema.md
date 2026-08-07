@@ -30,7 +30,7 @@
 `frequency_response` / `harmonic_analysis` / `compression_curve` 的上下文字段平铺在顶层；
 `scan` / `gr_timeline` / `compression_family` / `dataset` 的测量上下文字段收集在顶层 `"context": {...}`
 对象中，数据块（`scan` / `family` / `gr` / `tau` 等）与 `context` 平级（sibling）。
-`raw_capture` 只带 plugin/class_id/latency/parameter_snapshot/source。
+`raw_capture` 只带元数据：plugin/class_id/latency/parameter_snapshot/source/samples/sample_rate/block_size（原始音频不随 JSON 导出）。
 
 | 字段                 | 类型   | 说明                                                                                                                                                          |
 | -------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -439,4 +439,4 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
 
 - 全部导出测试：`tests/ExportTests.cpp`（schema、精度、转义、python 可解析性、body 等价、dataset 聚合）。
 - 现有独立导出的输出格式由既有 schema 测试逐字节/逐数据锁定；dataset 聚合**只复用 body 序列化函数，不触碰独立导出函数**（策略 b）。
-- 验证：`ctest --test-dir build -C Debug --timeout 180` 全绿（113 项）。
+- 验证：`ctest --test-dir build -C Release --timeout 180` 全绿（158 项，2026-08-08）。

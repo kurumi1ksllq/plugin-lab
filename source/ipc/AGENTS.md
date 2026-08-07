@@ -14,12 +14,11 @@
 | loadPlugin          | `{path}` → `{ok, params}`                                                                                                                                                                         |
 | setParam            | `{name, value}` → `{ok, value}`                                                                                                                                                                   |
 | getParams           | `{}` → `{ok, params}`                                                                                                                                                                             |
-| measure             | `{type: freq\|harmonic\|compression\|grTimeline, source: signal\|file\|noise\|dynamic}` → `{ok, progress...}` 流式推进                                                                            |
-| scan                | `{paramId, values}` → `{ok, family}`（曲线族）                                                                                                                                                    |
+| measure             | `{type: frequency_response\|harmonic\|compression\|gr_timeline, source: signal\|file\|noise\|dynamic}` → `{ok, progress...}` 流式推进，完成后 `{ok, export_path, wav_path}`                       |
+| scan                | `{paramId, values}` → `{ok, runs, export_path, wav_path}`（曲线族经 export_path 导出 JSON）                                                                                                       |
 | stop                | `{}` → `{ok}`                                                                                                                                                                                     |
 | exportData          | `{path}` → `{ok}`                                                                                                                                                                                 |
 | getScanStatus       | `{}` → `{ok, running, done, progress, count, blacklisted, hangCount, currentFile}`——插件扫描状态快照（计划步骤 5；快照+推送双轨的快照侧，中途连接者以此拿当前状态；命名避开参数扫描 `scan` 语义） |
-| getState / 其余状态 | → `{ok, ...}`                                                                                                                                                                                     |
 
 - 进度流式推送：measure 期间持续发 `{"ok":true,"progress":0.10}` 行，完成后发最终结果
 - JSON 手写 raw string literal + `escapeJsonString`；`Protocol.h` 持消息类型常量与响应辅助函数

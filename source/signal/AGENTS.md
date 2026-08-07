@@ -14,7 +14,7 @@
 | `Impulse`        | 快速线性 EQ 测量（可选）            | 单冲激；MLS 候选                                                     |
 | `FilePlayback`   | 音频文件播放（vocal 素材）          | 通道映射；文件头在 prepare 读取                                      |
 | `NoiseGenerator` | 白/粉噪（确定性）                   | 固定种子（默认 `0x2E42A5`，测试用 42）                               |
-| `EnvelopeSignal` | 动态源，opto/vari-mu 压缩 GR 时间线 | ADSR（默认 0.02/0.1/0.8/0.2 s）；`carrierStartHz` 默认 20            |
+| `EnvelopeSignal` | 动态源，opto/vari-mu 压缩 GR 时间线 | ADSR（默认 0.02/0.1/0.8/0.2 s）；载波=SineSweep（频率范围起点经 session `carrierStartHz`，见下） |
 
 ## INTERFACE CONTRACT
 
@@ -29,14 +29,13 @@
 | 测量类型            | 生成器                          |
 | ------------------- | ------------------------------- |
 | freq（频响）        | SineSweep（Impulse 为快速候选） |
-| harmonic（THD）     | 单音 SineSweep（THD 必须单音）  |
-| harmonic（IMD）     | MultiTone（必须多音）           |
+| harmonic（THD/谐波）| MultiTone（8 个八度基频 100–12800Hz，每基频独立测谐波+THD） |
 | compression（静态） | ToneBurst（多电平）             |
 | grTimeline（动态）  | EnvelopeSignal                  |
 
-**铁律：THD 与 IMD 信号永不混用**——多音谐波峰与基频峰交叠（2kHz H2=4kHz 落上 4kHz 基频），测得失真无意义（DESIGN.md:100 勿混用）。
+**铁律：THD 与 IMD 信号永不混用**——多音谐波峰与基频峰交叠（2kHz H2=4kHz 落上 4kHz 基频），测得失真无意义（DESIGN.md:102 勿混用）。注意：当前 `harmonicAnalysis` 实现即用 MultiTone 八度基频（100/200/.../12800），低频基频的高次谐波会落在高频基频上——这是已知实现取舍，分析器逐基频独立取峰，勿把该信号再当 IMD 用。
 
-已知限制：`carrier_start_hz` 已暴露到 IPC（957e597，默认 10000 Hz 匹配 CompressionFamily）——动态源 GR τ 估计在真实插件上有效（Pro-C 3 实测 attack=3.9ms/release=39.7ms, tau.valid=true）。
+已知限制：`carrier_start_hz` 已暴露到 IPC（957e597，IPC 解析默认 10000 Hz 匹配 CompressionFamily；MeasurementSession 成员默认 20.0，CompressionFamily 固定 10000）——动态源 GR τ 估计在真实插件上有效（Pro-C 3 实测 attack=3.9ms/release=39.7ms, tau.valid=true）。EnvelopeSignal::getTotalLength 对无限载波返回 -1（EnvelopeSignal.cpp:86，代码路径存在但当前载波全为有限 SineSweep，不触发 10s 兜底）。
 
 ## EXTENDING
 

@@ -1,4 +1,4 @@
-# Plugin Lab — 当前状态 (2026-08-03)
+# Plugin Lab — 当前状态 (2026-08-08)
 
 ## 已验证通过 ✅
 
@@ -75,7 +75,7 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 - 阶段 4：动态压缩行为（TestCompressorPlugin + GR 时间线 + τ 曲线族 + GR 表头）
 - 阶段 5：建模与数据整合（数据包 + 反推验证）
 - 关键路径：`2 → max(3,4) → 5`
-- vocal 素材：`take01.wav`（48k/16bit/stereo/17.0s，未入库，阶段 2 处理）
+- vocal 素材：`samples/take01.wav`（48k/16bit/stereo/17.0s，阶段 2 已入库）
 
 ## 待办（下一步）
 
@@ -86,7 +86,7 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
   - **阶段 4 ✅ 已完成（2026-08-02）**：动态压缩行为（GR 时间线 gr_timeline + τ 估计 + 实时 GR 表头，995fc54；见下"阶段 3+4 完成记录"）
   - **阶段 5 ✅ 已完成（2026-08-02）**：建模与数据整合（datasetToJSON 数据包 + data-schema.md + reverse_derive.py 反推验证，2698068；见下"阶段 5 完成记录"）
   - **收尾修复 ✅ 已完成（2026-08-02 深夜，957e597..b3e1813）**：GR τ 修复（IPC 暴露 carrier_start_hz 默认 10000 + GainReduction 1ms RMS 窗口 + 正 dB 副本估计，Pro-C 3 实测 τ 有效）+ ipc_client.ps1 响应超时 + JSON 解析悬挂/param_id 转义修复 + measure/scan helper 抽取 + schema 文档修正（见下"收尾修复记录"）
-  - **剩余（可选）**：5 个待改进项见"收尾修复记录"末尾
+  - **剩余（可选）**：4 个待改进项见"收尾修复记录"末尾
 - **T2 稳定加固**（EditorCrashGuard /EHa TU、Generic 编辑器兜底、观察者指针清理）— 当前已足够稳定，可按需实施
 
 ## 阶段 1 完成记录（2026-08-02）
@@ -205,19 +205,24 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 ```
 source/
-├── Main.cpp              # 主窗口 + 后台线程扫描/加载 + 独立窗口管理
-├── host/PluginManager    # VST3 扫描/加载（/EHa + 黑名单）
+├── Main.cpp              # 主窗口 + 专用扫描/加载线程 + 独立窗口管理
+├── host/PluginManager    # VST3 扫描/加载（/EHa + 黑名单 + 死马踏板 + 看门狗）
 ├── ui/PluginEditorWindow # 独立插件编辑器窗口（DocumentWindow 子类）
-├── signal/               # 信号生成器 (SineSweep/MultiTone/ToneBurst/Impulse + 规划 FilePlayback)
-├── capture/              # 采集引擎 (CaptureBuffer/SweepRunner/MeasurementSession + 规划 RecorderEngine/ParameterTimeline/AnalysisStrategy)
-├── analysis/             # 分析引擎 (FreqResponse/Harmonic/CompressionCurve/Export + 规划 WavExporter)
+├── signal/               # 信号生成器 (SineSweep/MultiTone/ToneBurst/Impulse/FilePlayback/NoiseGenerator/EnvelopeSignal)
+├── capture/              # 采集引擎 (AudioBuffer::CaptureBuffer/SweepRunner/MeasurementSession)
+├── analysis/             # 分析引擎 (FreqResponse/Harmonic/CompressionCurve/GainReduction/TimeConstants/CompressionFamily + Export)
 ├── ipc/                  # Named Pipe 控制 (PipeServer/CommandParser/Protocol)
 ├── ui/PlotWidget         # 绘图组件
 └── utils/                # FftHelper/MathUtils/CrashLog
-tools/VST3Scanner         # 独立扫描工具（当前未使用，主进程内扫描）
-monitor.ps1               # 实时监控脚本
+tools/VST3Scanner         # 独立扫描工具（运行时死代码但仍在构建，主进程内扫描）
+tools/monitor.ps1         # 实时监控脚本（2026-08-02 b3e1813 移入 tools/）
+tools/ipc_client.ps1      # NamedPipe 手动客户端（可配超时）
+tools/reverse_derive.py   # 导出 JSON 反推验证（stdlib-only）
+tools/verify_export.py    # 导出 JSON 峰值/Q 验证（stdlib-only）
 DESIGN.md                 # 设计文档
 ```
+
+> 注：`RecorderEngine`/`ParameterTimeline`/`AnalysisStrategy`/`WavExporter` 为 §8.2 设计组件，依 plan-phase2-5 P2-13 **显式延后未实现**（实际落地见阶段 3-5 记录）。
 
 ## 扫描优化专项（2026-08-03/04，计划见 docs/plan-scan-optimization.md）
 
@@ -241,3 +246,16 @@ DESIGN.md                 # 设计文档
 
 - **CGII.vst3**：0 类型插件，每轮热启动重扫 ~0.5s（未入缓存）。待办：预防性黑名单（0 类型 → addToBlacklist）。
 - **扫描挂起黑名单误伤**（R7）：一次挂起即入黑名单，需 "Clear BL" 入口（已有）解除。
+
+
+## 2026-08-08 文档同步记录（81a935d → 063edf3）
+
+**commit 范围**：`81a935d` → `063edf3`（HEAD 063edf3，docs 同步 commit）。
+
+- **`81a935d`** fix(host,ui)：startup not-responding —— 启动未响应根因链：
+  1. 测试缓存污染：67d23d3 新增的超时/挂起测试未 setCacheFile，ctest 全量跑后把真实 90 插件缓存覆写成少量假条目 → 下次启动增量重扫 ~90 插件（Debug 35s）；
+  2. UI 刷新风暴：changeListenerCallback 每发现一个插件同步 updateContent+repaint，Debug 下消息线程被淹没 → Windows 标记 Not Responding。
+  修复：超时/挂起持久化黑名单的路径全部 setCacheFile(tmp)；changeListenerCallback 改 pending flag + triggerAsyncUpdate（AsyncUpdater ≤50ms 合并刷新）。验证全量绿（commit message 记 158/158），Debug 热扫 ~1s。
+- **`063edf3`** docs：sync AGENTS.md —— 刷新 commit ref + 测试计数对齐（commit message 记 126/126，**实测为 158/158**，后续以 tests/AGENTS.md 158 为准）。
+
+**测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（158 个 TEST_CASE）。

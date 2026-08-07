@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；126/126 绿（126 个 TEST_CASE）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
+Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；158/158 绿（158 个 TEST_CASE，2026-08-08 实测）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
 
 ## RUN
 
@@ -15,10 +15,10 @@ Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`ju
 ## LAYOUT
 
 - 命名 1:1 镜像生产模块：`tests/<Module>Tests.cpp` ↔ `source/<module>/X.cpp`（如 `CommandParser.cpp` → `CommandParserTests.cpp`）；无同目录测试、无 `__tests__`
-- 19 个文件：17 个 test .cpp + `TestPlugin.h` + `TestCompressorPlugin.h`（另有 `CommandParserStubs.cpp`）
-- 覆盖映射：除 `ui/` 和 `Main.cpp` 外每个生产模块都有测试文件
+- 20 个源文件：17 个 test .cpp + `CommandParserStubs.cpp` + `TestPlugin.h` + `TestCompressorPlugin.h`
+- 覆盖映射：除 `ui/`、`utils/`（FftHelper/MathUtils/CrashLog 无直接测试文件）和 `Main.cpp` 外每个生产模块都有测试文件
   - signal → ToneBurst/NoiseGenerator/EnvelopeSignal/FilePlayback
-  - capture → SweepRunner/**CaptureBuffer**（2026-08-03 新增，WAV flush）
+  - capture → SweepRunner/CaptureBuffer（2026-08-03 新增，WAV flush）
   - analysis → FreqResponse/GainReduction/TimeConstants/CompressionFamily/Export
   - scan → ScanEngine；ipc → CommandParser/PipeServer；host → 经 stubs
 - 不编译进测试：`Main.cpp`、`CrashLog.cpp`、`EditorCrashGuard.cpp`、`ui/*`
