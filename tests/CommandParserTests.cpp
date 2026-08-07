@@ -474,6 +474,53 @@ TEST_CASE ("CommandParser: loadPlugin returns error for unknown plugin", "[comma
     REQUIRE (response.contains ("\"error\""));
 }
 
+TEST_CASE ("CommandParser: loadPlugin/setParam/getParams responses are strict JSON",
+           "[commandparser][response-json]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // A strict consumer (the Python batch driver) parses every response line
+    // with json.loads — the name/param fields must be properly quoted JSON,
+    // not double-quoted via String::quoted().
+    PluginManager pm;
+    juce::PluginDescription desc;
+    desc.name             = "TestVST3";
+    desc.pluginFormatName = "VST3";
+    desc.fileOrIdentifier = "TestVST3.vst3";
+    desc.uniqueId         = 0xABCD1234;
+    desc.numInputChannels  = 2;
+    desc.numOutputChannels = 2;
+    pm.getKnownPlugins().addType (desc);
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    CommandParser parser;
+    parser.setPluginManager (&pm);
+    parser.setPluginInstance (plugin.get());
+
+    // ---- Act & Assert ----
+    // loadPlugin: the "name" field must strict-parse to the plugin name.
+    auto loadResp = parser.handleCommand (R"({"cmd":"loadPlugin","path":"TestVST3"})");
+    auto loadJson = juce::JSON::parse (loadResp);
+    REQUIRE (! loadJson.isUndefined());
+    REQUIRE (loadJson["name"].toString() == "TestVST3");
+
+    // setParam: the "param" field strict-parses to the parameter display name.
+    auto setResp = parser.handleCommand (R"({"cmd":"setParam","name":"Gain","value":0.5})");
+    auto setJson = juce::JSON::parse (setResp);
+    REQUIRE (! setJson.isUndefined());
+    REQUIRE (setJson["param"].toString() == "Gain");
+
+    // getParams: every entry's "name" strict-parses.
+    auto getResp = parser.handleCommand (R"({"cmd":"getParams"})");
+    auto getJson = juce::JSON::parse (getResp);
+    REQUIRE (! getJson.isUndefined());
+    REQUIRE (getJson["params"][0]["name"].toString() == "Gain");
+}
+
 TEST_CASE ("CommandParser: loadPlugin matches name case-insensitively",
            "[commandparser][loadPlugin-case-insensitive]")
 {
@@ -1682,4 +1729,434 @@ TEST_CASE ("CommandParser: gr_timeline on dynamic source yields valid tau with h
 
     exportFile.deleteFile();
     juce::File (exportPath).withFileExtension (".wav").deleteFile();
+}
+
+//==============================================================================
+// 12. dataset (docs/plan-batch-pipeline.md) — one command runs the default
+// 4-type battery (frequency_response / harmonic / compression / gr_timeline)
+// and aggregates everything into a dataset JSON package. Optional blocks:
+// "scan" (parameter-sweep family, skipped with "scan":false on bad input) and
+// "compression_family" (level x speed grid). Source mapping is fixed:
+// freq/harmonic/compression -> signal, gr_timeline -> dynamic. All 8 cases
+// are the RED-phase contract for the dataset command (implementation is a
+// separate wave); they currently fail with "unknown cmd".
+//==============================================================================
+
+TEST_CASE ("CommandParser: dataset runs default 4 types and exports dataset JSON",
+           "[commandparser][dataset][dataset-default]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // Export under the temp directory; the crash-protection WAV mirror is
+    // derived by swapping ".json" for ".wav".
+    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                   .getChildFile ("pluginlab_dataset_test");
+    tempDir.createDirectory();
+    const juce::File jsonPath = tempDir.getChildFile ("dataset_default.json");
+    const juce::File wavPath  = jsonPath.withFileExtension (".wav");
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+
+    // ---- Act ----
+    // No "types" field -> the default 4-type battery.
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"dataset","path":)")
+        + juce::JSON::toString (jsonPath.getFullPathName()) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    // 1. Response: ok, requested export path echoed, per-type success map
+    //    with all 4 default keys true.
+    auto respJson = juce::JSON::parse (response);
+    auto* respObj = respJson.getDynamicObject();
+    REQUIRE (respObj != nullptr);
+    REQUIRE (respObj->getProperty ("ok") == juce::var (true));
+    REQUIRE (respObj->getProperty ("export_path").toString() == jsonPath.getFullPathName());
+
+    auto* types = respObj->getProperty ("types").getDynamicObject();
+    REQUIRE (types != nullptr);
+    REQUIRE (types->getProperty ("frequency_response") == juce::var (true));
+    REQUIRE (types->getProperty ("harmonic") == juce::var (true));
+    REQUIRE (types->getProperty ("compression") == juce::var (true));
+    REQUIRE (types->getProperty ("gr_timeline") == juce::var (true));
+
+    // 2. Export: parseable dataset JSON with the context block, the GR
+    //    timeline block and the three per-type analysis blocks (S1 unit
+    //    proxy — the plan extends the Dataset package with the per-type
+    //    frequency_response / harmonic / compression blocks).
+    REQUIRE (jsonPath.existsAsFile());
+    auto exportedJson = juce::JSON::parse (jsonPath.loadFileAsString());
+    auto* exportObj = exportedJson.getDynamicObject();
+    REQUIRE (exportObj != nullptr);
+    REQUIRE (exportObj->getProperty ("type").toString() == "dataset");
+    REQUIRE (exportObj->hasProperty ("context"));
+    REQUIRE (exportObj->hasProperty ("gr_timeline"));
+    REQUIRE (exportObj->hasProperty ("frequency_response"));
+    REQUIRE (exportObj->hasProperty ("harmonic"));
+    REQUIRE (exportObj->hasProperty ("compression"));
+
+    // Cleanup
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+    tempDir.deleteRecursively();
+}
+
+TEST_CASE ("CommandParser: dataset gr_timeline block matches standalone measure export",
+           "[commandparser][dataset][dataset-body-equiv]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                   .getChildFile ("pluginlab_dataset_test");
+    tempDir.createDirectory();
+    const juce::File datasetPath   = tempDir.getChildFile ("dataset_body_equiv.json");
+    const juce::File standalonePath = tempDir.getChildFile ("dataset_standalone_gr.json");
+    datasetPath.deleteFile();
+    datasetPath.withFileExtension (".wav").deleteFile();
+    standalonePath.deleteFile();
+    standalonePath.withFileExtension (".wav").deleteFile();
+
+    // ---- Act ----
+    // (i) Dataset battery: the gr_timeline block comes from the fixed
+    //     dynamic-source mapping.
+    auto respDataset = parser.handleCommand (
+        juce::String (R"({"cmd":"dataset","path":)")
+        + juce::JSON::toString (datasetPath.getFullPathName()) + "}");
+    flushMessageManager (200);
+    REQUIRE (respDataset.contains ("\"ok\":true"));
+
+    // (ii) Standalone gr_timeline measurement with the same session config.
+    auto respStandalone = parser.handleCommand (
+        juce::String (R"({"cmd":"measure","source":"dynamic","type":"gr_timeline","path":)")
+        + juce::JSON::toString (standalonePath.getFullPathName()) + "}");
+    flushMessageManager (200);
+    REQUIRE (respStandalone.contains ("\"ok\":true"));
+
+    // ---- Assert ----
+    // Both blocks come from the same GainReduction analyzer over the same
+    // deterministic dynamic dry/wet pair -> data-equivalent GR bodies.
+    auto datasetJson  = juce::JSON::parse (datasetPath.loadFileAsString());
+    auto standaloneJson = juce::JSON::parse (standalonePath.loadFileAsString());
+    REQUIRE (datasetJson.getDynamicObject() != nullptr);
+    REQUIRE (standaloneJson.getDynamicObject() != nullptr);
+
+    auto dsGR = datasetJson["gr_timeline"]["gr"];
+    auto stGR = standaloneJson["gr"];
+    REQUIRE (dsGR["sample_rate"].equals (stGR["sample_rate"]));
+    REQUIRE (dsGR["num_points"].equals (stGR["num_points"]));
+    REQUIRE (dsGR["timeline"].size() == stGR["timeline"].size());
+    REQUIRE (dsGR["timeline"].size() > 0);
+    for (int i = 0; i < dsGR["timeline"].size(); ++i)
+    {
+        INFO ("GR point " << i);
+        REQUIRE (static_cast<double> (dsGR["timeline"][i]["t"]) ==
+                 Catch::Approx (static_cast<double> (stGR["timeline"][i]["t"])).margin (1e-4));
+        REQUIRE (static_cast<double> (dsGR["timeline"][i]["gr_db"]) ==
+                 Catch::Approx (static_cast<double> (stGR["timeline"][i]["gr_db"])).margin (1e-3));
+    }
+
+    // Same TimeConstants estimate -> data-equivalent tau blocks.
+    auto dsTau = datasetJson["gr_timeline"]["tau"];
+    auto stTau = standaloneJson["tau"];
+    REQUIRE (dsTau["valid"].equals (stTau["valid"]));
+    REQUIRE (static_cast<double> (dsTau["attack_sec"]) ==
+             Catch::Approx (static_cast<double> (stTau["attack_sec"])).margin (1e-6));
+    REQUIRE (static_cast<double> (dsTau["release_sec"]) ==
+             Catch::Approx (static_cast<double> (stTau["release_sec"])).margin (1e-6));
+
+    // Cleanup
+    datasetPath.deleteFile();
+    datasetPath.withFileExtension (".wav").deleteFile();
+    standalonePath.deleteFile();
+    standalonePath.withFileExtension (".wav").deleteFile();
+    tempDir.deleteRecursively();
+}
+
+TEST_CASE ("CommandParser: dataset with bad scan param_id skips scan and keeps types",
+           "[commandparser][dataset][dataset-scan-bad]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                   .getChildFile ("pluginlab_dataset_test");
+    tempDir.createDirectory();
+    const juce::File jsonPath = tempDir.getChildFile ("dataset_scan_bad.json");
+    const juce::File wavPath  = jsonPath.withFileExtension (".wav");
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+
+    // ---- Act ----
+    // Unresolvable param_id -> the scan block is skipped ("scan":false, S3
+    // deterministic partial failure); the 4-type battery still completes.
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"dataset","path":)")
+        + juce::JSON::toString (jsonPath.getFullPathName())
+        + R"(,"scan":{"param_id":"nonexistent","values":[0.5]})" + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    auto respJson = juce::JSON::parse (response);
+    auto* respObj = respJson.getDynamicObject();
+    REQUIRE (respObj != nullptr);
+    REQUIRE (respObj->getProperty ("ok") == juce::var (true));
+    REQUIRE (respObj->getProperty ("scan") == juce::var (false));
+
+    auto* types = respObj->getProperty ("types").getDynamicObject();
+    REQUIRE (types != nullptr);
+    REQUIRE (types->getProperty ("frequency_response") == juce::var (true));
+    REQUIRE (types->getProperty ("harmonic") == juce::var (true));
+    REQUIRE (types->getProperty ("compression") == juce::var (true));
+    REQUIRE (types->getProperty ("gr_timeline") == juce::var (true));
+
+    // The dataset export carries no scan block.
+    REQUIRE (jsonPath.existsAsFile());
+    auto exportedJson = juce::JSON::parse (jsonPath.loadFileAsString());
+    REQUIRE_FALSE (exportedJson.getDynamicObject()->hasProperty ("scan"));
+
+    // Cleanup
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+    tempDir.deleteRecursively();
+}
+
+TEST_CASE ("CommandParser: dataset with valid scan embeds scan block",
+           "[commandparser][dataset][dataset-scan-ok]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                   .getChildFile ("pluginlab_dataset_test");
+    tempDir.createDirectory();
+    const juce::File jsonPath = tempDir.getChildFile ("dataset_scan_ok.json");
+    const juce::File wavPath  = jsonPath.withFileExtension (".wav");
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+
+    // ---- Act ----
+    // TestPlugin hosts a "gain" hosted parameter (stable id "gain", display
+    // "Gain"); the scan block mirrors the standalone scan command's field
+    // naming (param_id + values).
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"dataset","path":)")
+        + juce::JSON::toString (jsonPath.getFullPathName())
+        + R"(,"scan":{"param_id":"gain","values":[0.5]})" + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    auto respJson = juce::JSON::parse (response);
+    auto* respObj = respJson.getDynamicObject();
+    REQUIRE (respObj != nullptr);
+    REQUIRE (respObj->getProperty ("ok") == juce::var (true));
+    REQUIRE (respObj->getProperty ("scan") == juce::var (true));
+
+    // Export: the embedded scan block mirrors the standalone scan schema —
+    // one family entry per scan value.
+    REQUIRE (jsonPath.existsAsFile());
+    auto exportedJson = juce::JSON::parse (jsonPath.loadFileAsString());
+    REQUIRE (exportedJson["scan"]["param_id"].toString() == "gain");
+    REQUIRE (exportedJson["scan"]["family"].size() == 1);
+
+    // Cleanup
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+    tempDir.deleteRecursively();
+}
+
+TEST_CASE ("CommandParser: dataset with compression_family embeds grid",
+           "[commandparser][dataset][dataset-cf]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // Reference compressor with known dynamics (same configuration as the
+    // CompressionFamily tests): threshold -30 dB, ratio 4, attack 5 ms,
+    // release 50 ms.
+    auto plugin = std::make_unique<TestCompressorPlugin>();
+    plugin->setThresholdDB (-30.0);
+    plugin->setRatio (4.0);
+    plugin->setAttackSec (0.005);
+    plugin->setReleaseSec (0.05);
+    plugin->setMakeupGainDB (0.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                   .getChildFile ("pluginlab_dataset_test");
+    tempDir.createDirectory();
+    const juce::File jsonPath = tempDir.getChildFile ("dataset_cf.json");
+    const juce::File wavPath  = jsonPath.withFileExtension (".wav");
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+
+    // ---- Act ----
+    // 2 input levels x 3 envelope speeds -> 6 grid cells.
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"dataset","path":)")
+        + juce::JSON::toString (jsonPath.getFullPathName())
+        + R"(,"compression_family":{"levels_db":[-12,0],"speeds":[0.5,1,2]})" + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    auto respJson = juce::JSON::parse (response);
+    auto* respObj = respJson.getDynamicObject();
+    REQUIRE (respObj != nullptr);
+    REQUIRE (respObj->getProperty ("ok") == juce::var (true));
+    REQUIRE (respObj->getProperty ("compression_family") == juce::var (true));
+
+    // Export: one family entry per grid cell (levels x speeds).
+    REQUIRE (jsonPath.existsAsFile());
+    auto exportedJson = juce::JSON::parse (jsonPath.loadFileAsString());
+    REQUIRE (exportedJson["compression_family"]["family"].size() == 6);
+
+    // Cleanup
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+    tempDir.deleteRecursively();
+}
+
+TEST_CASE ("CommandParser: dataset rejects unknown type",
+           "[commandparser][dataset][dataset-unknown-type]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // ---- Act / Assert ----
+    // Unknown measure type -> the whole request fails before any block runs,
+    // with the same message the measure command uses.
+    auto response = parser.handleCommand (R"({"cmd":"dataset","types":["bogus"]})");
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("\"error\""));
+    REQUIRE (response.contains ("unknown measure type"));
+}
+
+TEST_CASE ("CommandParser: dataset fails without session or plugin",
+           "[commandparser][dataset][dataset-no-session]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    CommandParser parser;   // no session, no plugin instance
+
+    // ---- Act ----
+    auto response = parser.handleCommand (R"({"cmd":"dataset","path":"Z:\nonexistent\dataset.json"})");
+
+    // ---- Assert: same guard as the measure command (S2). ----
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("\"error\""));
+    REQUIRE (response.contains ("no session or plugin"));
+}
+
+TEST_CASE ("CommandParser: dataset with no successful blocks returns error",
+           "[commandparser][dataset][dataset-all-fail]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // ---- Act ----
+    // An empty battery means zero successful blocks -> the whole dataset
+    // fails (S2/S3).
+    auto response = parser.handleCommand (R"({"cmd":"dataset","types":[]})");
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("\"error\""));
+    // The dataset command must be dispatched: its own all-fail error, never
+    // the unknown-cmd fallback (otherwise this case would pass spuriously).
+    REQUIRE_FALSE (response.contains ("unknown cmd"));
 }

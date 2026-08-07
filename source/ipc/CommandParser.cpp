@@ -31,6 +31,156 @@ juce::String escapeJsonString (const juce::String& s)
     }
     return out;
 }
+
+// Runs a measurement and dispatches the analysis into `results` exactly as
+// the measure command's lambda does: session->run(), then one analyzer
+// matched to the session type (signal source), the GR-timeline dry/wet pair
+// analysis (non-signal sources), or the raw-capture metadata (non-signal
+// sources without GR). Returns false with `error` set on failure; does NOT
+// write files or fire callbacks — export and notification stay in the
+// caller. Shared by the measure and dataset commands.
+static bool runAndAnalyze (MeasurementSession* session, juce::AudioPluginInstance* plugin,
+                           MeasurementSession::Source source, const juce::String& sourceStr,
+                           MeasurementResults& results, juce::String& error)
+{
+    if (! session->run())
+    {
+        error = R"("error":"measurement failed")";
+        return false;
+    }
+
+    auto& result = session->getResult();
+
+    results.type   = session->getType();
+    results.source = sourceStr;
+
+    if (source == MeasurementSession::Source::signal)
+    {
+        // Dispatch the analysis to the analyzer matching the session type.
+        switch (session->getType())
+        {
+            case MeasurementSession::Type::frequencyResponse:
+            {
+                FreqResponse fr;
+                fr.setLatencySamples (plugin->getLatencySamples());
+                results.freq = fr.analyze (result.getDryBuffer(),
+                                           result.getWetBuffer(),
+                                           result.getSampleRate());
+                break;
+            }
+
+            case MeasurementSession::Type::harmonicAnalysis:
+            {
+                HarmonicAnalysis ha;
+                results.harmonic = ha.analyze (result.getWetBuffer(),
+                                               result.getSampleRate(),
+                                               session->getFundamentalFreqs());
+                break;
+            }
+
+            case MeasurementSession::Type::compressionCurve:
+            {
+                CompressionCurve cc;
+                results.compression = cc.analyze (result.getDryBuffer(),
+                                                  result.getWetBuffer(),
+                                                  result.getSampleRate(),
+                                                  session->getInputLevelsDB());
+                break;
+            }
+
+            // Unreachable — the parser rejects gr_timeline for
+            // Source::signal (defensive, keeps the enum switch
+            // exhaustive).
+            case MeasurementSession::Type::grTimeline:
+                error = R"("error":"gr_timeline requires a non-signal source")";
+                return false;
+        }
+    }
+    else if (session->getType() == MeasurementSession::Type::grTimeline)
+    {
+        // GR timeline analysis (T4.4): gain reduction over the
+        // recorded dry/wet pair, then attack/release time constants.
+        //
+        // - GainReduction reports the wet/dry ratio (negative dB for
+        //   a compressor); the exported timeline keeps that convention.
+        // - TimeConstants needs controlled envelope edges: the dynamic
+        //   source has them (auto-detected via CompressionFamily); the
+        //   file/noise sources are real-world material with no
+        //   controlled edges, so their markers stay empty and the tau
+        //   estimate is invalid by design (GR timeline still exported).
+        // - A 1 ms RMS window (matching CompressionFamily's internal
+        //   configuration) keeps enough timeline points to resolve a
+        //   few-ms attack edge; the default 5 ms window blurs it away.
+        results.gr = GainReduction::analyze (result.getDryBuffer(),
+                                             result.getWetBuffer(),
+                                             result.getSampleRate(),
+                                             plugin->getLatencySamples(),
+                                             0.001);
+
+        TimeConstants::EventMarkers markers;
+        if (source == MeasurementSession::Source::dynamic)
+        {
+            // detectMarkers and TimeConstants expect positive dB =
+            // reduction; GainReduction reports the wet/dry ratio
+            // (negative dB for a compressor). Negate a copy for the
+            // edge detection AND the tau estimate (CompressionFamily
+            // pattern — the exported timeline is NOT negated).
+            auto grPositive = results.gr;
+            for (auto& p : grPositive.timeline)
+                p.grDB = -p.grDB;
+            markers = CompressionFamily::detectMarkers (grPositive);
+            results.tau = TimeConstants::estimate (grPositive, markers,
+                                                   result.getSampleRate());
+        }
+        else
+        {
+            // file/noise sources have no controlled envelope edges:
+            // markers stay empty and the tau estimate is invalid by
+            // design (GR timeline still exported).
+            results.tau = TimeConstants::estimate (results.gr, markers,
+                                                   result.getSampleRate());
+        }
+    }
+    else
+    {
+        // Raw capture: record-only export, no analysis (phase 4).
+        results.rawSamples    = result.getNumRecordedSamples();
+        results.rawSampleRate = result.getSampleRate();
+    }
+
+    return true;
+}
+
+// Serialises a completed measurement result into the export JSON, matching
+// the type dispatch of the measure command's lambda. Raw captures
+// (non-signal sources without GR-timeline analysis) are exported via
+// rawCaptureToJSON. Shared by the measure and dataset commands.
+static juce::String exportResultsToJSON (const MeasurementResults& results, const Export::Context& ctx,
+                                         int blockSize)
+{
+    // Raw capture: record-only export, no analysis (phase 4).
+    if (results.source != Protocol::Source::signal
+        && results.type != MeasurementSession::Type::grTimeline)
+        return Export::rawCaptureToJSON (results.rawSamples, results.rawSampleRate, blockSize, ctx);
+
+    switch (results.type)
+    {
+        case MeasurementSession::Type::frequencyResponse:
+            return Export::freqResponseToJSON (results.freq, ctx);
+
+        case MeasurementSession::Type::harmonicAnalysis:
+            return Export::harmonicAnalysisToJSON (results.harmonic, ctx);
+
+        case MeasurementSession::Type::compressionCurve:
+            return Export::compressionCurveToJSON (results.compression, ctx);
+
+        case MeasurementSession::Type::grTimeline:
+            return Export::grTimelineToJSON (results.gr, results.tau, ctx);
+    }
+
+    // Unreachable — MeasurementSession::Type is exhaustive above.
+    return {};
+}
 }  // namespace
 
 // Crash-protection WAV mirror: every measure/scan command flushes the
@@ -238,7 +388,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                     auto descCopy = d;
                     juce::MessageManager::callAsync ([this, descCopy] { loadPluginCallback (descCopy); });
                 }
-                return Protocol::makeResponse (true, R"("name":")" + d.name.quoted() + R"(")");
+                return Protocol::makeResponse (true, R"("name":")" + escapeJsonString (d.name) + "\"");
             }
         }
         return Protocol::makeResponse (false, R"("error":"plugin not found")");
@@ -275,7 +425,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 if (hosted != nullptr && hosted->getParameterID() == paramId)
                 {
                     candidate->setValueNotifyingHost (static_cast<float> (value));
-                    return Protocol::makeResponse (true, R"("param":")" + candidate->getName (128).quoted()
+                    return Protocol::makeResponse (true, R"("param":")" + escapeJsonString (candidate->getName (128))
                                                      + R"(","value":)" + juce::String (value, 4));
                 }
             }
@@ -288,7 +438,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             if (n == name || n.contains (name))
             {
                 params[i]->setValueNotifyingHost (static_cast<float> (value));
-                return Protocol::makeResponse (true, R"("param":")" + name.quoted()
+                return Protocol::makeResponse (true, R"("param":")" + escapeJsonString (name)
                                                  + R"(","value":)" + juce::String (value, 4));
             }
         }
@@ -318,7 +468,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 paramId = hosted->getParameterID();
 
             data += R"({"index":)" + juce::String (i)
-                  + R"(,"name":")" + n.quoted()
+                  + R"(,"name":")" + escapeJsonString (n)
                   + R"(","value":)" + juce::String (v, 4)
                   + R"(,"param_id":")" + paramId + R"("})";
             if (i < params.size() - 1) data += ",";
@@ -395,121 +545,15 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         // and async (IPC-thread → message-thread dispatch) paths share it.
         auto runMeasurement = [&]() -> juce::String
         {
-            if (! session->run())
-                return Protocol::makeResponse (false, R"("error":"measurement failed")");
+            MeasurementResults results;
+            juce::String error;
 
-            auto& result = session->getResult();
+            if (! runAndAnalyze (session, plugin, source, sourceStr, results, error))
+                return Protocol::makeResponse (false, error);
 
             Export::Context ctx = buildExportContext (plugin, *session, source, sourceStr);
 
-            MeasurementResults results;
-            results.type   = session->getType();
-            results.source = sourceStr;
-
-            juce::String exportJson;
-
-            if (source == MeasurementSession::Source::signal)
-            {
-                // Dispatch the analysis to the analyzer matching the session type.
-                switch (session->getType())
-                {
-                    case MeasurementSession::Type::frequencyResponse:
-                    {
-                        FreqResponse fr;
-                        fr.setLatencySamples (plugin->getLatencySamples());
-                        results.freq = fr.analyze (result.getDryBuffer(),
-                                                   result.getWetBuffer(),
-                                                   result.getSampleRate());
-                        exportJson = Export::freqResponseToJSON (results.freq, ctx);
-                        break;
-                    }
-
-                    case MeasurementSession::Type::harmonicAnalysis:
-                    {
-                        HarmonicAnalysis ha;
-                        results.harmonic = ha.analyze (result.getWetBuffer(),
-                                                       result.getSampleRate(),
-                                                       session->getFundamentalFreqs());
-                        exportJson = Export::harmonicAnalysisToJSON (results.harmonic, ctx);
-                        break;
-                    }
-
-                    case MeasurementSession::Type::compressionCurve:
-                    {
-                        CompressionCurve cc;
-                        results.compression = cc.analyze (result.getDryBuffer(),
-                                                          result.getWetBuffer(),
-                                                          result.getSampleRate(),
-                                                          session->getInputLevelsDB());
-                        exportJson = Export::compressionCurveToJSON (results.compression, ctx);
-                        break;
-                    }
-
-                    // Unreachable — the parser rejects gr_timeline for
-                    // Source::signal (defensive, keeps the enum switch
-                    // exhaustive).
-                    case MeasurementSession::Type::grTimeline:
-                        return Protocol::makeResponse (false,
-                            R"("error":"gr_timeline requires a non-signal source")");
-                }
-            }
-            else if (t == Protocol::MeasureType::grTimeline)
-            {
-                // GR timeline analysis (T4.4): gain reduction over the
-                // recorded dry/wet pair, then attack/release time constants.
-                //
-                // - GainReduction reports the wet/dry ratio (negative dB for
-                //   a compressor); the exported timeline keeps that convention.
-                // - TimeConstants needs controlled envelope edges: the dynamic
-                //   source has them (auto-detected via CompressionFamily); the
-                //   file/noise sources are real-world material with no
-                //   controlled edges, so their markers stay empty and the tau
-                //   estimate is invalid by design (GR timeline still exported).
-                // - A 1 ms RMS window (matching CompressionFamily's internal
-                //   configuration) keeps enough timeline points to resolve a
-                //   few-ms attack edge; the default 5 ms window blurs it away.
-                results.gr = GainReduction::analyze (result.getDryBuffer(),
-                                                     result.getWetBuffer(),
-                                                     result.getSampleRate(),
-                                                     plugin->getLatencySamples(),
-                                                     0.001);
-
-                TimeConstants::EventMarkers markers;
-                if (source == MeasurementSession::Source::dynamic)
-                {
-                    // detectMarkers and TimeConstants expect positive dB =
-                    // reduction; GainReduction reports the wet/dry ratio
-                    // (negative dB for a compressor). Negate a copy for the
-                    // edge detection AND the tau estimate (CompressionFamily
-                    // pattern — the exported timeline is NOT negated).
-                    auto grPositive = results.gr;
-                    for (auto& p : grPositive.timeline)
-                        p.grDB = -p.grDB;
-                    markers = CompressionFamily::detectMarkers (grPositive);
-                    results.tau = TimeConstants::estimate (grPositive, markers,
-                                                           result.getSampleRate());
-                }
-                else
-                {
-                    // file/noise sources have no controlled envelope edges:
-                    // markers stay empty and the tau estimate is invalid by
-                    // design (GR timeline still exported).
-                    results.tau = TimeConstants::estimate (results.gr, markers,
-                                                           result.getSampleRate());
-                }
-
-                exportJson = Export::grTimelineToJSON (results.gr, results.tau, ctx);
-            }
-            else
-            {
-                // Raw capture: record-only export, no analysis (phase 4).
-                results.rawSamples    = result.getNumRecordedSamples();
-                results.rawSampleRate = result.getSampleRate();
-                exportJson = Export::rawCaptureToJSON (result.getNumRecordedSamples(),
-                                                       result.getSampleRate(),
-                                                       session->getBlockSize(),
-                                                       ctx);
-            }
+            auto exportJson = exportResultsToJSON (results, ctx, session->getBlockSize());
 
             juce::File exportFile (path);
             Export::writeToFile (exportJson, exportFile);
@@ -519,10 +563,10 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             if (measurementCompleteCallback)
                 measurementCompleteCallback (results);
 
-            juce::String d = R"("samples":)" + juce::String (result.getNumRecordedSamples())
-                           + R"(,"rate":)"    + juce::String (result.getSampleRate())
-                           + R"(,"export_path":")" + path.quoted() + R"(")"
-                           + R"(,"wav_path":")" + wavPathFor (path).getFullPathName().quoted() + R"(")";
+            juce::String d = R"("samples":)" + juce::String (session->getResult().getNumRecordedSamples())
+                           + R"(,"rate":)"    + juce::String (session->getResult().getSampleRate())
+                           + R"(,"export_path":")" + escapeJsonString (path) + "\""
+                           + R"(,"wav_path":")" + escapeJsonString (wavPathFor (path).getFullPathName()) + "\"";
             return Protocol::makeResponse (true, d);
         };
 
@@ -675,8 +719,8 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 scanCompleteCallback (scanResult);
 
             juce::String d = R"("runs":)" + juce::String (static_cast<int> (scanResult.family.size()))
-                           + R"(,"export_path":")" + path.quoted() + R"(")"
-                           + R"(,"wav_path":")" + wavPathFor (path).getFullPathName().quoted() + R"(")";
+                           + R"(,"export_path":")" + escapeJsonString (path) + "\""
+                           + R"(,"wav_path":")" + escapeJsonString (wavPathFor (path).getFullPathName()) + "\"";
             return Protocol::makeResponse (true, d);
         };
 
@@ -688,6 +732,362 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         juce::WaitableEvent done;
         juce::String response;
         juce::MessageManager::callAsync ([&] { response = runScan(); done.signal(); });
+        done.wait();
+        return response;
+    }
+
+    // --- dataset ---
+    if (cmd == Protocol::Command::dataset)
+    {
+        if (session == nullptr || plugin == nullptr)
+            return Protocol::makeResponse (false, R"("error":"no session or plugin")");
+
+        // --- measurement types (validated BEFORE any block runs) ---
+        // Omitted → the default 4-type battery; an explicit empty array
+        // requests no battery (a scan/compression_family-only dataset is
+        // still valid); an unknown string fails the whole command.
+        std::vector<juce::String> requestedTypes;
+        auto typesVar = obj->getProperty ("types");
+        if (! typesVar.isArray())
+        {
+            requestedTypes = { Protocol::MeasureType::freq,
+                               Protocol::MeasureType::harmonic,
+                               Protocol::MeasureType::compression,
+                               Protocol::MeasureType::grTimeline };
+        }
+        else
+        {
+            for (int i = 0; i < typesVar.size(); ++i)
+            {
+                const auto t = typesVar[i].toString();
+                if (t != Protocol::MeasureType::freq
+                    && t != Protocol::MeasureType::harmonic
+                    && t != Protocol::MeasureType::compression
+                    && t != Protocol::MeasureType::grTimeline)
+                    return Protocol::makeResponse (false, R"("error":"unknown measure type")");
+                requestedTypes.push_back (t);
+            }
+        }
+
+        // Export path: the dataset command has no input file, so "path"
+        // always names the JSON destination.
+        auto path = obj->getProperty ("path").toString();
+
+        // Crash protection: mirror the captured dry/wet audio to a WAV file
+        // next to the export JSON (same as measure/scan; the last run's
+        // append wins).
+        session->getResult().setFlushConfig (wavPathFor (path), kDefaultFlushIntervalSec);
+
+        if (statusCallback)
+            juce::MessageManager::callAsync ([this] { statusCallback ("Collecting dataset..."); });
+
+        // Body of the dataset: run the battery, the optional scan and the
+        // optional compression family, aggregate everything into one Export::
+        // Dataset package and write it. Extracted as a reusable lambda so
+        // both the sync (message-thread) and async (IPC-thread → message-
+        // thread dispatch) paths share it.
+        auto runDataset = [&]() -> juce::String
+        {
+            // Owned measurement results: Export::Dataset holds POINTERS into
+            // these, so they must outlive datasetToJSON — declared outside
+            // the per-type loop on purpose.
+            MeasurementResults freqRes, harmRes, compRes, grRes;
+            bool freqOk = false, harmOk = false, compOk = false, grOk = false;
+
+            // --- battery: run each requested type with its fixed source ---
+            // Source mapping (v1, not overridable): freq/harmonic/compression
+            // → signal; gr_timeline → dynamic (so the tau estimate is valid).
+            for (const auto& t : requestedTypes)
+            {
+                MeasurementSession::Type mtype = MeasurementSession::Type::frequencyResponse;
+                MeasurementSession::Source src = MeasurementSession::Source::signal;
+                const char* srcStr = Protocol::Source::signal;
+                MeasurementResults* res = nullptr;
+                bool* ok = nullptr;
+
+                if (t == Protocol::MeasureType::freq)
+                {
+                    mtype = MeasurementSession::Type::frequencyResponse;
+                    res = &freqRes;
+                    ok = &freqOk;
+                }
+                else if (t == Protocol::MeasureType::harmonic)
+                {
+                    mtype = MeasurementSession::Type::harmonicAnalysis;
+                    res = &harmRes;
+                    ok = &harmOk;
+                }
+                else if (t == Protocol::MeasureType::compression)
+                {
+                    mtype = MeasurementSession::Type::compressionCurve;
+                    res = &compRes;
+                    ok = &compOk;
+                }
+                else // gr_timeline — the only remaining validated type
+                {
+                    mtype = MeasurementSession::Type::grTimeline;
+                    src = MeasurementSession::Source::dynamic;
+                    srcStr = Protocol::Source::dynamic;
+                    res = &grRes;
+                    ok = &grOk;
+                }
+
+                // Source-specific configuration — mirrors the measure command.
+                // For the gr_timeline run this applies the same dynamic-carrier
+                // defaults (carrier_start_hz = 10 kHz) the standalone measure
+                // path relies on, keeping the tau estimate valid.
+                auto sourceError = configureSessionSource (*session, *obj, src);
+                if (sourceError.isNotEmpty())
+                    continue;   // skip this type; unreachable for signal/dynamic
+
+                session->setSource (src);
+                session->setMeasurementType (mtype);
+                session->setPluginInstance (plugin);
+
+                juce::String error;
+                if (runAndAnalyze (session, plugin, src, srcStr, *res, error))
+                    *ok = true;
+                // Per-type failure: record types[type] = false and continue
+                // with the next type.
+            }
+
+            // --- scan (optional block; deterministic partial failure) ---
+            ScanEngine::ScanResult scanResult;
+            bool scanOk = false;
+            MeasurementSession::Type scanType = MeasurementSession::Type::frequencyResponse;
+
+            auto scanVar = obj->getProperty ("scan");
+            if (scanVar.isObject())
+            {
+                auto* scanObj = scanVar.getDynamicObject();
+                auto paramId = scanObj->getProperty ("param_id").toString();
+                auto valuesVar = scanObj->getProperty ("values");
+
+                bool scanValid = ! paramId.isEmpty()
+                                 && valuesVar.isArray() && valuesVar.size() > 0;
+
+                std::vector<float> scanValues;
+                if (scanValid)
+                {
+                    for (int i = 0; i < valuesVar.size(); ++i)
+                    {
+                        const auto v = valuesVar[i];
+                        if (! (v.isDouble() || v.isInt() || v.isInt64()))
+                        {
+                            scanValid = false;
+                            break;
+                        }
+                        const double dv = static_cast<double> (v);
+                        if (dv < 0.0 || dv > 1.0)
+                        {
+                            scanValid = false;
+                            break;
+                        }
+                        scanValues.push_back (static_cast<float> (dv));
+                    }
+                }
+
+                // Scan analysis type: default frequency_response; gr_timeline
+                // (and anything unknown) is rejected for scans.
+                if (scanValid)
+                {
+                    auto st = scanObj->getProperty ("type").toString();
+                    if (st.isEmpty())
+                        st = Protocol::MeasureType::freq;
+                    if (st == Protocol::MeasureType::freq)
+                        scanType = MeasurementSession::Type::frequencyResponse;
+                    else if (st == Protocol::MeasureType::harmonic)
+                        scanType = MeasurementSession::Type::harmonicAnalysis;
+                    else if (st == Protocol::MeasureType::compression)
+                        scanType = MeasurementSession::Type::compressionCurve;
+                    else
+                        scanValid = false;
+                }
+
+                // Parameter lookup by stable ID (scan-command pattern).
+                if (scanValid)
+                {
+                    bool found = false;
+                    auto& params = plugin->getParameters();
+                    for (auto* candidate : params)
+                    {
+                        auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (candidate);
+                        if (hosted != nullptr && hosted->getParameterID() == paramId)
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (! found)
+                        scanValid = false;
+                }
+
+                if (scanValid)
+                {
+                    // The battery leaves the session on the dynamic source;
+                    // reset it for the scan (signal, matching the standalone
+                    // scan command's default).
+                    session->setSource (MeasurementSession::Source::signal);
+                    session->setMeasurementType (scanType);
+                    session->setPluginInstance (plugin);
+
+                    ScanEngine engine;
+                    engine.setPluginInstance (plugin);
+                    engine.setSession (session);
+
+                    // Per-round progress → status callback (e.g. "scan round 2/5").
+                    scanResult = engine.run (paramId, scanValues, scanType,
+                        [this] (int round, int totalRounds)
+                        {
+                            juce::MessageManager::callAsync ([this, round, totalRounds]
+                            {
+                                if (statusCallback)
+                                    statusCallback ("scan round " + juce::String (round)
+                                                    + "/" + juce::String (totalRounds));
+                            });
+                        });
+
+                    // No rounds completed (round 1 failed or aborted) → the
+                    // scan block is skipped (deterministic partial failure).
+                    if (! scanResult.family.empty() && ! scanResult.cancelled)
+                        scanOk = true;
+                }
+            }
+
+            // --- compression_family (optional block) ---
+            CompressionFamily::FamilyResult cfResult;
+            bool cfOk = false;
+
+            auto cfVar = obj->getProperty ("compression_family");
+            if (cfVar.isObject())
+            {
+                auto* cfObj = cfVar.getDynamicObject();
+
+                // levels_db / speeds may be omitted — internal defaults
+                // [-12.0, 0.0] × [0.5, 1.0, 2.0]. Present but invalid
+                // (non-array / empty / non-numeric) → block skipped.
+                std::vector<double> levelsDB;
+                std::vector<double> speeds;
+                bool cfValid = true;
+
+                auto levelsVar = cfObj->getProperty ("levels_db");
+                if (levelsVar.isVoid())
+                {
+                    levelsDB = { -12.0, 0.0 };
+                }
+                else if (levelsVar.isArray() && levelsVar.size() > 0)
+                {
+                    for (int i = 0; i < levelsVar.size(); ++i)
+                    {
+                        const auto v = levelsVar[i];
+                        if (! (v.isDouble() || v.isInt() || v.isInt64()))
+                        {
+                            cfValid = false;
+                            break;
+                        }
+                        levelsDB.push_back (static_cast<double> (v));
+                    }
+                }
+                else
+                {
+                    cfValid = false;
+                }
+
+                auto speedsVar = cfObj->getProperty ("speeds");
+                if (cfValid)
+                {
+                    if (speedsVar.isVoid())
+                    {
+                        speeds = { 0.5, 1.0, 2.0 };
+                    }
+                    else if (speedsVar.isArray() && speedsVar.size() > 0)
+                    {
+                        for (int i = 0; i < speedsVar.size(); ++i)
+                        {
+                            const auto v = speedsVar[i];
+                            if (! (v.isDouble() || v.isInt() || v.isInt64()))
+                            {
+                                cfValid = false;
+                                break;
+                            }
+                            speeds.push_back (static_cast<double> (v));
+                        }
+                    }
+                    else
+                    {
+                        cfValid = false;
+                    }
+                }
+
+                if (cfValid)
+                {
+                    // Per-cell progress → status callback.
+                    cfResult = CompressionFamily::measure (plugin, session, levelsDB, speeds,
+                        [this] (int done, int total)
+                        {
+                            juce::MessageManager::callAsync ([this, done, total]
+                            {
+                                if (statusCallback)
+                                    statusCallback ("compression family " + juce::String (done)
+                                                    + "/" + juce::String (total));
+                            });
+                        });
+
+                    // Empty family (all cells failed) or cancellation → skip.
+                    if (! cfResult.entries.empty() && ! cfResult.cancelled)
+                        cfOk = true;
+                }
+            }
+
+            // All blocks failed → the whole dataset fails (S2/S3).
+            if (! freqOk && ! harmOk && ! compOk && ! grOk && ! scanOk && ! cfOk)
+                return Protocol::makeResponse (false, R"("error":"all measurements failed")");
+
+            // --- aggregate + export ---
+            Export::Dataset dataset;
+            dataset.scan = scanOk ? &scanResult : nullptr;
+            dataset.scanType = scanType;
+            dataset.compressionFamily = cfOk ? &cfResult : nullptr;
+            dataset.grTimeline = grOk ? &grRes.gr : nullptr;
+            dataset.grTau = grOk ? &grRes.tau : nullptr;
+            dataset.freq = freqOk ? &freqRes.freq : nullptr;
+            dataset.harmonic = harmOk ? &harmRes.harmonic : nullptr;
+            dataset.compression = compOk ? &compRes.compression : nullptr;
+
+            // Context source: the last successful battery type (dynamic when
+            // the GR timeline ran, signal otherwise).
+            MeasurementSession::Source ctxSource = MeasurementSession::Source::signal;
+            juce::String ctxSourceStr = Protocol::Source::signal;
+            if (grOk)
+            {
+                ctxSource = MeasurementSession::Source::dynamic;
+                ctxSourceStr = Protocol::Source::dynamic;
+            }
+
+            Export::Context ctx = buildExportContext (plugin, *session, ctxSource, ctxSourceStr);
+
+            auto exportJson = Export::datasetToJSON (dataset, ctx);
+            juce::File (path).getParentDirectory().createDirectory();
+            Export::writeToFile (exportJson, juce::File (path));
+
+            juce::String d = R"("export_path":")" + escapeJsonString (path) + "\""
+                           + R"(,"types":{"frequency_response":)" + juce::String (freqOk ? "true" : "false")
+                           + R"(,"harmonic":)" + juce::String (harmOk ? "true" : "false")
+                           + R"(,"compression":)" + juce::String (compOk ? "true" : "false")
+                           + R"(,"gr_timeline":)" + juce::String (grOk ? "true" : "false")
+                           + R"(},"scan":)" + juce::String (scanOk ? "true" : "false")
+                           + R"(,"compression_family":)" + juce::String (cfOk ? "true" : "false");
+            return Protocol::makeResponse (true, d);
+        };
+
+        // Dispatch strategy mirrors measure/scan: synchronous on the message
+        // thread, callAsync + WaitableEvent from any other thread.
+        if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+            return runDataset();
+
+        juce::WaitableEvent done;
+        juce::String response;
+        juce::MessageManager::callAsync ([&] { response = runDataset(); done.signal(); });
         done.wait();
         return response;
     }
