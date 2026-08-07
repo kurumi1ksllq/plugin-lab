@@ -536,6 +536,29 @@ juce::String datasetToJSON (const Dataset& dataset, const Export::Context& conte
         json += "  },\n";
     }
 
+    if (dataset.freq != nullptr)
+    {
+        json += "  \"frequency_response\": {\n";
+        appendFreqArrays (json, *dataset.freq, "    ");
+        json = json.dropLastCharacters (2);  // remove trailing ",\n" after smoothed_1_3
+        json += "\n";
+        json += "  },\n";
+    }
+
+    if (dataset.harmonic != nullptr)
+    {
+        json += "  \"harmonic\": {\n";
+        appendHarmonicTones (json, *dataset.harmonic, "    ", false);
+        json += "  },\n";
+    }
+
+    if (dataset.compression != nullptr)
+    {
+        json += "  \"compression\": {\n";
+        appendCompressionBody (json, *dataset.compression, "    ", false);
+        json += "  },\n";
+    }
+
     json = json.dropLastCharacters (2);  // remove trailing ",\n" after the last member
     json += "\n";
     json += "}\n";

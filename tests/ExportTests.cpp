@@ -755,3 +755,124 @@ TEST_CASE ("dataset bodies are data-equivalent to standalone exports", "[export]
     REQUIRE (parsed["gr_timeline"]["tau"] == grStd["tau"]);
     REQUIRE (parsed["compression_family"]["family"] == famStd["family"]);
 }
+
+//==============================================================================
+// Test case S: regression lock — the frequency_response / harmonic /
+// compression dataset blocks (battery measurements aggregated into the
+// dataset document) are data-equivalent to the standalone exports
+// (freqResponseToJSON / harmonicAnalysisToJSON / compressionCurveToJSON),
+// proving the aggregation reuses the exact same body serialization helpers.
+
+TEST_CASE ("dataset freq/harmonic/compression blocks are data-equivalent to standalone exports",
+           "[export][dataset-body-equiv]")
+{
+    const auto freq = makeBasicResult();
+
+    HarmonicAnalysis::Result harmonic;
+    harmonic.sampleRate = 48000.0;
+    harmonic.tones.push_back (
+        { 1000.0, -6.0, 0.5,
+          { { 1, 1000.0, -6.0, 100.0 },
+            { 2, 2000.0, -24.0, 4.0 } } });
+
+    CompressionCurve::Result compression;
+    compression.curve = { { -60.0, -60.0, 0.0 }, { -54.0, -56.0, 2.0 } };
+    compression.fitted.ratio = 2.5;
+    compression.fitted.thresholdDB = -20.0;
+    compression.fitted.kneeDB = 1.0;
+
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+    ctx.classId = "com.example.equiv";
+    ctx.latencySamples = 32;
+    ctx.sampleRate = 48000.0;
+    ctx.blockSize = 256;
+
+    Export::Dataset dataset;
+    dataset.freq = &freq;
+    dataset.harmonic = &harmonic;
+    dataset.compression = &compression;
+
+    const auto parsed = juce::JSON::parse (Export::datasetToJSON (dataset, ctx));
+    const auto freqStd = juce::JSON::parse (Export::freqResponseToJSON (freq, ctx));
+    const auto harmStd = juce::JSON::parse (Export::harmonicAnalysisToJSON (harmonic, ctx));
+    const auto compStd = juce::JSON::parse (Export::compressionCurveToJSON (compression, ctx));
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (! freqStd.isUndefined());
+    REQUIRE (! harmStd.isUndefined());
+    REQUIRE (! compStd.isUndefined());
+
+    // frequency_response block == standalone frequency-response export body.
+    REQUIRE (parsed["frequency_response"]["raw"] == freqStd["raw"]);
+    REQUIRE (parsed["frequency_response"]["smoothed_1_12"] == freqStd["smoothed_1_12"]);
+    REQUIRE (parsed["frequency_response"]["smoothed_1_3"] == freqStd["smoothed_1_3"]);
+
+    // harmonic block == standalone harmonic-analysis export body.
+    REQUIRE (parsed["harmonic"]["tones"] == harmStd["tones"]);
+
+    // compression block == standalone compression-curve export body.
+    REQUIRE (parsed["compression"]["curve"] == compStd["curve"]);
+    REQUIRE (parsed["compression"]["fitted"] == compStd["fitted"]);
+
+    // No other measurement keys present.
+    REQUIRE (! parsed.hasProperty ("scan"));
+    REQUIRE (! parsed.hasProperty ("compression_family"));
+    REQUIRE (! parsed.hasProperty ("gr_timeline"));
+}
+
+//==============================================================================
+// Test case T: full battery — freq + harmonic + compression + gr_timeline
+// aggregate into a single valid JSON document containing all four blocks.
+
+TEST_CASE ("dataset with freq/harmonic/compression/gr_timeline emits all four blocks",
+           "[export][dataset-all-four]")
+{
+    const auto freq = makeBasicResult();
+
+    HarmonicAnalysis::Result harmonic;
+    harmonic.sampleRate = 48000.0;
+    harmonic.tones.push_back (
+        { 1000.0, -6.0, 0.5,
+          { { 1, 1000.0, -6.0, 100.0 } } });
+
+    CompressionCurve::Result compression;
+    compression.curve = { { -60.0, -60.0, 0.0 } };
+    compression.fitted.ratio = 2.0;
+    compression.fitted.thresholdDB = -60.0;
+    compression.fitted.kneeDB = 0.0;
+
+    const auto gr = makeGRResult();
+    const auto tau = makeTauResult();
+
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+    ctx.classId = "com.example.four";
+    ctx.latencySamples = 32;
+    ctx.sampleRate = 48000.0;
+
+    Export::Dataset dataset;
+    dataset.freq = &freq;
+    dataset.harmonic = &harmonic;
+    dataset.compression = &compression;
+    dataset.grTimeline = &gr;
+    dataset.grTau = &tau;
+
+    const auto json = Export::datasetToJSON (dataset, ctx);
+    const auto parsed = juce::JSON::parse (json);
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (parsed["type"].toString() == "dataset");
+    REQUIRE (parsed["frequency_response"].isObject());
+    REQUIRE (parsed["harmonic"].isObject());
+    REQUIRE (parsed["compression"].isObject());
+    REQUIRE (parsed["gr_timeline"].isObject());
+
+    // Spot-check each block carries its data.
+    REQUIRE (parsed["frequency_response"]["raw"].size() == 3);
+    REQUIRE (parsed["harmonic"]["tones"].size() == 1);
+    REQUIRE (parsed["compression"]["curve"].size() == 1);
+    REQUIRE (parsed["gr_timeline"]["gr"]["timeline"].size() == 3);
+    REQUIRE (static_cast<double> (parsed["gr_timeline"]["tau"]["attack_sec"])
+             == Catch::Approx (0.002));
+}

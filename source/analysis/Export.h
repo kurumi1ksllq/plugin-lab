@@ -106,6 +106,9 @@ namespace Export
         const CompressionFamily::FamilyResult* compressionFamily = nullptr;  // compression-response family (optional)
         const GainReduction::Result* grTimeline = nullptr;         // GR timeline (optional)
         const TimeConstants::Result* grTau = nullptr;              // GR time constants (optional, with grTimeline)
+        const FreqResponse::Result* freq = nullptr;                // frequency-response measurement (optional)
+        const HarmonicAnalysis::Result* harmonic = nullptr;        // harmonic analysis (optional)
+        const CompressionCurve::Result* compression = nullptr;     // compression curve (optional)
         juce::String measurementNote;                              // fitting advice / notes (optional)
     };
 
