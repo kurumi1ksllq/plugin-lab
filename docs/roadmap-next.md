@@ -78,10 +78,10 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
 ## 五、执行状态
 
 - [x] 块 0 C 稳定加固 + 残余小项（**2026-08-08 完成**，见 docs/plan-block-c-stability.md 完成记录；7 任务全交付：异常保护/EditorCrashGuard 入测试/Generic 兜底验证/观察者加固/CGII 黑名单/schema 核对/getParams Band Used；186 测试全绿 + 真机验收 + 双轴审查）
-- [ ] 块 1 E 测量质量改进
+- [ ] 块 1 E 测量质量改进（**计划已定，见 docs/plan-block-e-measurement-quality.md**；E1 MLS 接入频响 / E2 MultiTone 随机相位 / E3 runMultiple 重新定性为验证型——ScanEngine 已覆盖）
 - [x] 块 2 A 批量采集管线（2026-08-08 完成，见 docs/plan-batch-pipeline.md 完成记录；真机验收 S1/S4 通过）
-- [ ] 块 3 B 记录模式
-- [ ] 块 4 D 进程外托管（设计门）
+- [ ] 块 3 B 记录模式（**任务分解已定，见 docs/plan-block-b-recording.md**；B1 WavExporter / B2 ParameterTimeline / B3 新 capture 模式+IPC+GUI；开工前 brainstorming）
+- [ ] 块 4 D 进程外托管（**设计门，见 docs/plan-block-d-out-of-process.md**；先 brainstorming 定架构才可拆票）
 
 ## 六、决策记录补充（2026-08-08 晚）
 
@@ -91,3 +91,4 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
    - 代码事实：测量路径（SweepRunner::run → JUCE VST3 processBlock）零异常捕获；SweepRunner 每 block `runDispatchLoopUntil(2)` 消息循环重入，LA-2A 编辑器消息在测量期间被处理；JUCE 9 wrapper processBlock 亦无 try/catch
    - 复现实验：IPC 加载+测量 LA-2A（无编辑器窗口）**成功**（4s/240000 samples）；GUI 点击（编辑器窗口打开）闪退 → 差异为编辑器窗口，指向重入路径
    - 处置：加固工作并入块 C 任务 1（无论本次根因细节如何，测量路径异常保护缺失是确定缺陷）
+2. **2026-08-08（工作文档归档）**：E/B/D 三块工作文档已定稿——`docs/plan-block-e-measurement-quality.md`（E 块实施计划，E3 重新定性：ScanEngine 已覆盖多轮扫描，验证型）、`docs/plan-block-b-recording.md`（B 块任务分解 + brainstorming 问题）、`docs/plan-block-d-out-of-process.md`（D 块设计门：6 大设计问题 + 候选架构 + 实施顺序）。执行顺序不变：E（下一步）→ B → D。
