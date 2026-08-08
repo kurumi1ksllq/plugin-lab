@@ -69,7 +69,7 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 ## 阶段 2-5 计划（2026-08-03，Momus 审查定稿）
 
-- **详细计划**：`docs/plan-phase2-5.md`（含 P0/P1/P2 问题清单 + 修正后阶段计划 + 依赖图）
+- **详细计划**：`docs/archive/plan-phase2-5.md`（含 P0/P1/P2 问题清单 + 修正后阶段计划 + 依赖图）
 - 阶段 2：输入与信号增强（FilePlayback 重采样 / 噪声固定种子 / EnvelopeSignal / source 选择）
 - 阶段 3：参数连续扫描（ScanEngine + 连续性 JSON + GUI 多曲线）— 与阶段 4 可并行
 - 阶段 4：动态压缩行为（TestCompressorPlugin + GR 时间线 + τ 曲线族 + GR 表头）
@@ -224,7 +224,7 @@ DESIGN.md                 # 设计文档
 
 > 注：`RecorderEngine`/`ParameterTimeline`/`AnalysisStrategy`/`WavExporter` 为 §8.2 设计组件，依 plan-phase2-5 P2-13 **显式延后未实现**（实际落地见阶段 3-5 记录）。
 
-## 扫描优化专项（2026-08-03/04，计划见 docs/plan-scan-optimization.md）
+## 扫描优化专项（2026-08-03/04，计划见 docs/archive/plan-scan-optimization.md）
 
 > 覆盖 P0 关窗死锁 + P0 慢启动 + P1 增量 UI/加载超时/扫描看门狗 + P2 进度 IPC。
 > 提交：e2d45c0（步骤0）→ 9c2ca4f（步骤1）→ 8f68234（步骤6 性能）→ fa74d45（步骤2）→ 4fb74b1（步骤3）→ cb83c79（步骤4）→ c7f7f9f（步骤5）。155/155 测试绿。
@@ -247,7 +247,7 @@ DESIGN.md                 # 设计文档
 - ~~**CGII.vst3**：0 类型插件，每轮热启动重扫 ~0.5s（未入缓存）~~ → ✅ 已修（块 C 任务 5，见下）：`blacklistUnregistered` 扫描后预防性黑名单（0 类型文件存在但无已知条目）→ `scanDirectory` 跳过检查加 `isBlacklistedPath`（路径黑名单，0 类型无 desc.name 名字拦截够不到）→ 二次热启不再重扫。真机验证：CGII 黑名单持久化 + 重启日志无 "Discovered CGII"
 - **扫描挂起黑名单误伤**（R7）：一次挂起即入黑名单，需 "Clear BL" 入口（已有）解除。
 
-### 块 C 稳定加固进度（2026-08-08，计划见 docs/plan-block-c-stability.md）
+### 块 C 稳定加固进度（2026-08-08，计划见 docs/archive/plan-block-c-stability.md）
 
 - [x] **任务 1 测量路径异常保护**（ea1ebe2）：SweepRunner.cpp 开 /EHa + run() 全 plugin 调用 try/catch（prepare/process/teardown 三段），异常 → CRASH_LOG + 测量失败响应，宿主存活；5 个测试锁定（SweepRunner + CommandParser 级），真机 Pro-Q 4 回归通过
 - [x] **任务 2 EditorCrashGuard 入测试目标**（6a77fb5）：真实 EditorCrashGuard.cpp 编入 unit_tests（/EHa），移除空桩；5 个测试含 **SEH 硬件故障保护**（析构访问违规被 catch(...) 拦截）与 C++ 异常路径

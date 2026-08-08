@@ -22,7 +22,7 @@ PluginLab/
 │   └── utils/         # FftHelper / MathUtils / CrashLog
 ├── tests/             # Catch2 单元测试(158/158 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
 ├── tools/             # VST3Scanner(死代码但仍在构建) + CMakeLists + PS/Python 工具脚本
-├── docs/              # data-schema.md / plan-phase2-5.md / plan-scan-optimization.md
+├── docs/              # data-schema.md / roadmap-next.md / 活跃 plan-block-*（已完成计划在 archive/）
 └── samples/take01.wav # vocal 测试素材（已入库）
 ```
 

@@ -26,7 +26,11 @@ Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`ju
 
 ## TEST DOUBLES
 
-测试设施模式（docs/plan-phase2-5.md「test facility first」TDD 命令）：
+测试设施模式（test facility first 流程，出处 docs/archive/plan-phase2-5.md）：
+
+1. **先建测试设施，再写被测代码**：任何依赖假插件/假数据的测试，先把 double（TestPlugin 扩展 / 新 double / fixture 生成）写出来并跑绿，再开发生产代码
+2. **确定性优先**：噪声固定种子（42）、WAV fixture 运行时生成、无外部素材——任何测试两次运行结果必须一致
+3. TDD 命令：写失败测试（RED）→ 最小实现（GREEN）→ 全量回归；设施本身也按此流程
 
 - **TestPlugin.h** — 可配置假 `AudioPluginInstance`：任意增益、真实 N 采样延迟、busy-wait block hook（取消/并发测试用）
 - **TestCompressorPlugin.h** — 确定性前馈压缩器，单极点数学有文档，是 τ 估计的 ground truth（误差 <10%）

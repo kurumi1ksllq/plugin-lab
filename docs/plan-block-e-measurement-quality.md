@@ -1,6 +1,6 @@
 # PluginLab 块 1：E 测量质量改进实施计划
 
-> 2026-08-08 制定（v2 细化版，可直接照做）。路线图总览见 `docs/roadmap-next.md` 块 1。块 0（C 稳定加固）已完成（docs/plan-block-c-stability.md）。
+> 2026-08-08 制定（v2 细化版，可直接照做）。路线图总览见 `docs/roadmap-next.md` 块 1。块 0（C 稳定加固）已完成（docs/archive/plan-block-c-stability.md）。
 > 执行原则：TDD（RED→GREEN）+ 真机验收（全 IPC 驱动，不控制鼠标）+ 每任务原子提交 push（GitHub 存档）+ 收尾双轴代码审查。
 > 现状核实（2026-08-08）：`Impulse` 生成器已实现 MLS 序列（LFSR，±1 归一化，`useMLS(true)` + `setMLSLength`）；`MultiTone` 无相位选项（同相起振，`sin(2πft)`）；`ScanEngine::run` 已实现多轮参数扫描；`FreqResponse::analyze` 用 H1 帧平均估计；tests/CMakeLists.txt 已编入 `MultiTone.cpp`/`Impulse.cpp` 但**无 MultiToneTests.cpp**（E2 需新建并注册）。
 
@@ -641,7 +641,7 @@ git push origin main
 | 取消 | `cancel()` 线程安全，round 边界生效 | ✅ 覆盖 |
 | 参数快照/恢复 | RAII guard（entry 快照全部参数，exit 恢复含取消） | ✅ 覆盖 |
 | 进度 | `progress(round, totalRounds)` 每轮后回调 | ✅ 覆盖 |
-| 块 A 复用 | dataset 命令内部用 ScanEngine（docs/plan-batch-pipeline.md S1/S4 真机通过） | ✅ 兑现 |
+| 块 A 复用 | dataset 命令内部用 ScanEngine（docs/archive/plan-batch-pipeline.md S1/S4 真机通过） | ✅ 兑现 |
 
 ### Step 2：确认无缺口 → 文档标记完成
 
