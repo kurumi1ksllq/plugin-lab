@@ -82,8 +82,14 @@ PluginEditorWindow::~PluginEditorWindow()
 
 void PluginEditorWindow::closeButtonPressed()
 {
-    if (onWindowClosed)
-        onWindowClosed();
+    // Move the callback out first, then clear it: Main's handler destroys
+    // this window (unloadCurrentPlugin → editorWindow.reset()), so no member
+    // (including onWindowClosed itself) may be touched after the call —
+    // delete-this-in-callback hardening.
+    auto cb = std::move (onWindowClosed);
+    onWindowClosed = nullptr;
+    if (cb)
+        cb();
     // Do NOT call systemRequestedQuit — Main owns the unique_ptr and
     // will reset it via onWindowClosed.
 }
