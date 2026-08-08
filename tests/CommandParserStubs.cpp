@@ -1,21 +1,19 @@
 /**
- * Stub implementations of CrashLog and EditorCrashGuard so that
- * PluginManager.cpp can be compiled into the unit test target without
- * pulling in the GUI/UDP dependencies.
+ * Stub implementations of CrashLog so that PluginManager.cpp can be compiled
+ * into the unit test target without pulling in the GUI/UDP dependencies.
  *
  * CrashLog is a RECORDING stub: entries are captured (thread-safe) so tests
  * can assert that error paths logged an exception (block C task 1). The
  * test helpers clearCrashLog() / crashLogErrorCount() / crashLogContains()
  * are declared here and consumed via extern in test files.
  *
- * EditorCrashGuard stubs are no-ops — tests use the real implementation
- * (EditorCrashGuard.cpp, task 2) or never exercise editor creation.
+ * EditorCrashGuard is NOT stubbed here anymore: the real implementation
+ * (EditorCrashGuard.cpp) is compiled into the test target (block C task 2).
  */
 
 #include <JuceHeader.h>
 #include <mutex>
 #include "../source/utils/CrashLog.h"
-#include "../source/host/EditorCrashGuard.h"
 
 //==============================================================================
 // CrashLog recording stub
@@ -58,18 +56,3 @@ bool crashLogContains (const juce::String& substr)
             return true;
     return false;
 }
-
-//==============================================================================
-// EditorCrashGuard stubs
-namespace EditorCrashGuard
-{
-    juce::AudioProcessorEditor* createEditor (juce::AudioPluginInstance*)
-    {
-        return nullptr;  // tests don't create plugin editors
-    }
-
-    void deleteEditor (juce::AudioPluginInstance*, juce::AudioProcessorEditor*)
-    {
-        // no-op
-    }
-}  // namespace EditorCrashGuard

@@ -28,6 +28,7 @@ target_sources(unit_tests PRIVATE
     ../source/ipc/CommandParser.cpp
     ../source/ipc/PipeServer.cpp
     ../source/host/PluginManager.cpp
+    ../source/host/EditorCrashGuard.cpp
     CommandParserStubs.cpp
     TestPlugin.h TestPluginTests.cpp TestCompressorPlugin.h TestCompressorPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp CaptureBufferTests.cpp FreqResponseTests.cpp ExportTests.cpp
     CommandParserTests.cpp PipeServerTests.cpp
@@ -36,7 +37,8 @@ target_sources(unit_tests PRIVATE
     GainReductionTests.cpp ScanEngineTests.cpp
     TimeConstantsTests.cpp
     CompressionFamilyTests.cpp
-    ComponentVisibilityTests.cpp)
+    ComponentVisibilityTests.cpp
+    EditorCrashGuardTests.cpp)
 target_link_libraries(unit_tests PRIVATE
     juce::juce_audio_basics juce::juce_audio_processors juce::juce_audio_utils juce::juce_dsp
     juce::juce_audio_formats
@@ -54,6 +56,12 @@ endif()
 # SweepRunner.cpp guards plugin calls with catch(...) (block C task 1);
 # /EHa lets it also intercept SEH faults, matching the production target.
 set_source_files_properties(../source/capture/SweepRunner.cpp PROPERTIES
+    COMPILE_FLAGS "/EHa"
+)
+
+# EditorCrashGuard.cpp touches plugin-DLL editor create/delete paths; /EHa
+# matches the production target (block C task 2).
+set_source_files_properties(../source/host/EditorCrashGuard.cpp PROPERTIES
     COMPILE_FLAGS "/EHa"
 )
 catch_discover_tests(unit_tests)

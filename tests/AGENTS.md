@@ -21,7 +21,8 @@ Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`ju
   - capture → SweepRunner/CaptureBuffer（2026-08-03 新增，WAV flush）
   - analysis → FreqResponse/GainReduction/TimeConstants/CompressionFamily/Export
   - scan → ScanEngine；ipc → CommandParser/PipeServer；host → 经 stubs
-- 不编译进测试：`Main.cpp`、`CrashLog.cpp`、`EditorCrashGuard.cpp`、`ui/*`
+  - host → EditorCrashGuard（2026-08-08 块 C 任务 2：真实 EditorCrashGuard.cpp 编入测试目标，含 SEH 崩溃保护用例）
+- 不编译进测试：`Main.cpp`、`CrashLog.cpp`、`ui/*`
 
 ## TEST DOUBLES
 

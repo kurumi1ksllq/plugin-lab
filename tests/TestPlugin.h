@@ -128,6 +128,18 @@ public:
         plugin whose processing path fails (measurement exception protection). */
     void setThrowOnProcessBlock (bool t) noexcept { throwOnProcessBlock = t; }
 
+    /** When set, createEditor throws a std::runtime_error — simulates a
+        plugin whose editor construction fails (EditorCrashGuard coverage).
+        createEditorAndMakeActive() (non-virtual in JUCE 9) calls createEditor()
+        internally, so this also makes the guarded create path throw. */
+    void setThrowOnCreateEditor (bool t) noexcept { throwOnCreateEditor = t; }
+
+    /** Sets the editor createEditor() returns (ownership stays with the
+        caller — the host/editor window takes it over). Default: nullptr
+        (editorless plugin). Used by EditorCrashGuard tests to verify
+        create/delete ordering. */
+    void setEditorToReturn (juce::AudioProcessorEditor* editor) noexcept { editorToReturn = editor; }
+
     //==============================================================================
     // AudioProcessor
     //==============================================================================
@@ -136,8 +148,13 @@ public:
     double getTailLengthSeconds() const override                      { return 0.0; }
     bool acceptsMidi() const override                                 { return false; }
     bool producesMidi() const override                                { return false; }
-    juce::AudioProcessorEditor* createEditor() override               { return nullptr; }
-    bool hasEditor() const override                                   { return false; }
+    juce::AudioProcessorEditor* createEditor() override
+    {
+        if (throwOnCreateEditor)
+            throw std::runtime_error ("TestPlugin injected createEditor failure");
+        return editorToReturn;
+    }
+    bool hasEditor() const override                                   { return editorToReturn != nullptr; }
 
     int getNumPrograms() override                                     { return 0; }
     int getCurrentProgram() override                                  { return 0; }
@@ -258,6 +275,8 @@ private:
     std::atomic<bool>* blockRelease = nullptr;
     bool throwOnPrepareToPlay = false;
     bool throwOnProcessBlock = false;
+    bool throwOnCreateEditor = false;
+    juce::AudioProcessorEditor* editorToReturn = nullptr;
     std::vector<DelayLine> delayLines;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TestPlugin)
