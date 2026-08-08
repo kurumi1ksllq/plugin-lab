@@ -270,3 +270,14 @@ DESIGN.md                 # 设计文档
 - **`063edf3`** docs：sync AGENTS.md —— 刷新 commit ref + 测试计数对齐（commit message 记 126/126，**实测为 158/158**，后续以 tests/AGENTS.md 158 为准）。
 
 **测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（158 个 TEST_CASE）。
+
+## E 块任务 E3 验证记录（2026-08-08）
+
+- 原 roadmap 任务“MeasurementSession::runMultiple 多轮参数扫描接口”已被 ScanEngine::run 完整覆盖（阶段 3 交付），本任务重新定性为验证型，无新增代码：
+  - 多轮参数扫描：run(paramId, values[], type, progress) 每值一轮（ScanEngine.cpp:99-168）✅
+  - 曲线族/数据面：ScanResult.family[]（每轮 freq/harmonic/compression + latency + cancelled）✅
+  - 取消：cancel() 线程安全，round 边界生效 ✅
+  - 参数快照/恢复：RAII ParamGuard（entry 快照全部参数，exit 恢复含取消/异常）✅
+  - 进度：progress(round+1, totalRounds) 每轮后回调 ✅
+  - 块 A 复用：dataset 命令基于 ScanEngine（docs/archive/plan-batch-pipeline.md S1/S4 真机通过）✅
+- 结论：E3 无缺口，标记完成。
