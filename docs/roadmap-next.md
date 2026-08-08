@@ -77,7 +77,7 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
 
 ## 五、执行状态
 
-- [ ] 块 0 C 稳定加固 + 残余小项（**进行中**，任务清单见上；含 LA-2A 崩溃调查新增的"测量路径异常保护"）
+- [x] 块 0 C 稳定加固 + 残余小项（**2026-08-08 完成**，见 docs/plan-block-c-stability.md 完成记录；7 任务全交付：异常保护/EditorCrashGuard 入测试/Generic 兜底验证/观察者加固/CGII 黑名单/schema 核对/getParams Band Used；186 测试全绿 + 真机验收 + 双轴审查）
 - [ ] 块 1 E 测量质量改进
 - [x] 块 2 A 批量采集管线（2026-08-08 完成，见 docs/plan-batch-pipeline.md 完成记录；真机验收 S1/S4 通过）
 - [ ] 块 3 B 记录模式
