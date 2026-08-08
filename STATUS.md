@@ -252,7 +252,7 @@ DESIGN.md                 # 设计文档
 - [x] **任务 1 测量路径异常保护**（ea1ebe2）：SweepRunner.cpp 开 /EHa + run() 全 plugin 调用 try/catch（prepare/process/teardown 三段），异常 → CRASH_LOG + 测量失败响应，宿主存活；5 个测试锁定（SweepRunner + CommandParser 级），真机 Pro-Q 4 回归通过
 - [x] **任务 2 EditorCrashGuard 入测试目标**（6a77fb5）：真实 EditorCrashGuard.cpp 编入 unit_tests（/EHa），移除空桩；5 个测试含 **SEH 硬件故障保护**（析构访问违规被 catch(...) 拦截）与 C++ 异常路径
 - [x] **任务 3 Generic 编辑器兜底**（1dcb013 已实现，本块验证）：Main.cpp:1617-1628 fallback（createEditorSafe null → GenericAudioProcessorEditor + try/catch → 仍失败 "Loaded (no editor)"）；真机 Pro-Q 4 "Editor ok" 原生编辑器，fallback 不误触发
-- [x] **任务 4 观察者指针生命周期加固**（add971c）：PluginEditorWindow::closeButtonPressed 先 move 出回调再调用（回调内 delete-this 加固）；其余观察者（ChangeListener/Timer/CommandParser 回调）审查确认析构顺序安全
+- [x] **任务 4 观察者指针生命周期加固**（add971c）：PluginEditorWindow::closeButtonPressed 先 move 出回调再调用（回调内 delete-this 加固）；其余观察者（ChangeListener/Timer/CommandParser 回调）审查确认析构顺序安全。真机验证：IPC 加载 Pro-Q 4 → WM_CLOSE 关闭（editor 窗口 + 主窗口）→ 干净退出，crashlog 无 ERROR
 - [x] **任务 5 CGII.vst3 预防性黑名单**（见"已知残留"）：`blacklistUnregistered` + `isBlacklistedPath` + scanDirectory 跳过接线；4 个单测锁定；真机二次热启无 CGII 重扫
 - [x] **任务 6 data-schema scan 结构最终核对**（f44e7a0）：§5 scan 与 scanToJSON 逐字段核对一致（顶层 scan/context 七字段/family/精度/dataset 内嵌）；补 context 顶层 sample_rate + source 断言锁定（[export][scan-schema] 30 断言）；data-schema.md 记核对记录
 - [x] **任务 7 getParams Band Used 状态**：Pro-Q 4 真机验证——getParams 暴露 "Band 1 Used"（name/param_id/value），setParam 按 param_id 切换成功（0→1 回读确认）；TestPlugin 锁定测试 [band-used]；STATUS 待改进项 3/4 标记解决

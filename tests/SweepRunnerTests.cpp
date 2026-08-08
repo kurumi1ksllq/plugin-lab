@@ -272,7 +272,7 @@ TEST_CASE ("SweepRunner: plugin throwing in prepareToPlay makes run() return fal
     REQUIRE_FALSE (runner.isRunning());
 }
 
-TEST_CASE ("SweepRunner: plugin throwing in processBlock still records a clean result buffer",
+TEST_CASE ("SweepRunner: plugin throwing in processBlock leaves runner stopped and result clean",
            "[sweeprunner][exception]")
 {
     // Arrange
@@ -293,7 +293,8 @@ TEST_CASE ("SweepRunner: plugin throwing in processBlock still records a clean r
     // Act
     REQUIRE_NOTHROW (runner.run());
 
-    // Assert — no partially-written block content beyond a failed run;
-    // the runner must not leave half-appended state (cancelled == false path)
+    // Assert — runner stopped, no partially-appended block content (the
+    // failed block is never recorded: append happens after processBlock)
     REQUIRE_FALSE (runner.isRunning());
+    REQUIRE (runner.getResult().getNumRecordedSamples() == 0);
 }

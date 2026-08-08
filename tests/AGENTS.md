@@ -30,7 +30,7 @@ Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`ju
 
 - **TestPlugin.h** — 可配置假 `AudioPluginInstance`：任意增益、真实 N 采样延迟、busy-wait block hook（取消/并发测试用）
 - **TestCompressorPlugin.h** — 确定性前馈压缩器，单极点数学有文档，是 τ 估计的 ground truth（误差 <10%）
-- **CommandParserStubs.cpp** — CrashLog/EditorCrashGuard 空桩，让 `PluginManager.cpp` 在无 GUI/UDP 依赖下编译
+- **CommandParserStubs.cpp** — 仅 CrashLog 桩（**记录型**：捕获 Error 级条目，提供 `clearCrashLog`/`crashLogErrorCount`/`crashLogContains` 测试辅助，断言异常保护路径有日志）；EditorCrashGuard 不再是桩——真实 `EditorCrashGuard.cpp` 编译进测试目标（/EHa，2026-08-08 块 C 任务 2）
 
 ## CONVENTIONS
 

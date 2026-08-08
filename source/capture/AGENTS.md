@@ -48,7 +48,7 @@ create → configure → run → read result → destroy。`run()` 阻塞至完�
 
 ## FROZEN BOUNDARY
 
-**SweepRunner 不改**（依据 DESIGN.md §8.2）：
+**SweepRunner 不改**（依据 DESIGN.md §8.2；**唯一例外**：块 C 任务 1 授权的测量路径异常保护——`run()` 内 plugin 调用（prepare/process/teardown）加 try/catch + CRASH_LOG + 失败返回 false，TU 开 /EHa；语义不变，仅防插件异常逃逸消息循环。详见 source/AGENTS.md /EHa 约定）：
 
 - 测量目的感知放 MeasurementSession，为什么测放上层
 - prepareToPlay 统一并入 `SweepRunner::run`（Phase-1 bug：loadPlugin 线程 + sweep 线程双调用致 Pro-Q 4 崩溃）

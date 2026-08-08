@@ -17,6 +17,20 @@ PluginManager::PluginManager()
 
 PluginManager::~PluginManager() {}
 
+namespace
+{
+    /** True if two VST3 identifiers refer to the same plugin: exact match, or
+        one is the other's inner-DLL path (bundle\Contents prefix). Shared by
+        the zero-type blacklist and isBlacklistedPath so the bundle↔inner
+        matching semantics stay in one place (mirrors cacheIsCurrent). */
+    bool sameBundlePath (const juce::String& a, const juce::String& b)
+    {
+        return a == b
+            || a.startsWith (b + "\\Contents")
+            || b.startsWith (a + "\\Contents");
+    }
+}
+
 bool PluginManager::isBlacklistedName (const juce::String& name)
 {
     // 已知会直接终止宿主进程的插件黑名单（Pianoteq 9/8/7 在 createPluginInstance
@@ -267,14 +281,11 @@ int PluginManager::blacklistUnregistered (const juce::File& directory)
 
         bool known = false;
         for (const auto& d : types)
-        {
-            if (d.fileOrIdentifier == key
-                || d.fileOrIdentifier.startsWith (key + "\\Contents"))
+            if (sameBundlePath (d.fileOrIdentifier, key))
             {
                 known = true;
                 break;
             }
-        }
         if (known)
             continue;
 
@@ -351,12 +362,8 @@ bool PluginManager::isBlacklistedPath (const juce::String& fileOrIdentifier) con
     std::lock_guard<std::mutex> lock (knownListGuard);
     const auto blacklist = knownPlugins.getBlacklistedFiles();
     for (const auto& b : blacklist)
-    {
-        if (b == fileOrIdentifier
-            || fileOrIdentifier.startsWith (b + "\\Contents")
-            || b.startsWith (fileOrIdentifier + "\\Contents"))
+        if (sameBundlePath (b, fileOrIdentifier))
             return true;
-    }
     return false;
 }
 
