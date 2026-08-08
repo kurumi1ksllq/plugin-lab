@@ -79,6 +79,16 @@ public:
         inner-DLL entry (correct mtime baseline) is kept over the bundle-path one. */
     void dedupeKnownPlugins();
 
+    /** Preemptively blacklist zero-type plugins (block C task 5): a .vst3 file
+        that scans to no types is never cached, so every hot start rescans it
+        (~0.5s each — CGII.vst3). Enumerates top-level *.vst3 entries of
+        `directory` and blacklists those that exist on disk but have no known
+        entry (exact or inner-DLL-prefix match, same semantics as cacheIsCurrent)
+        and are not already blacklisted. Persists the blacklist immediately so
+        the next hot start skips them. Returns the number of newly blacklisted
+        entries. Called by scanSystemDirectories after each scan pass. */
+    int blacklistUnregistered (const juce::File& directory);
+
     /** True if a plugin name is in the host-killing blacklist (Pianoteq family
         terminates the host process; see STATUS.md). */
     static bool isBlacklistedName (const juce::String& name);
@@ -166,6 +176,11 @@ public:
     /** Thread-safe blacklist add (guard vs IPC-thread getBlacklistedFiles reads;
         JUCE's own addToBlacklist is unlocked). */
     void addToBlacklistLocked (const juce::String& pluginID);
+
+    /** True if the given path (or its bundle\Contents inner path) is in the
+        persistent blacklist. Locked read of getBlacklistedFiles; the same
+        exact-or-prefix semantics as cacheIsCurrent. */
+    bool isBlacklistedPath (const juce::String& fileOrIdentifier) const;
 
 private:
     /** Remove ghost entries (plugin files that no longer exist) and

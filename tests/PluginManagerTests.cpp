@@ -109,6 +109,96 @@ TEST_CASE ("PluginManager: blacklist round-trips through the cache",
     REQUIRE (fresh.getKnownPlugins().getBlacklistedFiles().contains (blPath));
 }
 
+//==============================================================================
+// blacklistUnregistered — preemptive blacklist of zero-type plugins
+// (block C task 5): existing .vst3 entries that produced no types are never
+// cached, so every hot start rescans them (CGII.vst3, ~0.5s each).
+//==============================================================================
+
+TEST_CASE ("PluginManager: blacklistUnregistered blacklists existing zero-type files",
+           "[pluginmanager][zero-type]")
+{
+    // Arrange — a temp dir with a fake .vst3 bundle directory (exists on
+    // disk, but the plugin list has no entry for it — as a zero-type plugin
+    // would look after a scan).
+    TempCacheDir tmp;
+    const auto zeroDir = tmp.dir.getChildFile ("Zero.vst3");
+    zeroDir.createDirectory();
+
+    PluginManager mgr;
+    mgr.setCacheFile (tmp.cacheFile());
+
+    // Act
+    const int added = mgr.blacklistUnregistered (tmp.dir);
+
+    // Assert — blacklisted and persisted for the next hot start
+    REQUIRE (added == 1);
+    REQUIRE (mgr.getKnownPlugins().getBlacklistedFiles().contains (zeroDir.getFullPathName()));
+
+    // Persistence round-trip
+    mgr.saveCache();
+    PluginManager fresh;
+    fresh.setCacheFile (tmp.cacheFile());
+    REQUIRE (fresh.loadCache());
+    REQUIRE (fresh.getKnownPlugins().getBlacklistedFiles().contains (zeroDir.getFullPathName()));
+}
+
+TEST_CASE ("PluginManager: blacklistUnregistered skips known and already-blacklisted files",
+           "[pluginmanager][zero-type]")
+{
+    // Arrange — one known plugin file, one blacklisted file, one zero-type file
+    TempCacheDir tmp;
+    auto knownFile = createTempPluginFile (tmp.dir, "Known.vst3");
+    auto blFile = createTempPluginFile (tmp.dir, "Bad.vst3");
+    auto zeroDir = tmp.dir.getChildFile ("Zero.vst3");
+    zeroDir.createDirectory();
+
+    PluginManager mgr;
+    mgr.setCacheFile (tmp.cacheFile());
+    mgr.getKnownPlugins().addType (makeDesc ("Known", knownFile.getFullPathName(), 2001));
+    mgr.getKnownPlugins().addToBlacklist (blFile.getFullPathName());
+
+    // Act
+    const int added = mgr.blacklistUnregistered (tmp.dir);
+
+    // Assert — only the zero-type file was newly blacklisted
+    REQUIRE (added == 1);
+    const auto blacklist = mgr.getKnownPlugins().getBlacklistedFiles();
+    REQUIRE (blacklist.contains (zeroDir.getFullPathName()));
+    REQUIRE_FALSE (blacklist.contains (knownFile.getFullPathName()));  // known stays known
+}
+
+TEST_CASE ("PluginManager: blacklistUnregistered is a no-op for a missing directory",
+           "[pluginmanager][zero-type]")
+{
+    // Arrange
+    TempCacheDir tmp;
+    PluginManager mgr;
+    mgr.setCacheFile (tmp.cacheFile());
+    const auto missing = tmp.dir.getChildFile ("does-not-exist");
+
+    // Act / Assert
+    REQUIRE (mgr.blacklistUnregistered (missing) == 0);
+}
+
+TEST_CASE ("PluginManager: isBlacklistedPath matches bundle and inner-DLL paths",
+           "[pluginmanager][zero-type][blacklist]")
+{
+    // Arrange
+    TempCacheDir tmp;
+    const auto bundlePath = tmp.dir.getChildFile ("Bad.vst3").getFullPathName();
+    const auto innerPath = bundlePath + "\\Contents\\x86_64-win\\Bad.vst3";
+
+    PluginManager mgr;
+    mgr.setCacheFile (tmp.cacheFile());
+    mgr.getKnownPlugins().addToBlacklist (bundlePath);
+
+    // Act / Assert — both directions resolve through the blacklist
+    REQUIRE (mgr.isBlacklistedPath (bundlePath));
+    REQUIRE (mgr.isBlacklistedPath (innerPath));
+    REQUIRE_FALSE (mgr.isBlacklistedPath (tmp.dir.getChildFile ("Other.vst3").getFullPathName()));
+}
+
 TEST_CASE ("PluginManager: loadCache returns false for a missing cache",
            "[pluginmanager][cache]")
 {

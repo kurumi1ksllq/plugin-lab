@@ -244,7 +244,7 @@ DESIGN.md                 # 设计文档
 
 ### 已知残留
 
-- **CGII.vst3**：0 类型插件，每轮热启动重扫 ~0.5s（未入缓存）。待办：预防性黑名单（0 类型 → addToBlacklist）。
+- ~~**CGII.vst3**：0 类型插件，每轮热启动重扫 ~0.5s（未入缓存）~~ → ✅ 已修（块 C 任务 5，见下）：`blacklistUnregistered` 扫描后预防性黑名单（0 类型文件存在但无已知条目）→ `scanDirectory` 跳过检查加 `isBlacklistedPath`（路径黑名单，0 类型无 desc.name 名字拦截够不到）→ 二次热启不再重扫。真机验证：CGII 黑名单持久化 + 重启日志无 "Discovered CGII"
 - **扫描挂起黑名单误伤**（R7）：一次挂起即入黑名单，需 "Clear BL" 入口（已有）解除。
 
 ### 块 C 稳定加固进度（2026-08-08，计划见 docs/plan-block-c-stability.md）
@@ -252,8 +252,8 @@ DESIGN.md                 # 设计文档
 - [x] **任务 1 测量路径异常保护**（ea1ebe2）：SweepRunner.cpp 开 /EHa + run() 全 plugin 调用 try/catch（prepare/process/teardown 三段），异常 → CRASH_LOG + 测量失败响应，宿主存活；5 个测试锁定（SweepRunner + CommandParser 级），真机 Pro-Q 4 回归通过
 - [x] **任务 2 EditorCrashGuard 入测试目标**（6a77fb5）：真实 EditorCrashGuard.cpp 编入 unit_tests（/EHa），移除空桩；5 个测试含 **SEH 硬件故障保护**（析构访问违规被 catch(...) 拦截）与 C++ 异常路径
 - [x] **任务 3 Generic 编辑器兜底**（1dcb013 已实现，本块验证）：Main.cpp:1617-1628 fallback（createEditorSafe null → GenericAudioProcessorEditor + try/catch → 仍失败 "Loaded (no editor)"）；真机 Pro-Q 4 "Editor ok" 原生编辑器，fallback 不误触发
-- [ ] 任务 4 观察者指针生命周期加固
-- [ ] 任务 5 CGII.vst3 预防性黑名单
+- [x] **任务 4 观察者指针生命周期加固**（add971c）：PluginEditorWindow::closeButtonPressed 先 move 出回调再调用（回调内 delete-this 加固）；其余观察者（ChangeListener/Timer/CommandParser 回调）审查确认析构顺序安全
+- [x] **任务 5 CGII.vst3 预防性黑名单**（见"已知残留"）：`blacklistUnregistered` + `isBlacklistedPath` + scanDirectory 跳过接线；4 个单测锁定；真机二次热启无 CGII 重扫
 - [ ] 任务 6 data-schema scan 结构最终核对
 - [ ] 任务 7 getParams Band Used 状态
 

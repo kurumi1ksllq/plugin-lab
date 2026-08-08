@@ -205,9 +205,17 @@ void PluginManager::scanDirectory (const juce::File& directory, const juce::File
                 scanner.skipNextFile();
                 continue;
             }
+            // 路径黑名单（块 C 任务 5：CGII 等 0 类型预防性黑名单 + 挂起/超时黑名单）：
+            // 与 Pianoteq 名字拦截同语义——直接 skip，不 LoadLibrary/InitDll。
+            // 0 类型插件没有 desc.name，名字拦截够不到，必须按路径判。
+            const auto it = pathByName.find (nextName);
+            if (it != pathByName.end() && isBlacklistedPath (it->second))
+            {
+                scanner.skipNextFile();
+                continue;
+            }
             // 增量跳过（cacheIsCurrent 用内层 DLL 的 mtime 精确判断；目录型
             // bundle 的 bundle 路径可命中缓存的 inner 前缀条目）。
-            const auto it = pathByName.find (nextName);
             if (it != pathByName.end() && cacheIsCurrent (it->second))
             {
                 scanner.skipNextFile();
@@ -234,6 +242,54 @@ void PluginManager::beginScan()
         std::lock_guard<std::mutex> lock (scanFileLock);
         currentScanFile = {};
     }
+}
+
+int PluginManager::blacklistUnregistered (const juce::File& directory)
+{
+    if (! directory.isDirectory())
+        return 0;
+
+    // Zero-type plugins (block C task 5): enumerate top-level .vst3 entries
+    // (single files or directory bundles) and blacklist those that exist on
+    // disk but have no known entry — a scanned zero-type plugin never enters
+    // knownPlugins, so every hot start rescans it (~0.5s each; CGII.vst3).
+    // Matching uses the same semantics as cacheIsCurrent (exact path or
+    // bundle\Contents prefix), because scan enumeration produces bundle paths
+    // while cache entries may be inner-DLL paths.
+    const auto types = knownPlugins.getTypes();
+    juce::Array<juce::File> entries;
+    directory.findChildFiles (entries, juce::File::findFilesAndDirectories, false, "*.vst3");
+
+    int added = 0;
+    for (const auto& file : entries)
+    {
+        const auto key = file.getFullPathName();
+
+        bool known = false;
+        for (const auto& d : types)
+        {
+            if (d.fileOrIdentifier == key
+                || d.fileOrIdentifier.startsWith (key + "\\Contents"))
+            {
+                known = true;
+                break;
+            }
+        }
+        if (known)
+            continue;
+
+        if (isBlacklistedPath (key))
+            continue;
+
+        addToBlacklistLocked (key);
+        ++added;
+        CRASH_LOG_WARN ("Zero-type plugin blacklisted", key);
+    }
+
+    if (added > 0)
+        saveCache();          // 立即持久化——下次热启不再重扫
+
+    return added;
 }
 
 void PluginManager::updateScanProgress (float progress, const juce::String& currentFile)
@@ -284,6 +340,24 @@ void PluginManager::addToBlacklistLocked (const juce::String& pluginID)
 {
     std::lock_guard<std::mutex> lock (knownListGuard);
     knownPlugins.addToBlacklist (pluginID);
+}
+
+bool PluginManager::isBlacklistedPath (const juce::String& fileOrIdentifier) const
+{
+    // Locked read of the persistent blacklist (verifier M1: JUCE's
+    // getBlacklistedFiles is unlocked). Exact-or-prefix semantics mirror
+    // cacheIsCurrent so a bundle path matches its inner-DLL blacklist entry
+    // and vice versa.
+    std::lock_guard<std::mutex> lock (knownListGuard);
+    const auto blacklist = knownPlugins.getBlacklistedFiles();
+    for (const auto& b : blacklist)
+    {
+        if (b == fileOrIdentifier
+            || fileOrIdentifier.startsWith (b + "\\Contents")
+            || b.startsWith (fileOrIdentifier + "\\Contents"))
+            return true;
+    }
+    return false;
 }
 
 bool PluginManager::handleScanHang()
@@ -337,6 +411,11 @@ void PluginManager::scanSystemDirectories()
             juce::File::SpecialLocationType::userApplicationDataDirectory)
             .getChildFile ("Programs\\Common\\VST3");
         if (localDir.isDirectory()) scanDirectory (localDir, pedal);
+
+        // 预防性黑名单（块 C 任务 5）：0 类型插件不入缓存、每轮热启重扫——扫完
+        // 立即黑名单（内部 saveCache 持久化），下次热启跳过。
+        blacklistUnregistered (juce::File ("C:\\Program Files\\Common Files\\VST3"));
+        if (localDir.isDirectory()) blacklistUnregistered (localDir);
 
         // 扫描可能叠加了重复条目（scanAndAddFile 只加不删）→ 去重后再落盘。
         dedupeKnownPlugins();
