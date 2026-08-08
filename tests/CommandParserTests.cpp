@@ -2464,3 +2464,152 @@ TEST_CASE ("CommandParser: dataset with no successful blocks returns error",
     // the unknown-cmd fallback (otherwise this case would pass spuriously).
     REQUIRE_FALSE (response.contains ("unknown cmd"));
 }
+
+//==============================================================================
+// E-block review fixes: excitation must not leak across commands.
+//==============================================================================
+
+TEST_CASE ("CommandParser: scan resets freq excitation to sweep (no residue leakage)",
+           "[commandparser][scan][excitation]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // Simulate residue: a prior MLS measure left the session on MLS.
+    session.setFreqExcitation (true);
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_scan_reset_excitation.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+
+    // ---- Act ---- (the scan command itself carries no excitation field)
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"scan","type":"frequency_response","param_id":"gain",)"
+                      R"("values":[0.5],"path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    // The scan must not inherit a stale MLS excitation from a previous
+    // measure: it resets the session to sweep (its documented default).
+    REQUIRE_FALSE (session.getFreqExcitation());
+
+    // Cleanup
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+}
+
+TEST_CASE ("CommandParser: dataset applies excitation to the scan block too",
+           "[commandparser][dataset][excitation]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                   .getChildFile ("pluginlab_dataset_test");
+    tempDir.createDirectory();
+    const juce::File jsonPath = tempDir.getChildFile ("dataset_scan_excitation.json");
+    const juce::File wavPath  = jsonPath.withFileExtension (".wav");
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+
+    // ---- Act ----
+    // Battery WITHOUT frequency_response + a frequency_response scan block
+    // + excitation:mls -> the scan (a freq measurement) must use MLS too.
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"dataset","types":["harmonic"],)"
+                      R"("excitation":"mls","scan":{"param_id":"gain","values":[0.5]},)"
+                      R"("path":)")
+        + juce::JSON::toString (jsonPath.getFullPathName()) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    // The whole dataset shares one excitation — even when the battery skips
+    // frequency_response, the scan block inherits the requested MLS.
+    REQUIRE (session.getFreqExcitation());
+
+    // Cleanup
+    jsonPath.deleteFile();
+    wavPath.deleteFile();
+}
+
+TEST_CASE ("CommandParser: measure ignores excitation for non-freq types",
+           "[commandparser][measure][excitation]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::harmonicAnalysis);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_harm_excitation.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+
+    // ---- Act ---- (excitation is a frequency-response-only option)
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","type":"harmonic","excitation":"mls","path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    // A non-freq measurement must not apply (or leak) the freq excitation.
+    REQUIRE_FALSE (session.getFreqExcitation());
+
+    // Cleanup
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+}

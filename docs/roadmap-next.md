@@ -78,7 +78,7 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
 ## 五、执行状态
 
 - [x] 块 0 C 稳定加固 + 残余小项（**2026-08-08 完成**，见 docs/archive/plan-block-c-stability.md 完成记录；7 任务全交付：异常保护/EditorCrashGuard 入测试/Generic 兜底验证/观察者加固/CGII 黑名单/schema 核对/getParams Band Used；186 测试全绿 + 真机验收 + 双轴审查）
-- [ ] 块 1 E 测量质量改进（**实施中 2026-08-08**，计划 v2 见 docs/plan-block-e-measurement-quality.md；E1 MLS 接入频响 / E2 MultiTone 随机相位 执行中；**E3 runMultiple 验证型 ✅ 已核实**：ScanEngine 完整覆盖多轮扫描/曲线族/取消/快照恢复/进度，块 A dataset 已复用，无缺口无新增代码——见 STATUS.md E3 记录）
+- [x] 块 1 E 测量质量改进（**2026-08-08 完成**，计划 v2 见 docs/plan-block-e-measurement-quality.md；E1 MLS 接入频响 / E2 MultiTone 随机相位 / E3 runMultiple 验证型；全量 199 测试双跑绿 + 真机验收 MLS vs sweep |Δ|<0.5dB PASS + 双轴审查修复（scan/dataset/measure 激励泄漏收敛 + analyzeMLS 短录制 DFT clamp））
 - [x] 块 2 A 批量采集管线（2026-08-08 完成，见 docs/archive/plan-batch-pipeline.md 完成记录；真机验收 S1/S4 通过）
 - [ ] 块 3 B 记录模式（**实施计划已定 v2，见 docs/plan-block-b-recording.md**——含接口签名/测试骨架/4 条 brainstorming 草案决策，确认即可开工；B1 WavExporter / B2 ParameterTimeline / B3 新 capture 模式+IPC+GUI）
 - [ ] 块 4 D 进程外托管（**设计门，见 docs/plan-block-d-out-of-process.md**——6 设计问题各附推荐+理由+备选+决策标准，逐条确认即拆票；实施顺序 D0-D6 带验收）

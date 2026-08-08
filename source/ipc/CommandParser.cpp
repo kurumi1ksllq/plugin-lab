@@ -571,17 +571,26 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (false, sourceError);
 
         // --- frequency-response excitation (optional; default sweep) ---
-        auto excitationStr = obj->getProperty ("excitation").toString();
-        if (excitationStr.isEmpty())
-            excitationStr = Protocol::Excitation::sweep;
-        if (excitationStr == Protocol::Excitation::mls)
-            session->setFreqExcitation (true);
-        else if (excitationStr == Protocol::Excitation::sweep)
-            session->setFreqExcitation (false);
+        // Applies only to frequency_response measurements; other types force
+        // sweep so no stale MLS residue leaks into non-freq exports.
+        if (t == Protocol::MeasureType::freq)
+        {
+            auto excitationStr = obj->getProperty ("excitation").toString();
+            if (excitationStr.isEmpty())
+                excitationStr = Protocol::Excitation::sweep;
+            if (excitationStr == Protocol::Excitation::mls)
+                session->setFreqExcitation (true);
+            else if (excitationStr == Protocol::Excitation::sweep)
+                session->setFreqExcitation (false);
+            else
+                return Protocol::makeResponse (false,
+                    R"("error":"unknown excitation ')" + escapeJsonString (excitationStr)
+                    + "' (expected sweep|mls)\"");
+        }
         else
-            return Protocol::makeResponse (false,
-                R"("error":"unknown excitation ')" + escapeJsonString (excitationStr)
-                + "' (expected sweep|mls)\"");
+        {
+            session->setFreqExcitation (false);
+        }
 
         session->setSource (source);
         session->setPluginInstance (plugin);
@@ -717,6 +726,12 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         if (sourceError.isNotEmpty())
             return Protocol::makeResponse (false, sourceError);
 
+        // The scan command carries no excitation field: it always measures
+        // with the sweep excitation. Force sweep so a stale MLS residue from
+        // a previous measure/dataset cannot silently change the scan's
+        // signal/analysis path (review fix).
+        session->setFreqExcitation (false);
+
         session->setSource (source);
         session->setPluginInstance (plugin);
 
@@ -849,9 +864,11 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         }
 
         // --- frequency-response excitation (optional; default sweep) ---
-        // Applies to every frequency_response measurement in the battery; an
-        // unknown value skips the freq block (deterministic partial failure,
-        // mirroring the scan/compression_family block validation).
+        // Applies to every frequency_response measurement in the dataset —
+        // the battery freq block AND the optional scan block share one
+        // excitation; an unknown value skips the freq block (deterministic
+        // partial failure, mirroring the scan/compression_family block
+        // validation).
         bool freqExcitationValid = true;
         bool freqExcitationMLS = false;
         auto excitationStr = obj->getProperty ("excitation").toString();
@@ -861,6 +878,11 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             freqExcitationMLS = true;
         else if (excitationStr != Protocol::Excitation::sweep)
             freqExcitationValid = false;
+
+        // Apply the (validated) excitation up front so the whole dataset —
+        // including the scan block when the battery omits frequency_response —
+        // measures with the requested excitation (review fix).
+        session->setFreqExcitation (freqExcitationValid ? freqExcitationMLS : false);
 
         // Export path: the dataset command has no input file, so "path"
         // always names the JSON destination.

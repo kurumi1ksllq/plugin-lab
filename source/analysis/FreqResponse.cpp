@@ -97,6 +97,11 @@ FreqResponse::Result FreqResponse::analyzeMLS (const juce::AudioBuffer<float>& d
     const int qLo = juce::jmax (1, static_cast<int> (std::ceil (20.0 * mlsLength / sr)));
     const int qHi = static_cast<int> (std::floor (20000.0 * mlsLength / sr));
     const double lowEnergyThreshold = static_cast<double> (mlsLength) * 1e-8;
+
+    // Clamp the DFT window to the samples actually available: a recording
+    // shorter than one full period analyses what it has instead of reading
+    // past the buffer end (review fix).
+    const int dftLength = juce::jmin (mlsLength, numSamples - startSample);
     std::vector<Point> points;
     points.reserve (static_cast<size_t> (qHi - qLo + 1));
 
@@ -107,7 +112,7 @@ FreqResponse::Result FreqResponse::analyzeMLS (const juce::AudioBuffer<float>& d
         const std::complex<double> rot (std::cos (rotArg), std::sin (rotArg));
         std::complex<double> tw (1.0, 0.0);
         std::complex<double> X (0.0, 0.0), Y (0.0, 0.0);
-        for (int n = 0; n < mlsLength; ++n)
+        for (int n = 0; n < dftLength; ++n)
         {
             X += static_cast<double> (dryData[startSample + n]) * tw;
             Y += static_cast<double> (wetData[startSample + n]) * tw;

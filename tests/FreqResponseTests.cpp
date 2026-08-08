@@ -437,3 +437,44 @@ TEST_CASE ("FreqResponse smoothed curves populated and frequencies monotonic", "
     for (const auto& p : result.smoothed_1_3)
         REQUIRE (std::isfinite (p.phaseDeg));
 }
+
+//==============================================================================
+// Test: analyzeMLS must tolerate a recording shorter than the MLS period
+// (regression guard for an out-of-bounds read in the DFT loop: it always
+// read mlsLength samples regardless of the buffer length). The DFT length is
+// clamped to the available samples; the harmonic grid stays sr/mlsLength.
+//==============================================================================
+
+TEST_CASE ("FreqResponse: analyzeMLS tolerates a recording shorter than the MLS period",
+           "[freqresponse][mls]")
+{
+    const double sr = 48000.0;
+    constexpr int kMlsLength = 16383;
+
+    auto full = generateMLS (sr, kMlsLength, 0.5);
+
+    // Truncate to a fraction of the period (simulates a short capture).
+    constexpr int kShort = 4096;
+    juce::AudioBuffer<float> dryShort (1, kShort);
+    dryShort.clear();
+    for (int i = 0; i < kShort; ++i)
+        dryShort.setSample (0, i, full.getSample (0, i));
+    juce::AudioBuffer<float> wetShort = dryShort;   // identity
+
+    // ---- Act ---- (buffer shorter than mlsLength must not overrun)
+    const auto result = FreqResponse().analyzeMLS (dryShort, wetShort, sr, kMlsLength);
+
+    // ---- Assert ----
+    REQUIRE (! result.raw.empty());
+    for (const auto& p : result.raw)
+    {
+        REQUIRE (std::isfinite (p.magnitudeDB));
+        REQUIRE (std::isfinite (p.phaseDeg));
+        REQUIRE (p.frequency >= 20.0);
+        REQUIRE (p.frequency <= 20000.0);
+    }
+    // Identity (dry == wet) still yields ~0 dB on the sampled grid.
+    const auto mid = pointsInRange (result.raw, 100.0, 10000.0);
+    REQUIRE (mid.size() > 50);
+    REQUIRE (meanAbsMagDB (mid) < 0.5);
+}
