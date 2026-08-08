@@ -7,6 +7,8 @@
 #include "../analysis/TimeConstants.h"
 #include "../analysis/CompressionFamily.h"
 
+#include <cfloat>
+
 namespace
 {
 /** Escape a string for embedding inside a JSON string literal. juce::String::quoted()
@@ -330,6 +332,46 @@ static Export::Context buildExportContext (juce::AudioPluginInstance* plugin, Me
     return ctx;
 }
 
+// Reads a JSON number array (non-empty, all numeric, optionally within
+// [min,max]). Returns false when var is not such an array; on success `out`
+// holds the parsed values in order. Shared by the dataset scan and
+// compression_family blocks (the scan block additionally requires the 0..1
+// normalized range).
+static bool parseNumberArray (const juce::var& var, std::vector<double>& out,
+                              double min = -DBL_MAX, double max = DBL_MAX)
+{
+    if (! var.isArray() || var.size() == 0)
+        return false;
+
+    for (int i = 0; i < var.size(); ++i)
+    {
+        const auto v = var[i];
+        if (! (v.isDouble() || v.isInt() || v.isInt64()))
+            return false;
+        const double dv = static_cast<double> (v);
+        if (dv < min || dv > max)
+            return false;
+        out.push_back (dv);
+    }
+    return true;
+}
+
+// Finds the parameter whose stable id matches, or nullptr when no parameter
+// exposes that id. Hosted parameters expose a stable id that survives
+// display-name changes; anything else is not a match. Shared by the scan
+// command and the dataset scan block.
+static juce::AudioProcessorParameter* findParamByStableId (juce::AudioProcessor& processor,
+                                                           const juce::String& paramId)
+{
+    for (auto* candidate : processor.getParameters())
+    {
+        auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (candidate);
+        if (hosted != nullptr && hosted->getParameterID() == paramId)
+            return candidate;
+    }
+    return nullptr;
+}
+
 juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 {
     auto json = juce::JSON::parse (jsonCommand);
@@ -620,19 +662,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         if (paramId.isEmpty())
             return Protocol::makeResponse (false, R"("error":"param_id required")");
 
-        juce::AudioProcessorParameter* scanParam = nullptr;
-        {
-            auto& params = plugin->getParameters();
-            for (auto* candidate : params)
-            {
-                auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (candidate);
-                if (hosted != nullptr && hosted->getParameterID() == paramId)
-                {
-                    scanParam = candidate;
-                    break;
-                }
-            }
-        }
+        juce::AudioProcessorParameter* scanParam = findParamByStableId (*plugin, paramId);
         if (scanParam == nullptr)
             return Protocol::makeResponse (false, R"("error":"parameter not found")");
 
@@ -742,6 +772,39 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         if (session == nullptr || plugin == nullptr)
             return Protocol::makeResponse (false, R"("error":"no session or plugin")");
 
+        // --- battery spec table ---
+        // One entry per protocol measure type: the session type/source to
+        // run plus the per-run results/ok state. Declared here — per command,
+        // outside the run lambda — so the state is fresh for every invocation
+        // and the Export::Dataset pointers into it stay valid until
+        // datasetToJSON runs.
+        struct BatteryRun
+        {
+            const char* key;        // Protocol::MeasureType string
+            MeasurementSession::Type type;
+            MeasurementSession::Source source;
+            const char* sourceStr;  // protocol source string ("signal"/"dynamic")
+            MeasurementResults results;
+            bool ok = false;
+        };
+
+        BatteryRun battery[] = {
+            { Protocol::MeasureType::freq,        MeasurementSession::Type::frequencyResponse, MeasurementSession::Source::signal,  Protocol::Source::signal,  {}, false },
+            { Protocol::MeasureType::harmonic,    MeasurementSession::Type::harmonicAnalysis,  MeasurementSession::Source::signal,  Protocol::Source::signal,  {}, false },
+            { Protocol::MeasureType::compression, MeasurementSession::Type::compressionCurve, MeasurementSession::Source::signal,  Protocol::Source::signal,  {}, false },
+            { Protocol::MeasureType::grTimeline,  MeasurementSession::Type::grTimeline,       MeasurementSession::Source::dynamic, Protocol::Source::dynamic, {}, false },
+        };
+
+        // Locates a battery entry by protocol key (nullptr when the key is
+        // unknown — the type validation below rejects unknown keys).
+        auto batteryRunFor = [&] (const juce::String& key) -> BatteryRun*
+        {
+            for (auto& b : battery)
+                if (key == b.key)
+                    return &b;
+            return nullptr;
+        };
+
         // --- measurement types (validated BEFORE any block runs) ---
         // Omitted → the default 4-type battery; an explicit empty array
         // requests no battery (a scan/compression_family-only dataset is
@@ -750,20 +813,15 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         auto typesVar = obj->getProperty ("types");
         if (! typesVar.isArray())
         {
-            requestedTypes = { Protocol::MeasureType::freq,
-                               Protocol::MeasureType::harmonic,
-                               Protocol::MeasureType::compression,
-                               Protocol::MeasureType::grTimeline };
+            for (const auto& b : battery)
+                requestedTypes.push_back (juce::String (b.key));
         }
         else
         {
             for (int i = 0; i < typesVar.size(); ++i)
             {
                 const auto t = typesVar[i].toString();
-                if (t != Protocol::MeasureType::freq
-                    && t != Protocol::MeasureType::harmonic
-                    && t != Protocol::MeasureType::compression
-                    && t != Protocol::MeasureType::grTimeline)
+                if (batteryRunFor (t) == nullptr)
                     return Protocol::makeResponse (false, R"("error":"unknown measure type")");
                 requestedTypes.push_back (t);
             }
@@ -788,65 +846,33 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         // thread dispatch) paths share it.
         auto runDataset = [&]() -> juce::String
         {
-            // Owned measurement results: Export::Dataset holds POINTERS into
-            // these, so they must outlive datasetToJSON — declared outside
-            // the per-type loop on purpose.
-            MeasurementResults freqRes, harmRes, compRes, grRes;
-            bool freqOk = false, harmOk = false, compOk = false, grOk = false;
-
             // --- battery: run each requested type with its fixed source ---
             // Source mapping (v1, not overridable): freq/harmonic/compression
             // → signal; gr_timeline → dynamic (so the tau estimate is valid).
+            // Runs in the order the caller listed the types (requestedTypes
+            // is the source of truth); results/ok accumulate in the battery
+            // table, which outlives datasetToJSON below.
             for (const auto& t : requestedTypes)
             {
-                MeasurementSession::Type mtype = MeasurementSession::Type::frequencyResponse;
-                MeasurementSession::Source src = MeasurementSession::Source::signal;
-                const char* srcStr = Protocol::Source::signal;
-                MeasurementResults* res = nullptr;
-                bool* ok = nullptr;
-
-                if (t == Protocol::MeasureType::freq)
-                {
-                    mtype = MeasurementSession::Type::frequencyResponse;
-                    res = &freqRes;
-                    ok = &freqOk;
-                }
-                else if (t == Protocol::MeasureType::harmonic)
-                {
-                    mtype = MeasurementSession::Type::harmonicAnalysis;
-                    res = &harmRes;
-                    ok = &harmOk;
-                }
-                else if (t == Protocol::MeasureType::compression)
-                {
-                    mtype = MeasurementSession::Type::compressionCurve;
-                    res = &compRes;
-                    ok = &compOk;
-                }
-                else // gr_timeline — the only remaining validated type
-                {
-                    mtype = MeasurementSession::Type::grTimeline;
-                    src = MeasurementSession::Source::dynamic;
-                    srcStr = Protocol::Source::dynamic;
-                    res = &grRes;
-                    ok = &grOk;
-                }
+                BatteryRun* run = batteryRunFor (t);
+                if (run == nullptr)
+                    continue;   // unreachable — requestedTypes was validated above
 
                 // Source-specific configuration — mirrors the measure command.
                 // For the gr_timeline run this applies the same dynamic-carrier
                 // defaults (carrier_start_hz = 10 kHz) the standalone measure
                 // path relies on, keeping the tau estimate valid.
-                auto sourceError = configureSessionSource (*session, *obj, src);
+                auto sourceError = configureSessionSource (*session, *obj, run->source);
                 if (sourceError.isNotEmpty())
                     continue;   // skip this type; unreachable for signal/dynamic
 
-                session->setSource (src);
-                session->setMeasurementType (mtype);
+                session->setSource (run->source);
+                session->setMeasurementType (run->type);
                 session->setPluginInstance (plugin);
 
                 juce::String error;
-                if (runAndAnalyze (session, plugin, src, srcStr, *res, error))
-                    *ok = true;
+                if (runAndAnalyze (session, plugin, run->source, run->sourceStr, run->results, error))
+                    run->ok = true;
                 // Per-type failure: record types[type] = false and continue
                 // with the next type.
             }
@@ -863,27 +889,21 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 auto paramId = scanObj->getProperty ("param_id").toString();
                 auto valuesVar = scanObj->getProperty ("values");
 
-                bool scanValid = ! paramId.isEmpty()
-                                 && valuesVar.isArray() && valuesVar.size() > 0;
+                // Scan values must be numeric and normalized 0..1 (the
+                // scan-command contract); invalid → the scan block is
+                // skipped (deterministic partial failure).
+                bool scanValid = ! paramId.isEmpty();
 
                 std::vector<float> scanValues;
                 if (scanValid)
                 {
-                    for (int i = 0; i < valuesVar.size(); ++i)
+                    std::vector<double> parsedValues;
+                    scanValid = parseNumberArray (valuesVar, parsedValues, 0.0, 1.0);
+                    if (scanValid)
                     {
-                        const auto v = valuesVar[i];
-                        if (! (v.isDouble() || v.isInt() || v.isInt64()))
-                        {
-                            scanValid = false;
-                            break;
-                        }
-                        const double dv = static_cast<double> (v);
-                        if (dv < 0.0 || dv > 1.0)
-                        {
-                            scanValid = false;
-                            break;
-                        }
-                        scanValues.push_back (static_cast<float> (dv));
+                        scanValues.reserve (static_cast<size_t> (parsedValues.size()));
+                        for (const double dv : parsedValues)
+                            scanValues.push_back (static_cast<float> (dv));
                     }
                 }
 
@@ -905,22 +925,8 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 }
 
                 // Parameter lookup by stable ID (scan-command pattern).
-                if (scanValid)
-                {
-                    bool found = false;
-                    auto& params = plugin->getParameters();
-                    for (auto* candidate : params)
-                    {
-                        auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (candidate);
-                        if (hosted != nullptr && hosted->getParameterID() == paramId)
-                        {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (! found)
-                        scanValid = false;
-                }
+                if (scanValid && findParamByStableId (*plugin, paramId) == nullptr)
+                    scanValid = false;
 
                 if (scanValid)
                 {
@@ -975,20 +981,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 {
                     levelsDB = { -12.0, 0.0 };
                 }
-                else if (levelsVar.isArray() && levelsVar.size() > 0)
-                {
-                    for (int i = 0; i < levelsVar.size(); ++i)
-                    {
-                        const auto v = levelsVar[i];
-                        if (! (v.isDouble() || v.isInt() || v.isInt64()))
-                        {
-                            cfValid = false;
-                            break;
-                        }
-                        levelsDB.push_back (static_cast<double> (v));
-                    }
-                }
-                else
+                else if (! parseNumberArray (levelsVar, levelsDB))
                 {
                     cfValid = false;
                 }
@@ -1000,20 +993,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                     {
                         speeds = { 0.5, 1.0, 2.0 };
                     }
-                    else if (speedsVar.isArray() && speedsVar.size() > 0)
-                    {
-                        for (int i = 0; i < speedsVar.size(); ++i)
-                        {
-                            const auto v = speedsVar[i];
-                            if (! (v.isDouble() || v.isInt() || v.isInt64()))
-                            {
-                                cfValid = false;
-                                break;
-                            }
-                            speeds.push_back (static_cast<double> (v));
-                        }
-                    }
-                    else
+                    else if (! parseNumberArray (speedsVar, speeds))
                     {
                         cfValid = false;
                     }
@@ -1040,25 +1020,35 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             }
 
             // All blocks failed → the whole dataset fails (S2/S3).
-            if (! freqOk && ! harmOk && ! compOk && ! grOk && ! scanOk && ! cfOk)
+            bool anyBatteryOk = false;
+            for (const auto& b : battery)
+                anyBatteryOk = anyBatteryOk || b.ok;
+            if (! anyBatteryOk && ! scanOk && ! cfOk)
                 return Protocol::makeResponse (false, R"("error":"all measurements failed")");
 
             // --- aggregate + export ---
+            // Battery results/ok are addressed by protocol key (the table is
+            // the single mapping between protocol keys and per-type state).
+            auto* grRun   = batteryRunFor (Protocol::MeasureType::grTimeline);
+            auto* freqRun = batteryRunFor (Protocol::MeasureType::freq);
+            auto* harmRun = batteryRunFor (Protocol::MeasureType::harmonic);
+            auto* compRun = batteryRunFor (Protocol::MeasureType::compression);
+
             Export::Dataset dataset;
             dataset.scan = scanOk ? &scanResult : nullptr;
             dataset.scanType = scanType;
             dataset.compressionFamily = cfOk ? &cfResult : nullptr;
-            dataset.grTimeline = grOk ? &grRes.gr : nullptr;
-            dataset.grTau = grOk ? &grRes.tau : nullptr;
-            dataset.freq = freqOk ? &freqRes.freq : nullptr;
-            dataset.harmonic = harmOk ? &harmRes.harmonic : nullptr;
-            dataset.compression = compOk ? &compRes.compression : nullptr;
+            dataset.grTimeline = grRun->ok ? &grRun->results.gr : nullptr;
+            dataset.grTau = grRun->ok ? &grRun->results.tau : nullptr;
+            dataset.freq = freqRun->ok ? &freqRun->results.freq : nullptr;
+            dataset.harmonic = harmRun->ok ? &harmRun->results.harmonic : nullptr;
+            dataset.compression = compRun->ok ? &compRun->results.compression : nullptr;
 
             // Context source: the last successful battery type (dynamic when
             // the GR timeline ran, signal otherwise).
             MeasurementSession::Source ctxSource = MeasurementSession::Source::signal;
             juce::String ctxSourceStr = Protocol::Source::signal;
-            if (grOk)
+            if (grRun->ok)
             {
                 ctxSource = MeasurementSession::Source::dynamic;
                 ctxSourceStr = Protocol::Source::dynamic;
@@ -1070,13 +1060,19 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             juce::File (path).getParentDirectory().createDirectory();
             Export::writeToFile (exportJson, juce::File (path));
 
+            // Response "types" object always carries all 4 keys (true/false),
+            // derived from the battery table in protocol order.
+            const int numBattery = static_cast<int> (sizeof (battery) / sizeof (battery[0]));
             juce::String d = R"("export_path":")" + escapeJsonString (path) + "\""
-                           + R"(,"types":{"frequency_response":)" + juce::String (freqOk ? "true" : "false")
-                           + R"(,"harmonic":)" + juce::String (harmOk ? "true" : "false")
-                           + R"(,"compression":)" + juce::String (compOk ? "true" : "false")
-                           + R"(,"gr_timeline":)" + juce::String (grOk ? "true" : "false")
-                           + R"(},"scan":)" + juce::String (scanOk ? "true" : "false")
-                           + R"(,"compression_family":)" + juce::String (cfOk ? "true" : "false");
+                           + R"(,"types":{)";
+            for (int i = 0; i < numBattery; ++i)
+            {
+                d += R"(")" + juce::String (battery[i].key) + R"(":)" + juce::String (battery[i].ok ? "true" : "false");
+                if (i < numBattery - 1)
+                    d += ",";
+            }
+            d += R"(},"scan":)" + juce::String (scanOk ? "true" : "false")
+               + R"(,"compression_family":)" + juce::String (cfOk ? "true" : "false");
             return Protocol::makeResponse (true, d);
         };
 
