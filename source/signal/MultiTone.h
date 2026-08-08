@@ -22,6 +22,12 @@ public:
     /** Set overall amplitude (0.0 - 1.0). */
     void setAmplitude (double amp);
 
+    /** Deterministic random initial phases (one per frequency) to lower the
+     *  crest factor of the summed multi-tone. Seed 0 (default) keeps the
+     *  legacy all-zero-phase waveform; any non-zero seed reproduces the same
+     *  waveform on every run (xorshift32, deterministic). */
+    void setRandomPhaseSeed (uint32_t seed) { phaseSeed = seed; }
+
     //==============================================================================
     void prepare (double sampleRate, int blockSize) override;
     void generate (juce::AudioBuffer<float>& buffer,
@@ -34,6 +40,8 @@ private:
     std::vector<double> frequencies;
     double durationSec = 2.0;
     double amplitude = 0.3;
+    uint32_t phaseSeed = 0;
+    std::vector<double> phases;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MultiTone)
 };

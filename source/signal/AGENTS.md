@@ -9,7 +9,7 @@
 | 生成器           | 用途                                | 关键参数                                                             |
 | ---------------- | ----------------------------------- | -------------------------------------------------------------------- |
 | `SineSweep`      | 线性 EQ 频响（Farina 解卷积）       | 20Hz–20kHz 对数扫频                                                  |
-| `MultiTone`      | IMD 互调测量                        | 多音叠加；谐波峰与基频峰可能重叠（勿与 THD 混用）                    |
+| `MultiTone`      | IMD 互调测量                        | 多音叠加；`setRandomPhaseSeed(seed)`（0=旧全零相位波形，非 0=xorshift32 确定性随机初始相位降峰值因子）；谐波峰与基频峰可能重叠（勿与 THD 混用）                    |
 | `ToneBurst`      | 静态压缩曲线                        | 多电平突发（-60..0 dB）；`setLevels()` / `setMasterAmplitude(scale)` |
 | `Impulse`        | 快速线性 EQ 测量（可选）            | 单冲激；MLS 候选                                                     |
 | `FilePlayback`   | 音频文件播放（vocal 素材）          | 通道映射；文件头在 prepare 读取                                      |

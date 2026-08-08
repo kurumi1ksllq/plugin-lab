@@ -1,4 +1,5 @@
 #include "MultiTone.h"
+#include <algorithm>
 #include <cmath>
 
 MultiTone::MultiTone()
@@ -25,6 +26,26 @@ void MultiTone::setAmplitude (double amp)
 void MultiTone::prepare (double sr, int bs)
 {
     SignalGenerator::prepare (sr, bs);
+
+    phases.resize (frequencies.size());
+    if (phaseSeed != 0)
+    {
+        uint32_t state = phaseSeed;
+        const auto nextRand = [&state]()
+        {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            return state;
+        };
+        for (auto& ph : phases)
+            ph = 2.0 * juce::MathConstants<double>::pi
+                 * (static_cast<double> (nextRand()) / 4294967296.0);
+    }
+    else
+    {
+        std::fill (phases.begin(), phases.end(), 0.0);
+    }
 }
 
 int64_t MultiTone::getTotalLength() const
@@ -60,9 +81,10 @@ void MultiTone::generate (juce::AudioBuffer<float>& buffer,
         double t = samplePos / sampleRate;
         double value = 0.0;
 
-        for (double freq : frequencies)
+        for (size_t i = 0; i < frequencies.size(); ++i)
         {
-            double phase = 2.0 * juce::MathConstants<double>::pi * freq * t;
+            const double freq = frequencies[i];
+            double phase = 2.0 * juce::MathConstants<double>::pi * freq * t + phases[i];
             value += std::sin (phase);
         }
 
