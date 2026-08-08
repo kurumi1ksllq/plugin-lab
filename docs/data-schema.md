@@ -13,6 +13,14 @@
 > §8 文档在 scan / compression_family / gr_timeline 之外新增可选 frequency_response /
 > harmonic / compression 三个测量块。battery 校验：逐类型成败记录在命令响应 "types"
 > 对象，不入文档（未跑/失败的块整体省略）。
+>
+> 2026-08-08 核对记录（块 C 任务 6）：§5 scan 结构描述与 `Export::scanToJSON` 实现
+> **最终核对一致**——顶层 `scan{param_id, param_name, values, param_texts}`、
+> context 七字段（plugin/class_id/latency_samples/sample_rate/measurement/
+> parameter_snapshot/source）、`family[{param_value_normalized, param_value_text,
+> latency_samples, result}]`、精度（values 6 位）、dataset 内嵌 family 布局全部一致；
+> `tests/ExportTests.cpp [export][scan-schema]` 锁定（含 context 顶层 sample_rate /
+> source 断言，30 断言）。
 
 ## 导出类型一览
 

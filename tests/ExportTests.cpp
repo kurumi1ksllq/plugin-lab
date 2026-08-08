@@ -233,8 +233,11 @@ TEST_CASE ("scanToJSON emits scan schema with context, scan and family", "[expor
     REQUIRE (parsed["context"]["plugin"].toString() == ctx.pluginName);
     REQUIRE (parsed["context"]["class_id"].toString() == ctx.classId);
     REQUIRE (parsed["context"]["latency_samples"].equals (64));
+    REQUIRE (parsed["context"]["sample_rate"].equals (48000.0));   // schema §5 top-level
+    REQUIRE (parsed["context"]["measurement"]["sample_rate"].equals (48000.0));
     REQUIRE (parsed["context"]["measurement"]["block_size"].equals (512));
     REQUIRE (parsed["context"]["parameter_snapshot"]["gain"].equals (0.5));
+    REQUIRE (parsed["context"]["source"]["type"].toString() == "signal");  // schema §5 default source
 
     REQUIRE (parsed["scan"]["param_id"].toString() == scan.paramId);
     REQUIRE (parsed["scan"]["param_name"].toString() == scan.paramName);
