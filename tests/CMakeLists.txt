@@ -35,7 +35,8 @@ target_sources(unit_tests PRIVATE
     FilePlaybackTests.cpp NoiseGeneratorTests.cpp EnvelopeSignalTests.cpp
     GainReductionTests.cpp ScanEngineTests.cpp
     TimeConstantsTests.cpp
-    CompressionFamilyTests.cpp)
+    CompressionFamilyTests.cpp
+    ComponentVisibilityTests.cpp)
 target_link_libraries(unit_tests PRIVATE
     juce::juce_audio_basics juce::juce_audio_processors juce::juce_audio_utils juce::juce_dsp
     juce::juce_audio_formats

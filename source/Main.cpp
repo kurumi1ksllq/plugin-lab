@@ -116,8 +116,9 @@ public:
         grPlot->setAxisLabels ("Time (s)", "Gain Reduction (dB)");
         grPlot->setXAxisLog (false);
         grPlot->setAutoFitY (true);
-        grPlot->setVisible (false);
         addAndMakeVisible (grPlot.get());
+        // addAndMakeVisible forces setVisible(true) — the hide must come after adding.
+        grPlot->setVisible (false);
 
         // Measurement control row (right panel, above the plots).
         // Frequency response is wired end-to-end; harmonic/compression are
@@ -127,6 +128,7 @@ public:
         {
             currentMeasureType = juce::String (Protocol::MeasureType::freq);
             updateScanEstimate();
+            updateGRPlotVisibility();
             startMeasurement (currentMeasureType);
         };
         addAndMakeVisible (measureFreqButton.get());
@@ -136,6 +138,7 @@ public:
         {
             currentMeasureType = juce::String (Protocol::MeasureType::harmonic);
             updateScanEstimate();
+            updateGRPlotVisibility();
             startMeasurement (currentMeasureType);
         };
         addAndMakeVisible (measureHarmonicButton.get());
@@ -145,6 +148,7 @@ public:
         {
             currentMeasureType = juce::String (Protocol::MeasureType::compression);
             updateScanEstimate();
+            updateGRPlotVisibility();
             startMeasurement (currentMeasureType);
         };
         addAndMakeVisible (measureCompressionButton.get());
@@ -1585,11 +1589,8 @@ private:
         const bool showGR = (currentMeasureType
                              == juce::String (Protocol::MeasureType::grTimeline));
         grPlot->setVisible (showGR);
-        if (showGR)
-        {
-            resized();
-            grPlot->repaint();
-        }
+        resized();
+        grPlot->repaint();
     }
 
     //==============================================================================
