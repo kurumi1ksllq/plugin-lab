@@ -3,23 +3,60 @@
  * PluginManager.cpp can be compiled into the unit test target without
  * pulling in the GUI/UDP dependencies.
  *
- * These are intentionally no-ops — the tests never exercise code paths
- * that depend on crash logging or editor creation.
+ * CrashLog is a RECORDING stub: entries are captured (thread-safe) so tests
+ * can assert that error paths logged an exception (block C task 1). The
+ * test helpers clearCrashLog() / crashLogErrorCount() / crashLogContains()
+ * are declared here and consumed via extern in test files.
+ *
+ * EditorCrashGuard stubs are no-ops — tests use the real implementation
+ * (EditorCrashGuard.cpp, task 2) or never exercise editor creation.
  */
 
 #include <JuceHeader.h>
+#include <mutex>
 #include "../source/utils/CrashLog.h"
 #include "../source/host/EditorCrashGuard.h"
 
 //==============================================================================
-// CrashLog stub
-void CrashLog::write (CrashLog::Level,
-                      const juce::String&,
-                      const juce::String&,
+// CrashLog recording stub
+namespace
+{
+    std::mutex gCrashLogMutex;
+    juce::StringArray gCrashLogErrors;
+}
+
+void CrashLog::write (CrashLog::Level level,
+                      const juce::String& operation,
+                      const juce::String& detail,
                       const juce::String&,
                       int)
 {
-    // no-op: tests don't need crash logging
+    std::lock_guard<std::mutex> lock (gCrashLogMutex);
+    if (level == CrashLog::Error)
+        gCrashLogErrors.add (operation + (detail.isNotEmpty() ? " | " + detail : juce::String()));
+}
+
+//==============================================================================
+// Test helpers (declared extern in test files)
+void clearCrashLog()
+{
+    std::lock_guard<std::mutex> lock (gCrashLogMutex);
+    gCrashLogErrors.clear();
+}
+
+int crashLogErrorCount()
+{
+    std::lock_guard<std::mutex> lock (gCrashLogMutex);
+    return gCrashLogErrors.size();
+}
+
+bool crashLogContains (const juce::String& substr)
+{
+    std::lock_guard<std::mutex> lock (gCrashLogMutex);
+    for (const auto& entry : gCrashLogErrors)
+        if (entry.contains (substr))
+            return true;
+    return false;
 }
 
 //==============================================================================

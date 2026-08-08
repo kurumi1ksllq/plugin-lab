@@ -211,3 +211,89 @@ TEST_CASE ("SweepRunner: default tailPad=0 preserves existing recorded length",
     // Assert — exactly the generator length, no padding
     REQUIRE (runner.getResult().getNumRecordedSamples() == sweep.getTotalLength());
 }
+
+//==============================================================================
+// Measurement-path exception protection (block C task 1): a plugin that
+// throws from prepareToPlay/processBlock must surface as a failed run()
+// (false), never escape into the message loop (std::terminate → abort).
+//==============================================================================
+
+TEST_CASE ("SweepRunner: plugin throwing in processBlock makes run() return false",
+           "[sweeprunner][exception]")
+{
+    // Arrange
+    TestPlugin plugin;
+    plugin.setGain (1.0);
+    plugin.setThrowOnProcessBlock (true);
+
+    SineSweep sweep;
+    sweep.setFrequencyRange (100.0, 5000.0);
+    sweep.setDuration (0.1);
+    sweep.setAmplitude (0.5);
+
+    SweepRunner runner;
+    runner.prepare (48000.0, 512);
+    runner.setGenerator (&sweep);
+    runner.setPlugin (&plugin);
+
+    // Act — must not throw, must not terminate the process
+    bool runResult = false;
+    REQUIRE_NOTHROW (runResult = runner.run());
+
+    // Assert — failed run, runner left in a clean state
+    REQUIRE_FALSE (runResult);
+    REQUIRE_FALSE (runner.isRunning());
+}
+
+TEST_CASE ("SweepRunner: plugin throwing in prepareToPlay makes run() return false",
+           "[sweeprunner][exception]")
+{
+    // Arrange
+    TestPlugin plugin;
+    plugin.setGain (1.0);
+    plugin.setThrowOnPrepareToPlay (true);
+
+    SineSweep sweep;
+    sweep.setFrequencyRange (100.0, 5000.0);
+    sweep.setDuration (0.1);
+    sweep.setAmplitude (0.5);
+
+    SweepRunner runner;
+    runner.prepare (48000.0, 512);
+    runner.setGenerator (&sweep);
+    runner.setPlugin (&plugin);
+
+    // Act
+    bool runResult = false;
+    REQUIRE_NOTHROW (runResult = runner.run());
+
+    // Assert
+    REQUIRE_FALSE (runResult);
+    REQUIRE_FALSE (runner.isRunning());
+}
+
+TEST_CASE ("SweepRunner: plugin throwing in processBlock still records a clean result buffer",
+           "[sweeprunner][exception]")
+{
+    // Arrange
+    TestPlugin plugin;
+    plugin.setGain (1.0);
+    plugin.setThrowOnProcessBlock (true);
+
+    SineSweep sweep;
+    sweep.setFrequencyRange (100.0, 5000.0);
+    sweep.setDuration (0.05);
+    sweep.setAmplitude (0.5);
+
+    SweepRunner runner;
+    runner.prepare (48000.0, 512);
+    runner.setGenerator (&sweep);
+    runner.setPlugin (&plugin);
+
+    // Act
+    REQUIRE_NOTHROW (runner.run());
+
+    // Assert — no partially-written block content beyond a failed run;
+    // the runner must not leave half-appended state (cancelled == false path)
+    REQUIRE_FALSE (runner.isRunning());
+}

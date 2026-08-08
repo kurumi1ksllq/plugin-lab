@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <stdexcept>
 
 //==============================================================================
 /**
@@ -119,6 +120,14 @@ public:
         return raw;
     }
 
+    /** When set, prepareToPlay throws a std::runtime_error — simulates a
+        plugin whose prepare path fails (measurement exception protection). */
+    void setThrowOnPrepareToPlay (bool t) noexcept { throwOnPrepareToPlay = t; }
+
+    /** When set, processBlock throws a std::runtime_error — simulates a
+        plugin whose processing path fails (measurement exception protection). */
+    void setThrowOnProcessBlock (bool t) noexcept { throwOnProcessBlock = t; }
+
     //==============================================================================
     // AudioProcessor
     //==============================================================================
@@ -138,6 +147,9 @@ public:
 
     void prepareToPlay (double, int) override
     {
+        if (throwOnPrepareToPlay)
+            throw std::runtime_error ("TestPlugin injected prepareToPlay failure");
+
         delayLines.assign (static_cast<size_t> (juce::jmax (getTotalNumOutputChannels(), 1)), DelayLine {});
         for (auto& line : delayLines)
             line.reset (getLatencySamples());
@@ -150,6 +162,9 @@ public:
 
     void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
     {
+        if (throwOnProcessBlock)
+            throw std::runtime_error ("TestPlugin injected processBlock failure");
+
         if (blockEntered != nullptr)
             blockEntered->store (true);
 
@@ -241,6 +256,8 @@ private:
     double gain = 1.0;
     std::atomic<bool>* blockEntered = nullptr;
     std::atomic<bool>* blockRelease = nullptr;
+    bool throwOnPrepareToPlay = false;
+    bool throwOnProcessBlock = false;
     std::vector<DelayLine> delayLines;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TestPlugin)

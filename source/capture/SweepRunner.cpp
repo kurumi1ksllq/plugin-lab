@@ -42,10 +42,33 @@ bool SweepRunner::run()
     // VST3 plugins that track thread affinity (e.g. FabFilter Pro-Q 4).
     // (prepareToPlay was intentionally removed from PluginManager::loadPlugin
     // because that ran on a different ThreadPool thread.)
-    if (pluginPrepared)
-        plugin->releaseResources();
-    plugin->setNonRealtime (true);
-    plugin->prepareToPlay (sampleRate, blockSize);
+    //
+    // Exception protection (block C task 1): the measurement path runs
+    // synchronously on the message thread with zero prior try/catch — a
+    // plugin throwing from prepareToPlay/processBlock escaped into the
+    // message loop → std::terminate → abort with no crash log (LA-2A).
+    // Every plugin-DLL call below is guarded; this TU is compiled with /EHa
+    // so catch (...) also intercepts SEH faults. A failed run returns false
+    // (surfaced as an IPC error response), and the host survives.
+    try
+    {
+        if (pluginPrepared)
+            plugin->releaseResources();
+        plugin->setNonRealtime (true);
+        plugin->prepareToPlay (sampleRate, blockSize);
+    }
+    catch (const std::exception& e)
+    {
+        CRASH_LOG_ERR ("Sweep prepare", e.what());
+        running = false;
+        return false;
+    }
+    catch (...)
+    {
+        CRASH_LOG_ERR ("Sweep prepare", "unknown exception");
+        running = false;
+        return false;
+    }
     pluginPrepared = true;
 
     CRASH_LOG_INFO ("Sweep start", juce::String (sampleRate) + " Hz, "
@@ -63,6 +86,27 @@ bool SweepRunner::run()
     juce::AudioBuffer<float> dryBlock (numInputChannels, blockSize);
     juce::AudioBuffer<float> wetBlock (numOutputChannels, blockSize);
     juce::MidiBuffer emptyMidi;
+
+    // Guarded plugin processBlock: any C++/SEH exception inside the plugin
+    // fails the measurement instead of escaping to the message loop.
+    const auto safeProcessBlock = [&] (juce::AudioBuffer<float>& block) -> bool
+    {
+        try
+        {
+            plugin->processBlock (block, emptyMidi);
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            CRASH_LOG_ERR ("Sweep process", e.what());
+            return false;
+        }
+        catch (...)
+        {
+            CRASH_LOG_ERR ("Sweep process", "unknown exception");
+            return false;
+        }
+    };
 
     int64_t samplesGenerated = 0;
     int64_t tailSamples = 0;
@@ -84,7 +128,11 @@ bool SweepRunner::run()
         wetBlock.makeCopyOf (dryBlock, true);
 
         // Process through plugin
-        plugin->processBlock (wetBlock, emptyMidi);
+        if (! safeProcessBlock (wetBlock))
+        {
+            running = false;
+            return false;
+        }
 
         // Record both. Only the actually-generated samples are appended: the
         // final block is often partial, and the plugin's full-block output
@@ -151,7 +199,11 @@ bool SweepRunner::run()
         wetBlock.makeCopyOf (dryBlock, true);
 
         // Process through plugin
-        plugin->processBlock (wetBlock, emptyMidi);
+        if (! safeProcessBlock (wetBlock))
+        {
+            running = false;
+            return false;
+        }
 
         result.append (dryBlock, wetBlock, numToGenerate);
 
@@ -172,12 +224,27 @@ bool SweepRunner::run()
 
     CRASH_LOG_INFO ("Sweep done", juce::String (samplesGenerated) + " samples generated");
     result.trim();  // shrink to recorded length so analyzers see real data
-    if (pluginPrepared)
+
+    // Teardown is also plugin-DLL code (VST3 releaseResources + setNonRealtime
+    // round-trip into the plugin); guard it too so a throwing teardown never
+    // escapes the measurement path.
+    try
     {
-        plugin->releaseResources();
-        pluginPrepared = false;
+        if (pluginPrepared)
+        {
+            plugin->releaseResources();
+            pluginPrepared = false;
+        }
+        plugin->setNonRealtime (false);
     }
-    plugin->setNonRealtime (false);
+    catch (const std::exception& e)
+    {
+        CRASH_LOG_WARN ("Sweep teardown", e.what());
+    }
+    catch (...)
+    {
+        CRASH_LOG_WARN ("Sweep teardown", "unknown exception");
+    }
     running = false;
 
     return ! cancelled;

@@ -111,6 +111,13 @@ set_source_files_properties(source/host/EditorCrashGuard.cpp PROPERTIES
     COMPILE_FLAGS "/EHa"
 )
 
+# SweepRunner.cpp runs plugin processBlock/prepareToPlay on the message thread
+# (block C task 1): /EHa so catch (...) also intercepts SEH faults from a
+# misbehaving plugin, turning a measurement crash into a failed run.
+set_source_files_properties(source/capture/SweepRunner.cpp PROPERTIES
+    COMPILE_FLAGS "/EHa"
+)
+
 # ── Tests ───────────────────────────────────────────────────────────────────
 option(BUILD_TESTS "Build PluginLab unit tests" OFF)
 if(BUILD_TESTS)

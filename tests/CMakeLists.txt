@@ -50,4 +50,10 @@ if(WIN32)
         JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_PLUGINHOST_VST3=1
         JUCE_MODAL_LOOPS_PERMITTED=1)
 endif()
+
+# SweepRunner.cpp guards plugin calls with catch(...) (block C task 1);
+# /EHa lets it also intercept SEH faults, matching the production target.
+set_source_files_properties(../source/capture/SweepRunner.cpp PROPERTIES
+    COMPILE_FLAGS "/EHa"
+)
 catch_discover_tests(unit_tests)

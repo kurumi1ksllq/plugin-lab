@@ -29,6 +29,11 @@
 #include <cmath>
 #include <functional>
 
+// CrashLog recording-stub helpers (defined in CommandParserStubs.cpp)
+extern void clearCrashLog();
+extern int crashLogErrorCount();
+extern bool crashLogContains (const juce::String& substr);
+
 //==============================================================================
 // Helpers
 //==============================================================================
@@ -726,6 +731,81 @@ TEST_CASE ("CommandParser: invalid JSON returns error", "[commandparser][error]"
     auto response = parser.handleCommand ("not json at all");
     REQUIRE (response.contains ("\"ok\":false"));
     REQUIRE (response.contains ("\"error\""));
+}
+
+//==============================================================================
+// 6b. Measure — plugin exception protection (block C task 1)
+//
+// A plugin that throws from prepareToPlay/processBlock must surface as an
+// ok:false error response — never escape into the message loop (which would
+// std::terminate → abort the whole host).
+//==============================================================================
+
+TEST_CASE ("CommandParser: measure returns ok:false when plugin processBlock throws",
+           "[commandparser][measure][exception]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->setThrowOnProcessBlock (true);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    clearCrashLog();
+
+    // ---- Act ----
+    auto response = parser.handleCommand (R"({"cmd":"measure","type":"frequency_response"})");
+
+    // ---- Assert ----
+    // 1. Failed measurement surfaces as an error response
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("measurement failed"));
+
+    // 2. The exception was recorded in the crash log
+    REQUIRE (crashLogErrorCount() >= 1);
+    REQUIRE (crashLogContains ("Sweep"));
+}
+
+TEST_CASE ("CommandParser: measure returns ok:false when plugin prepareToPlay throws",
+           "[commandparser][measure][exception]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->setThrowOnPrepareToPlay (true);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    clearCrashLog();
+
+    // ---- Act ----
+    auto response = parser.handleCommand (R"({"cmd":"measure","type":"frequency_response"})");
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("measurement failed"));
+    REQUIRE (crashLogErrorCount() >= 1);
+    REQUIRE (crashLogContains ("Sweep"));
 }
 
 //==============================================================================

@@ -40,7 +40,7 @@ source/
 
 （根级通用约定：双编译、include 相对路径、无异常、线程铁律——见根 AGENTS.md，此处只列 source 特有）
 
-- `/EHa` 只用于 `host/` 两个 TU（PluginManager + EditorCrashGuard）——根 CMake 用 `set_source_files_properties` 逐文件指定，勿扩散
+- `/EHa` 只用于指定 TU：`host/` 两个（PluginManager + EditorCrashGuard）+ `capture/SweepRunner.cpp`（2026-08-08 块 C 任务 1 授权例外：测量路径保护，根 CMake 与 tests/CMakeLists 各一处 `set_source_files_properties`），勿再扩散
 - 所有类 `JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR`；成员类内初始化默认值（sampleRate=48000.0, blockSize=512）
 - `Main.cpp:455/470` 是全库仅有的两个无 CRASH_LOG catch（ListBox 回调，antipattern，勿复制）
 
