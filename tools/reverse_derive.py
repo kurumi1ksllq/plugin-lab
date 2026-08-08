@@ -267,14 +267,10 @@ def parse_document(data):
     doc_type = data.get("type", "unknown")
 
     if doc_type == "dataset":
-        # The dataset nests each measurement body under a block key
-        # (frequency_response / compression / gr_timeline); the flat top-level
-        # calls below stay for any legacy layout.
+        # Each measurement body is nested under its block key
+        # (frequency_response / compression / gr_timeline).
         _parse_freq_doc(data.get("frequency_response") or {}, out)
         _parse_compression_doc(data.get("compression") or {}, out)
-        _parse_freq_doc(data, out)            # dataset may carry flat freq body
-        _parse_compression_doc(data, out)
-        _parse_gr_doc(data, out)
         _parse_scan_doc(data, out)
         _parse_compression_family(data, out)
         _parse_gr_timeline(data, out)
