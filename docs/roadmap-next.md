@@ -17,15 +17,21 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
 
 ## 二、各块内容
 
-### 块 0：C 稳定加固 + 残余小项（小，低风险）
+### 块 0：C 稳定加固 + 残余小项（小，低风险）— 当前块
 
-- EditorCrashGuard 单独 /EHa TU（当前不编译进测试，tests/AGENTS.md 列明）
-- Generic 编辑器兜底（插件无编辑器/编辑器创建失败时回退，不再空窗）
-- 观察者指针清理
-- CGII.vst3 预防性黑名单（0 类型插件每轮热启重扫 ~0.5s，STATUS.md 已知残留）
-- data-schema.md scan 结构描述与实现最终核对（待改进项 1）
-- getParams 响应带 Band Used 状态（Pro-Q 4 Band 1，待改进项 3）
-- **验收**：158+ 测试全绿；热启无 CGII 重扫；schema 与实现一致
+任务清单（按实施顺序）：
+
+1. **测量路径异常保护**（2026-08-08 LA-2A 崩溃调查新增，最高优先）
+   - 背景：`SweepRunner::run` → `plugin->processBlock()`（及 `prepareToPlay`/`releaseResources`）在消息线程同步执行，测量路径零 try/catch——插件抛 C++ 异常时逃逸到消息循环 → `std::terminate` → abort → 进程无征兆退出（无 crashFilter/WER/minidump，仅日志停在 Sweep start）。违反项目铁律"崩溃保护用 /EHa + catch(...) + CRASH_LOG"
+   - 对策：在 host/（/EHa TU）提供受保护的 plugin 调用入口（或给 SweepRunner.cpp 开 /EHa），`catch(...)` + CRASH_LOG_ERR + 测量失败响应，宿主存活；同步补 `catch (const std::exception&)` 记录 what()
+   - 验收：TestPlugin 注入 throwing processBlock 的假插件，测量返回错误响应不闪退；CRASH_LOG 有异常记录
+2. **EditorCrashGuard 单独 /EHa TU**：当前不编译进测试（tests/AGENTS.md 列明），补进测试目标
+3. **Generic 编辑器兜底**：插件无编辑器/编辑器创建失败时回退，不再空窗
+4. **观察者指针清理**：生命周期加固
+5. **CGII.vst3 预防性黑名单**：0 类型插件每轮热启重扫 ~0.5s（STATUS.md 已知残留）
+6. **data-schema.md scan 结构描述与实现最终核对**（待改进项 1）
+7. **getParams 响应带 Band Used 状态**（Pro-Q 4 Band 1，待改进项 3）
+- **验收**：158+ 测试全绿；热启无 CGII 重扫；schema 与实现一致；异常保护项有测试锁定
 
 ### 块 1：E 测量质量改进（小-中）
 
@@ -71,8 +77,17 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
 
 ## 五、执行状态
 
-- [ ] 块 0 C 稳定加固 + 残余小项
+- [ ] 块 0 C 稳定加固 + 残余小项（**进行中**，任务清单见上；含 LA-2A 崩溃调查新增的"测量路径异常保护"）
 - [ ] 块 1 E 测量质量改进
 - [x] 块 2 A 批量采集管线（2026-08-08 完成，见 docs/plan-batch-pipeline.md 完成记录；真机验收 S1/S4 通过）
 - [ ] 块 3 B 记录模式
 - [ ] 块 4 D 进程外托管（设计门）
+
+## 六、决策记录补充（2026-08-08 晚）
+
+1. **LA-2A 崩溃调查结论**（用户确认已解决，调查记录保留备查）：
+   - 现场：加载 UADx LA-2A → 点测量 EQ → 日志停在 "Sweep start" 后静默退出
+   - 证据：无 UNHANDLED CRASH 日志、无 WER 事件（1000/1001）、无新 minidump → 非 SEH 崩溃，机制为 C++ 异常逃逸 → std::terminate → abort（对照 8/3 真崩溃有 ERROR UNHANDLED CRASH）
+   - 代码事实：测量路径（SweepRunner::run → JUCE VST3 processBlock）零异常捕获；SweepRunner 每 block `runDispatchLoopUntil(2)` 消息循环重入，LA-2A 编辑器消息在测量期间被处理；JUCE 9 wrapper processBlock 亦无 try/catch
+   - 复现实验：IPC 加载+测量 LA-2A（无编辑器窗口）**成功**（4s/240000 samples）；GUI 点击（编辑器窗口打开）闪退 → 差异为编辑器窗口，指向重入路径
+   - 处置：加固工作并入块 C 任务 1（无论本次根因细节如何，测量路径异常保护缺失是确定缺陷）
