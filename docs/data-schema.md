@@ -21,6 +21,11 @@
 > latency_samples, result}]`、精度（values 6 位）、dataset 内嵌 family 布局全部一致；
 > `tests/ExportTests.cpp [export][scan-schema]` 锁定（含 context 顶层 sample_rate /
 > source 断言，30 断言）。
+>
+> 2026-08-08 变更记录（块 E 任务 1）：`measurement` 块新增可选 `excitation`
+> 字段（`"sweep"` 缺省 / `"mls"`）——记录频响测量所用激励（MLS 频域除法解卷积 vs
+> 扫频 H1 估计），仅非缺省值（mls）时输出，缺省 sweep 导出保持字节不变；
+> `tests/CommandParserTests.cpp [commandparser][measure][excitation]` 锁定。
 
 ## 导出类型一览
 
@@ -52,7 +57,7 @@
 | `class_id`           | string | 插件 VST3 class id（识别精确实现）                                                                                                                            |
 | `latency_samples`    | int    | 测量时观测的插件延迟（采样点）                                                                                                                                |
 | `sample_rate`        | number | 测量采样率（Hz）                                                                                                                                              |
-| `measurement`        | object | `sample_rate` + `block_size`（处理块大小）                                                                                                                    |
+| `measurement`        | object | `sample_rate` + `block_size`（处理块大小）+ `excitation`（可选，频响激励：`sweep` 缺省 / `mls`，仅非缺省时输出）                                                        |
 | `parameter_snapshot` | object | 测量时全部参数归一化值快照（可复现参数状态）。键为参数显示名（display name），非 param_id（param_id 经 getParams 响应暴露）                                   |
 | `source`             | object | 输入源元数据：`type`（signal/noise/file/dynamic）、`file_path`、`sample_rate`、`resample_ratio`、`duration_sec`、`noise_type`、`seed`（固定种子，噪声可复现） |
 

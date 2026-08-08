@@ -2,6 +2,7 @@
 #include "../signal/SineSweep.h"
 #include "../signal/MultiTone.h"
 #include "../signal/ToneBurst.h"
+#include "../signal/Impulse.h"
 #include "../signal/FilePlayback.h"
 #include "../signal/NoiseGenerator.h"
 #include "../signal/EnvelopeSignal.h"
@@ -86,11 +87,22 @@ bool MeasurementSession::run()
             {
                 case Type::frequencyResponse:
                 {
-                    auto sweep = std::make_unique<SineSweep>();
-                    sweep->setFrequencyRange (20.0, 20000.0);
-                    sweep->setDuration (5.0);
-                    sweep->setAmplitude (0.5);
-                    gen = std::move (sweep);
+                    if (freqExcitationMLS)
+                    {
+                        auto mls = std::make_unique<Impulse>();
+                        mls->useMLS (true);
+                        mls->setMLSLength (freqMLSLength);   // 0.34 s @48k vs 5 s sweep
+                        mls->setAmplitude (0.5);
+                        gen = std::move (mls);
+                    }
+                    else
+                    {
+                        auto sweep = std::make_unique<SineSweep>();
+                        sweep->setFrequencyRange (20.0, 20000.0);
+                        sweep->setDuration (5.0);
+                        sweep->setAmplitude (0.5);
+                        gen = std::move (sweep);
+                    }
                     break;
                 }
 

@@ -129,9 +129,15 @@ ScanEngine::ScanResult ScanEngine::run (const juce::String& paramId,
             {
                 FreqResponse analyser;
                 analyser.setLatencySamples (plugin_->getLatencySamples());
-                entry.freq = analyser.analyze (recorded.getDryBuffer(),
-                                               recorded.getWetBuffer(),
-                                               recorded.getSampleRate());
+                if (session_->getFreqExcitation())
+                    entry.freq = analyser.analyzeMLS (recorded.getDryBuffer(),
+                                                      recorded.getWetBuffer(),
+                                                      recorded.getSampleRate(),
+                                                      session_->getFreqMLSLength());
+                else
+                    entry.freq = analyser.analyze (recorded.getDryBuffer(),
+                                                   recorded.getWetBuffer(),
+                                                   recorded.getSampleRate());
                 break;
             }
             case MeasurementSession::Type::harmonicAnalysis:

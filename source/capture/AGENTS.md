@@ -36,6 +36,7 @@ create → configure → run → read result → destroy。`run()` 阻塞至完�
 
 - `setSampleRate`（默认 48000.0）/ `setBlockSize`（默认 512）
 - `setSource` / `setFilePath` / `setNoiseConfig(type, durationSec, seed)`
+- `setFreqExcitation(useMLS)`（块 E 任务 1）：频响激励选择——true = MLS（Impulse，16383 样本 ≈ 0.34s，快一个量级；run() 的 frequencyResponse 分支选生成器）；false = SineSweep 5s（默认，向后兼容）；`getFreqMLSLength()` 供分析层取序列长
 - `setDynamicCarrierFreq/Amplitude/Speed/ADSR/CarrierStartHz`；dynamic 默认参数精确复刻原 signal，未调用前不影响现有命令
 - `captureParameterSnapshot`：记录测量时参数值供导出
 - `setProgressCallback`（0.0-1.0）；`setBlockCallback`（T4.4 live GR 头）：每 block 回调总进度 + dry/wet block，透传 SweepRunner

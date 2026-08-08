@@ -11,7 +11,7 @@
 | `SineSweep`      | 线性 EQ 频响（Farina 解卷积）       | 20Hz–20kHz 对数扫频                                                  |
 | `MultiTone`      | IMD 互调测量                        | 多音叠加；`setRandomPhaseSeed(seed)`（0=旧全零相位波形，非 0=xorshift32 确定性随机初始相位降峰值因子）；谐波峰与基频峰可能重叠（勿与 THD 混用）                    |
 | `ToneBurst`      | 静态压缩曲线                        | 多电平突发（-60..0 dB）；`setLevels()` / `setMasterAmplitude(scale)` |
-| `Impulse`        | 快速线性 EQ 测量（可选）            | 单冲激；MLS 候选                                                     |
+| `Impulse`        | 快速线性 EQ 测量（可选）            | 单冲激；MLS 序列（LFSR 左移反馈，块 E 任务 1 修复：原右移实现 + 错误 tap 表致 n=14 序列坍缩为常数；现 tap 表逐 n 验证全周期 2^n−1） |
 | `FilePlayback`   | 音频文件播放（vocal 素材）          | 通道映射；文件头在 prepare 读取                                      |
 | `NoiseGenerator` | 白/粉噪（确定性）                   | 固定种子（默认 `0x2E42A5`，测试用 42）                               |
 | `EnvelopeSignal` | 动态源，opto/vari-mu 压缩 GR 时间线 | ADSR（默认 0.02/0.1/0.8/0.2 s）；载波=SineSweep（频率范围起点经 session `carrierStartHz`，见下） |

@@ -63,6 +63,14 @@ namespace Protocol
     }
 
     //==============================================================================
+    /** Frequency-response excitation. */
+    namespace Excitation
+    {
+        constexpr auto sweep = "sweep";   // default (backward compatible)
+        constexpr auto mls   = "mls";
+    }
+
+    //==============================================================================
     /** Helper to create a response JSON string. */
     inline juce::String makeResponse (bool ok, const juce::String& data = {})
     {

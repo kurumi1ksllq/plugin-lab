@@ -10,7 +10,7 @@
 
 | 分析器            | 输入 → 输出                                                                      | 喂给                                   |
 | ----------------- | -------------------------------------------------------------------------------- | -------------------------------------- |
-| FreqResponse      | Farina 反卷积（sweep→IR→FFT→幅度比+相位）→ 点列 (freq/mag/phase)                 | freq 测量、EQ 曲线                     |
+| FreqResponse      | Farina 反卷积（sweep→IR→FFT→幅度比+相位）→ 点列 (freq/mag/phase)；`analyzeMLS` 为 MLS 激励频域除法（周期谐波处直接 DFT，去插件预热瞬态） | freq 测量、EQ 曲线                     |
 | HarmonicAnalysis  | MultiTone 8 基频（100–12800Hz）逐基频 → THD% + H2..H5 各次谐波 % | 谐波柱状图 |
 | CompressionCurve  | 输入 dB vs 输出 dB → {input_dB, output_dB, gr_dB}[] + 拟合参数（压缩比/拐点/GR） | 压缩曲线                               |
 | GainReduction     | 每 block 20·log10(RMS_wet/RMS_dry) → 逐 block GR                                 | 实时 GR 表头（50ms 节流）+ gr_timeline |
@@ -20,7 +20,7 @@
 ### 要点
 
 - **THD/IMD 勿混用**：THD 单音、IMD 多音，混用则谐波峰交叠（DESIGN.md:102）。注意：`harmonicAnalysis` 当前实现用 MultiTone 八度基频（100/200/.../12800 Hz，MeasurementSession.cpp:97），逐基频独立测谐波+THD——低频基频谐波会落在高频基频上（已知取舍）。
-- **FreqResponse**：必须 Farina 反卷积，勿直接 FFT 比（低/高频相位噪声，Oracle 修复）。
+- **FreqResponse**：必须 Farina 反卷积，勿直接 FFT 比（低/高频相位噪声，Oracle 修复）。`analyzeMLS`（块 E 任务 1）例外：MLS 整段频域除法，**在 MLS 周期谐波频率 q·sr/N 处直接 DFT 求 H=Y/X**——2 的幂 FFT bin 与谐波不重合（32768 ≠ 2·16383，高频漂移 ~0.4 bin 致 0.5 dB 级偏差），故不用 FFT 采样；双周期录音分析第二个（稳态）周期，插件预热瞬态不污染；phase unwrap+latency 补偿与 octave 平滑与 H1 路径共用 `applyPhasePost`/`applySmoothing`（行为保持重构，既有 [freqresponse] 用例锁定）。
 - **TimeConstants**：动态源 τ 有效（957e597 暴露 `carrier_start_hz` 默认 10000 + GainReduction 1ms RMS 窗口 + 正 dB 副本估计）；file/noise 源无边沿 → tau.valid=false 属设计。
 - **GainReduction**：实时 GR 表头走 AsyncUpdater ~50ms 节流，勿每 block 刷 UI。
 

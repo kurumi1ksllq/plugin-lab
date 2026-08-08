@@ -65,9 +65,15 @@ static bool runAndAnalyze (MeasurementSession* session, juce::AudioPluginInstanc
             {
                 FreqResponse fr;
                 fr.setLatencySamples (plugin->getLatencySamples());
-                results.freq = fr.analyze (result.getDryBuffer(),
-                                           result.getWetBuffer(),
-                                           result.getSampleRate());
+                if (session->getFreqExcitation())
+                    results.freq = fr.analyzeMLS (result.getDryBuffer(),
+                                                  result.getWetBuffer(),
+                                                  result.getSampleRate(),
+                                                  session->getFreqMLSLength());
+                else
+                    results.freq = fr.analyze (result.getDryBuffer(),
+                                               result.getWetBuffer(),
+                                               result.getSampleRate());
                 break;
             }
 
@@ -311,6 +317,8 @@ static Export::Context buildExportContext (juce::AudioPluginInstance* plugin, Me
     ctx.sampleRate     = session.getSampleRate();
     ctx.blockSize      = session.getBlockSize();
     ctx.paramSnapshot  = session.getParameterSnapshot();
+    ctx.excitation     = session.getFreqExcitation() ? Protocol::Excitation::mls
+                                                     : Protocol::Excitation::sweep;
 
     // Attach the input-source metadata to the export.
     ctx.source.type = sourceStr;
@@ -561,6 +569,19 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         auto sourceError = configureSessionSource (*session, *obj, source);
         if (sourceError.isNotEmpty())
             return Protocol::makeResponse (false, sourceError);
+
+        // --- frequency-response excitation (optional; default sweep) ---
+        auto excitationStr = obj->getProperty ("excitation").toString();
+        if (excitationStr.isEmpty())
+            excitationStr = Protocol::Excitation::sweep;
+        if (excitationStr == Protocol::Excitation::mls)
+            session->setFreqExcitation (true);
+        else if (excitationStr == Protocol::Excitation::sweep)
+            session->setFreqExcitation (false);
+        else
+            return Protocol::makeResponse (false,
+                R"("error":"unknown excitation ')" + escapeJsonString (excitationStr)
+                + "' (expected sweep|mls)\"");
 
         session->setSource (source);
         session->setPluginInstance (plugin);
@@ -827,6 +848,20 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             }
         }
 
+        // --- frequency-response excitation (optional; default sweep) ---
+        // Applies to every frequency_response measurement in the battery; an
+        // unknown value skips the freq block (deterministic partial failure,
+        // mirroring the scan/compression_family block validation).
+        bool freqExcitationValid = true;
+        bool freqExcitationMLS = false;
+        auto excitationStr = obj->getProperty ("excitation").toString();
+        if (excitationStr.isEmpty())
+            excitationStr = Protocol::Excitation::sweep;
+        if (excitationStr == Protocol::Excitation::mls)
+            freqExcitationMLS = true;
+        else if (excitationStr != Protocol::Excitation::sweep)
+            freqExcitationValid = false;
+
         // Export path: the dataset command has no input file, so "path"
         // always names the JSON destination.
         auto path = obj->getProperty ("path").toString();
@@ -858,6 +893,12 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 if (run == nullptr)
                     continue;   // unreachable — requestedTypes was validated above
 
+                // Unknown excitation: skip the frequency_response block only
+                // (deterministic partial failure, like the scan block).
+                if (run->type == MeasurementSession::Type::frequencyResponse
+                    && ! freqExcitationValid)
+                    continue;
+
                 // Source-specific configuration — mirrors the measure command.
                 // For the gr_timeline run this applies the same dynamic-carrier
                 // defaults (carrier_start_hz = 10 kHz) the standalone measure
@@ -869,6 +910,10 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 session->setSource (run->source);
                 session->setMeasurementType (run->type);
                 session->setPluginInstance (plugin);
+
+                // Frequency-response excitation applies to the whole dataset.
+                if (run->type == MeasurementSession::Type::frequencyResponse)
+                    session->setFreqExcitation (freqExcitationMLS);
 
                 juce::String error;
                 if (runAndAnalyze (session, plugin, run->source, run->sourceStr, run->results, error))

@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；162 个 TEST_CASE（2026-08-08 实测 158 基线 + 任务 E2 新增 4 个 `[multitone]`，tag 运行全绿；全量 ctest 于 E 块收尾执行）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
+Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；195 个 TEST_CASE（2026-08-08 实测 195/195 绿：基线 158 + 块 E2 4 个 [multitone] + 块 E1 5 个（2 [freqresponse][mls] + 3 [commandparser][measure][excitation]））；）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
 
 ## RUN
 

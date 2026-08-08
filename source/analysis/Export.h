@@ -39,6 +39,10 @@ namespace Export
         int blockSize = 0;
         juce::String paramSnapshot;  // JSON object string produced by MeasurementSession
         SourceInfo source;
+
+        /** Frequency-response excitation (Protocol::Excitation value). Only
+         *  non-default values are emitted into the measurement block. */
+        juce::String excitation = "sweep";
     };
 
     //==============================================================================

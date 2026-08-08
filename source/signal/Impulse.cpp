@@ -54,8 +54,11 @@ void Impulse::generateMLS()
     // Generate a Maximum Length Sequence using a linear feedback shift register
     mlsSequence.resize (mlsLength);
 
-    // Determine the LFSR taps based on the length
-    // For length 2^n - 1, we need the primitive polynomial taps
+    // Determine the LFSR taps based on the length.
+    // For length 2^n - 1, we need the primitive polynomial taps.
+    // A LEFT-shifting LFSR is used (state = (state << 1) | feedback, low bit
+    // output); every tap set below was verified to produce the full 2^n - 1
+    // cycle from the all-ones start state.
     uint32_t taps = 0;
     int n = 0;
     int len = mlsLength + 1;
@@ -64,18 +67,18 @@ void Impulse::generateMLS()
     switch (n)
     {
         case 15: taps = 0x6000; break;  // x^15 + x^14 + 1
-        case 14: taps = 0x3008; break;  // x^14 + x^13 + x^3 + x^2 + 1
-        case 13: taps = 0x1C00; break;  // x^13 + x^12 + x^11 + x^10 + 1
-        case 12: taps = 0x0E00; break;  // x^12 + x^11 + x^10 + x^9 + 1
-        case 11: taps = 0x0400; break;  // x^11 + x^10 + 1
-        case 10: taps = 0x0200; break;  // x^10 + x^9 + 1
-        case 9:  taps = 0x0100; break;  // x^9 + x^8 + 1
-        case 8:  taps = 0x008E; break;  // x^8 + x^7 + x^6 + x^5 + 1
-        case 7:  taps = 0x0042; break;  // x^7 + x^6 + 1
-        case 6:  taps = 0x0021; break;  // x^6 + x^5 + 1
-        case 5:  taps = 0x0012; break;  // x^5 + x^3 + 1
-        case 4:  taps = 0x0009; break;  // x^4 + x^3 + 1
-        case 3:  taps = 0x0005; break;  // x^3 + x^2 + 1
+        case 14: taps = 0x2015; break;  // x^14 + x^5 + x^3 + x + 1
+        case 13: taps = 0x100D; break;  // x^13 + x^4 + x^3 + x + 1
+        case 12: taps = 0x0829; break;  // x^12 + x^6 + x^4 + x + 1
+        case 11: taps = 0x0402; break;  // x^11 + x^2 + 1
+        case 10: taps = 0x0204; break;  // x^10 + x^3 + 1
+        case 9:  taps = 0x0108; break;  // x^9 + x^4 + 1
+        case 8:  taps = 0x008E; break;  // x^8 + x^4 + x^3 + x^2 + 1
+        case 7:  taps = 0x0041; break;  // x^7 + x + 1
+        case 6:  taps = 0x0021; break;  // x^6 + x + 1
+        case 5:  taps = 0x0012; break;  // x^5 + x^2 + 1
+        case 4:  taps = 0x0009; break;  // x^4 + x + 1
+        case 3:  taps = 0x0005; break;  // x^3 + x + 1
         default: taps = 0x0400; break;  // fallback
     }
 
@@ -87,14 +90,14 @@ void Impulse::generateMLS()
         // Output the LSB mapped to ±1
         mlsSequence[i] = (state & 1) ? 1.0f : -1.0f;
 
-        // Shift and apply feedback
+        // Shift left and apply feedback
         uint32_t feedback = 0;
         for (int bit = 0; bit < n; ++bit)
         {
             if ((taps >> bit) & 1)
                 feedback ^= (state >> bit) & 1;
         }
-        state = ((state >> 1) | (feedback << (n - 1))) & mask;
+        state = ((state << 1) | feedback) & mask;
     }
 
     // Normalize amplitude

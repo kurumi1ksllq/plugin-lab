@@ -14,7 +14,7 @@
 | loadPlugin          | `{path}` → `{ok, params}`                                                                                                                                                                         |
 | setParam            | `{name, value}` → `{ok, value}`                                                                                                                                                                   |
 | getParams           | `{}` → `{ok, params}`                                                                                                                                                                             |
-| measure             | `{type: frequency_response\|harmonic\|compression\|gr_timeline, source: signal\|file\|noise\|dynamic}` → `{ok, progress...}` 流式推进，完成后 `{ok, export_path, wav_path}`                       |
+| measure             | `{type: frequency_response\|harmonic\|compression\|gr_timeline, source: signal\|file\|noise\|dynamic, excitation?: sweep\|mls}` → `{ok, progress...}` 流式推进，完成后 `{ok, export_path, wav_path}`                       |
 | scan                | `{paramId, values}` → `{ok, runs, export_path, wav_path}`（曲线族经 export_path 导出 JSON）                                                                                                       |
 | dataset             | `{path, types?[], scan?{param_id, values, type?}, compression_family?{levels_db, speeds}}` → `{ok, export_path, types{...}, scan, compression_family}`                                    |
 | stop                | `{}` → `{ok}`                                                                                                                                                                                     |
@@ -23,6 +23,7 @@
 
 - 进度流式推送：measure 期间持续发 `{"ok":true,"progress":0.10}` 行，完成后发最终结果
 - dataset battery 语义：`types` 省略 → 默认全部 4 类型（frequency_response/harmonic/compression/gr_timeline）；source 固定映射——freq/harmonic/compression → signal，gr_timeline → dynamic（保证 τ 有效），v1 不支持覆盖；逐类型失败 → 跳过该块 + 响应 `types[type]=false`；响应单行（无进度流式），IPC 线程整段阻塞——期间 `stop` 不可达（与 scan 一致）；全部失败 → `ok:false` "all measurements failed"
+- 频响激励（块 E 任务 1）：measure 命令可选 `excitation:"sweep"|"mls"`（缺省 sweep，向后兼容）；未知值 → `{"ok":false,"error":"unknown excitation ..."}`。dataset 命令同字段：同一 dataset 内全部 frequency_response 测量（battery freq 块 + scan 块）用同一激励；未知值 → 跳过 freq 块（确定性部分失败，与 scan/compression_family 块校验语义一致）。导出 `context.measurement.excitation` 仅非缺省值（mls）时输出
 - dataset 可选块：`scan`（`param_id`+`values` 必填；`type` 省略默认 frequency_response，拒绝 gr_timeline）与 `compression_family`（`levels_db`/`speeds` 可省略，内部默认 `[-12,0]` × `[0.5,1,2]`）；校验失败仅跳过该块，其余照常执行
 - JSON 手写 raw string literal + `escapeJsonString`；`Protocol.h` 持消息类型常量与响应辅助函数
 

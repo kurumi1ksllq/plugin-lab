@@ -26,44 +26,112 @@ FreqResponse::Result FreqResponse::analyze (
 
     result.raw = points;
 
-    // Apply smoothing
-    if (! points.empty())
+    // Apply smoothing (shared with the MLS deconvolution path)
+    applySmoothing (points, sr, fftSize, result);
+
+    return result;
+}
+
+void FreqResponse::applySmoothing (const std::vector<Point>& raw, double sr, int fftSize,
+                                   Result& result) const
+{
+    if (raw.empty())
+        return;
+    std::vector<float> mags (raw.size());
+    std::vector<float> freqs (raw.size());
+    for (size_t i = 0; i < raw.size(); ++i)
     {
-        // Extract magnitudes for smoothing
-        std::vector<float> mags (points.size());
-        std::vector<float> freqs (points.size());
-        for (size_t i = 0; i < points.size(); ++i)
+        mags[i] = std::pow (10.0f, static_cast<float> (raw[i].magnitudeDB / 20.0));
+        freqs[i] = static_cast<float> (raw[i].frequency);
+    }
+    const double freqStep = sr / fftSize;
+    auto mags12 = mags;
+    MathUtils::smoothOctave (mags12.data(), freqStep, (int) mags12.size(), 12);
+    for (size_t i = 0; i < raw.size(); ++i)
+    {
+        Point p;
+        p.frequency = raw[i].frequency;
+        p.magnitudeDB = MathUtils::amplitudeToDB (mags12[i]);
+        p.phaseDeg = raw[i].phaseDeg;
+        result.smoothed_1_12.push_back (p);
+    }
+    auto mags3 = mags;
+    MathUtils::smoothOctave (mags3.data(), freqStep, (int) mags3.size(), 3);
+    for (size_t i = 0; i < raw.size(); ++i)
+    {
+        Point p;
+        p.frequency = raw[i].frequency;
+        p.magnitudeDB = MathUtils::amplitudeToDB (mags3[i]);
+        p.phaseDeg = raw[i].phaseDeg;
+        result.smoothed_1_3.push_back (p);
+    }
+}
+
+FreqResponse::Result FreqResponse::analyzeMLS (const juce::AudioBuffer<float>& dry,
+                                               const juce::AudioBuffer<float>& wet,
+                                               double sr, int mlsLength)
+{
+    Result result;
+    result.sampleRate = sr;
+
+    // Steady-state window: when the recording holds two periods (period +
+    // tail — as the interface documents), analyse the SECOND period, whose
+    // wet signal is transient-free (the plugin warm-up only contaminates the
+    // first ~t samples); a single-period recording analyses what it has.
+    const int numSamples = juce::jmin (dry.getNumSamples(), wet.getNumSamples(),
+                                       mlsLength * 2);
+    const int startSample = (numSamples >= mlsLength * 2) ? mlsLength : 0;
+    const float* dryData = dry.getReadPointer (0);
+    const float* wetData = wet.getReadPointer (0);
+
+    // H(f) = Y(f) / X(f) evaluated at the EXACT MLS harmonics f_q = q·sr/N.
+    //
+    // A period-N MLS carries all its energy at those frequencies, and no
+    // power-of-two FFT bin coincides with them (32768 != 2·16383), so an
+    // FFT-based division samples the Dirichlet interpolation of the comb:
+    // the bins drift up to ~0.4 bins from the harmonics at 10 kHz, where the
+    // dry spectrum dips to ~45% and the estimate loses up to ~0.5 dB in the
+    // rolloff. Direct summation over the (steady-state) period is exact; the
+    // twiddle recursion keeps it cheap (~7k harmonics × N samples).
+    const double freqStep = sr / mlsLength;
+    const int qLo = juce::jmax (1, static_cast<int> (std::ceil (20.0 * mlsLength / sr)));
+    const int qHi = static_cast<int> (std::floor (20000.0 * mlsLength / sr));
+    const double lowEnergyThreshold = static_cast<double> (mlsLength) * 1e-8;
+    std::vector<Point> points;
+    points.reserve (static_cast<size_t> (qHi - qLo + 1));
+
+    for (int q = qLo; q <= qHi; ++q)
+    {
+        const double freq = q * freqStep;
+        const double rotArg = -2.0 * juce::MathConstants<double>::pi * q / mlsLength;
+        const std::complex<double> rot (std::cos (rotArg), std::sin (rotArg));
+        std::complex<double> tw (1.0, 0.0);
+        std::complex<double> X (0.0, 0.0), Y (0.0, 0.0);
+        for (int n = 0; n < mlsLength; ++n)
         {
-            mags[i] = std::pow (10.0f, static_cast<float> (points[i].magnitudeDB / 20.0));
-            freqs[i] = static_cast<float> (points[i].frequency);
+            X += static_cast<double> (dryData[startSample + n]) * tw;
+            Y += static_cast<double> (wetData[startSample + n]) * tw;
+            tw *= rot;
         }
 
-        // 1/12 octave smoothing
-        auto mags_12 = mags;
-        double freqStep = sr / fftSize;
-        MathUtils::smoothOctave (mags_12.data(), freqStep, (int) mags_12.size(), 12);
-        for (size_t i = 0; i < points.size(); ++i)
-        {
-            Point p;
-            p.frequency = points[i].frequency;
-            p.magnitudeDB = MathUtils::amplitudeToDB (mags_12[i]);
-            p.phaseDeg = points[i].phaseDeg;
-            result.smoothed_1_12.push_back (p);
-        }
+        const double energy = X.real() * X.real() + X.imag() * X.imag();
+        if (energy < lowEnergyThreshold)
+            continue;
 
-        // 1/3 octave smoothing
-        auto mags_3 = mags;
-        MathUtils::smoothOctave (mags_3.data(), freqStep, (int) mags_3.size(), 3);
-        for (size_t i = 0; i < points.size(); ++i)
-        {
-            Point p;
-            p.frequency = points[i].frequency;
-            p.magnitudeDB = MathUtils::amplitudeToDB (mags_3[i]);
-            p.phaseDeg = points[i].phaseDeg;
-            result.smoothed_1_3.push_back (p);
-        }
+        const std::complex<double> H = Y / X;
+        Point p;
+        p.frequency   = freq;
+        p.magnitudeDB = 20.0 * std::log10 (std::max (std::abs (H), 1e-15));
+        p.phaseDeg    = std::atan2 (H.imag(), H.real())
+                        * 180.0 / juce::MathConstants<double>::pi;
+        points.push_back (p);
     }
 
+    applyPhasePost (points, sr);
+    result.raw = points;
+    // Points are spaced sr/mlsLength apart (one per harmonic) — pass the
+    // period as the "FFT size" so the octave smoothing places them correctly.
+    applySmoothing (points, sr, mlsLength, result);
     return result;
 }
 
@@ -161,6 +229,12 @@ void FreqResponse::processChannel (
     // ── Phase unwrapping across frequency ──
     // atan2 wraps to [-π, π]; unwrap removes ±2π discontinuities
     // so the phase curve is continuous across frequency bins.
+    // Latency compensation follows (shared with the MLS path).
+    applyPhasePost (points, sampleRate);
+}
+
+void FreqResponse::applyPhasePost (std::vector<Point>& points, double sampleRate) const
+{
     if (points.size() >= 2)
     {
         double cumulativeOffset = 0.0;

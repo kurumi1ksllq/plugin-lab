@@ -3,6 +3,7 @@
 
 #include "../source/analysis/FreqResponse.h"
 #include "../source/signal/SineSweep.h"
+#include "../source/signal/Impulse.h"
 #include "../source/utils/FftHelper.h"
 
 #include <juce_dsp/juce_dsp.h>
@@ -122,6 +123,106 @@ static double meanAbsPhaseDeg (const std::vector<FreqResponse::Point>& points)
     for (const auto& p : points)
         sum += std::abs (p.phaseDeg);
     return sum / static_cast<double> (points.size());
+}
+
+//==============================================================================
+// Helper: generate a full MLS excitation buffer (mono, channel 0).
+// Two periods are generated: analyzeMLS deconvolves the steady-state second
+// period, so the filter warm-up transient (first ~t samples) is excluded.
+static juce::AudioBuffer<float> generateMLS (double sr, int mlsLength, double amplitude)
+{
+    Impulse imp;
+    imp.useMLS (true);
+    imp.setMLSLength (mlsLength);
+    imp.setAmplitude (amplitude);
+    imp.prepare (sr, 512);
+
+    juce::AudioBuffer<float> buf (1, mlsLength * 2);
+    buf.clear();
+    imp.generate (buf, 0, mlsLength);        // period 1 (plugin warm-up)
+    imp.reset();                             // restart the sequence...
+    imp.generate (buf, mlsLength, mlsLength); // period 2 (steady state)
+    return buf;
+}
+
+//==============================================================================
+// Helper: linear interpolation of magnitude at a frequency on a curve.
+static double interpMagDB (const std::vector<FreqResponse::Point>& curve, double targetFreq)
+{
+    REQUIRE (curve.size() >= 2);
+    for (size_t i = 1; i < curve.size(); ++i)
+    {
+        if (curve[i].frequency >= targetFreq)
+        {
+            const double f0 = curve[i-1].frequency, f1 = curve[i].frequency;
+            const double t = (targetFreq - f0) / (f1 - f0);
+            return curve[i-1].magnitudeDB + t * (curve[i].magnitudeDB - curve[i-1].magnitudeDB);
+        }
+    }
+    return curve.back().magnitudeDB;
+}
+
+//==============================================================================
+// Test: analyzeMLS matches analyze for the same filtered system.
+TEST_CASE ("FreqResponse: analyzeMLS matches analyze for a known filter", "[freqresponse][mls]")
+{
+    const double sr = 48000.0;
+
+    // Same filter cascade as the sweep test: bell +6dB@1kHz Q1 + lowpass 8k
+    float gainLinear = juce::Decibels::decibelsToGain (6.0f);
+    std::vector<juce::dsp::IIR::Coefficients<float>::Ptr> coeffs;
+    coeffs.push_back (juce::dsp::IIR::Coefficients<float>::makePeakFilter (
+        sr, 1000.0, 1.0f, gainLinear));
+    coeffs.push_back (juce::dsp::IIR::Coefficients<float>::makeLowPass (
+        sr, 8000.0, 1.0f / std::sqrt (2.0f)));
+
+    // Sweep path (existing analysis)
+    auto drySweep = generateSweep (sr, 20.0, 20000.0, 5.0, 0.5);
+    auto wetSweep = drySweep;
+    applyFilters (wetSweep, coeffs);
+    const auto sweepResult = FreqResponse().analyze (drySweep, wetSweep, sr);
+
+    // MLS path (new analysis)
+    constexpr int kMlsLength = 16383;
+    auto dryMls = generateMLS (sr, kMlsLength, 0.5);
+    auto wetMls = dryMls;
+    applyFilters (wetMls, coeffs);
+    const auto mlsResult = FreqResponse().analyzeMLS (dryMls, wetMls, sr, kMlsLength);
+
+    REQUIRE (!mlsResult.raw.empty());
+    REQUIRE (mlsResult.sampleRate == Catch::Approx (sr));
+
+    // Compare magnitudes on 100 Hz – 10 kHz (both estimate the same LTI)
+    for (const auto& p : mlsResult.raw)
+    {
+        if (p.frequency < 100.0 || p.frequency > 10000.0)
+            continue;
+        const double sweepMag = interpMagDB (sweepResult.raw, p.frequency);
+        INFO ("f = " << p.frequency << " Hz, mls = " << p.magnitudeDB
+              << " dB, sweep = " << sweepMag << " dB");
+        REQUIRE (std::abs (p.magnitudeDB - sweepMag) < 0.5);
+    }
+}
+
+//==============================================================================
+// Test: MLS identity — dry == wet gives flat 0 dB (no filtering).
+TEST_CASE ("FreqResponse: analyzeMLS identity gives 0dB flat response", "[freqresponse][mls]")
+{
+    const double sr = 48000.0;
+    constexpr int kMlsLength = 16383;
+
+    auto dry = generateMLS (sr, kMlsLength, 0.5);
+    auto wet = dry;   // no filtering
+
+    const auto result = FreqResponse().analyzeMLS (dry, wet, sr, kMlsLength);
+
+    REQUIRE (!result.raw.empty());
+    auto mid = pointsInRange (result.raw, 100.0, 10000.0);
+    REQUIRE (mid.size() > 50);
+    REQUIRE (meanAbsMagDB (mid) < 0.5);
+    REQUIRE (meanAbsPhaseDeg (mid) < 3.0);
+    REQUIRE (!result.smoothed_1_12.empty());
+    REQUIRE (!result.smoothed_1_3.empty());
 }
 
 //==============================================================================

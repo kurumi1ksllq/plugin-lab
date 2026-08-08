@@ -69,8 +69,13 @@ static void appendContextFields (juce::String& json, const Export::Context& ctx,
     json += indent + "\"sample_rate\": " + juce::String (ctx.sampleRate) + ",\n";
     json += indent + "\"measurement\": {\n";
     json += indent + "  \"sample_rate\": " + juce::String (ctx.sampleRate) + ",\n";
-    json += indent + "  \"block_size\": " + juce::String (ctx.blockSize) + "\n";
-    json += indent + "},\n";
+    json += indent + "  \"block_size\": " + juce::String (ctx.blockSize);
+    // Excitation is emitted only when non-default (mls), keeping the default
+    // sweep exports byte-identical (matches the "only non-default fields"
+    // convention of the source block).
+    if (ctx.excitation != "sweep")
+        json += ",\n" + indent + "  \"excitation\": \"" + escapeJsonString (ctx.excitation) + "\"";
+    json += "\n" + indent + "},\n";
     json += indent + "\"parameter_snapshot\": "
             + (ctx.paramSnapshot.isNotEmpty() ? ctx.paramSnapshot : juce::String ("{}")) + ",\n";
     appendSourceBlock (json, ctx, indent);
@@ -106,6 +111,10 @@ juce::String freqResponseToJSON (const FreqResponse::Result& result,
                                   const Export::Context& context)
 {
     juce::String json;
+    // Preallocate: the raw/smoothed point arrays dominate the output size
+    // (~70 bytes per point), and repeated += on an unallocated String is
+    // O(n²) — a 6800-point MLS result would otherwise take seconds.
+    json.preallocateBytes (4096 + result.raw.size() * 3 * 80);
     json += "{\n";
     json += "  \"type\": \"frequency_response\",\n";
     appendContextFields (json, context, "  ");

@@ -1229,6 +1229,144 @@ TEST_CASE ("CommandParser: measure without source defaults to signal and analyse
     juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
 
+//==============================================================================
+// 8b. Measure — frequency-response excitation axis (sweep | mls)
+//==============================================================================
+
+TEST_CASE ("CommandParser: measure accepts excitation mls and routes to session",
+           "[commandparser][measure][excitation]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_mls.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+
+    // ---- Act ----
+    // MLS excitation: recording length = MLS 16383 samples ≈ 0.37 s, far
+    // shorter than the 5 s sweep.
+    auto t0 = juce::Time::getMillisecondCounter();
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","type":"frequency_response","excitation":"mls","path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+    const auto elapsedMs = juce::Time::getMillisecondCounter() - t0;
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (elapsedMs < 4000);   // MLS 明显快于 5s sweep + 分析
+    REQUIRE (session.getFreqExcitation());   // routed to the session
+
+    // The export carries the MLS excitation in the measurement context.
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    REQUIRE (exportedJson["measurement"]["excitation"].toString() == "mls");
+
+    // Cleanup
+    exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+}
+
+TEST_CASE ("CommandParser: measure rejects unknown excitation",
+           "[commandparser][measure][excitation]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // ---- Act ----
+    auto response = parser.handleCommand (
+        R"({"cmd":"measure","type":"frequency_response","excitation":"fancy"})");
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("excitation"));
+}
+
+TEST_CASE ("CommandParser: measure defaults to sweep excitation",
+           "[commandparser][measure][excitation]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_default_excitation.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+
+    // ---- Act ---- (no "excitation" field → sweep, backward compatible)
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","type":"frequency_response","path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE_FALSE (session.getFreqExcitation());
+
+    // Default excitation is NOT emitted into the export measurement context.
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    REQUIRE (! exportedJson["measurement"].hasProperty ("excitation"));
+
+    // Cleanup
+    exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+}
+
 TEST_CASE ("CommandParser: unknown source returns error", "[commandparser][source-invalid]")
 {
     ensureMessageManager();

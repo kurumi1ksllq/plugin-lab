@@ -48,6 +48,16 @@ public:
                     const juce::AudioBuffer<float>& wet,
                     double sr);
 
+    /** Analyze frequency response from an MLS excitation recording.
+     *  @param dry  MLS input (full period + tail)
+     *  @param wet  MLS output (same length)
+     *  @param sr   Sample rate of the recording
+     *  @param mlsLength  MLS sequence length (period in samples)
+     */
+    Result analyzeMLS (const juce::AudioBuffer<float>& dry,
+                       const juce::AudioBuffer<float>& wet,
+                       double sr, int mlsLength);
+
 private:
     /** Process a single channel pair. */
     void processChannel (const float* dryData,
@@ -56,6 +66,13 @@ private:
                          double sampleRate,
                          int fftOrder,
                          std::vector<Point>& points);
+
+    /** Unwrap phase across frequency and apply latency compensation. */
+    void applyPhasePost (std::vector<Point>& points, double sampleRate) const;
+
+    /** Build smoothed_1_12 / smoothed_1_3 curves from raw points. */
+    void applySmoothing (const std::vector<Point>& raw, double sr, int fftSize,
+                         Result& result) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FreqResponse)
 

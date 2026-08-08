@@ -51,6 +51,15 @@ public:
     void setSource (Source s)               { source = s; }
     Source getSource() const                { return source; }
 
+    /** Select the frequency-response excitation: true = MLS (fast,
+     *  full-band deconvolution), false = sine sweep (default, backward
+     *  compatible). */
+    void setFreqExcitation (bool useMLS) { freqExcitationMLS = useMLS; }
+    bool getFreqExcitation() const       { return freqExcitationMLS; }
+
+    /** MLS sequence length used by the MLS frequency-response excitation. */
+    int getFreqMLSLength() const         { return freqMLSLength; }
+
     // --- file source ---
     void setFilePath (const juce::File& f)  { filePath = f; }
     const juce::File& getFilePath() const   { return filePath; }
@@ -183,6 +192,10 @@ private:
     // Analysis parameters populated by run() from the generated signal.
     std::vector<double> fundamentalFreqs;  // harmonic analysis frequencies
     std::vector<double> lastLevels;        // tone-burst amplitudes (linear)
+
+    // Frequency-response excitation selection (default: sine sweep).
+    bool freqExcitationMLS = false;
+    int freqMLSLength = 16383;   // 2^14 - 1: full LFSR period at 48 kHz ≈ 0.34 s
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MeasurementSession)
 };
