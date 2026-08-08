@@ -713,6 +713,31 @@ TEST_CASE ("CommandParser: getParams includes stable param_id distinct from disp
     REQUIRE (response.contains (R"("param_id":"latency")"));
 }
 
+TEST_CASE ("CommandParser: getParams exposes band-used style toggles with value and id",
+           "[commandparser][getParams][band-used]")
+{
+    // ---- Arrange ----
+    // Pro-Q 4-style EQ: a "Band 1 Used" on/off toggle alongside "Band 1 Gain".
+    // The used-state must be addressable by stable id so the AI can tell
+    // whether an inactive band's measurement is meaningful (STATUS issue 3).
+    TestPlugin plugin;
+    plugin.addTestParameter ("band1used", "Band 1 Used", 0.0f);
+    plugin.addTestParameter ("band1gain", "Band 1 Gain", 0.5f);
+    CommandParser parser;
+    parser.setPluginInstance (&plugin);
+
+    // ---- Act ----
+    auto response = parser.handleCommand (R"({"cmd":"getParams"})");
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains (R"("name":"Band 1 Used")"));
+    REQUIRE (response.contains (R"("param_id":"band1used")"));
+    REQUIRE (response.contains (R"("value":0.0000)"));
+    REQUIRE (response.contains (R"("name":"Band 1 Gain")"));
+    REQUIRE (response.contains (R"("param_id":"band1gain")"));
+}
+
 //==============================================================================
 // 6. Unknown command
 //==============================================================================

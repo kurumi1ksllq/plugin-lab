@@ -167,7 +167,7 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 **测试**：`116/116 全绿`（阶段 5 的 113 + 3 新增），`/W4 /WX` 双 target 零警告。
 
-**待改进项（4 个，未做）**：data-schema.md scan 结构描述与实现差异（部分已修，待最终核对）、loadPlugin name 大小写/别名匹配、Pro-Q 4 Band 1 Used 状态、getParams 响应不带 param_id。
+**待改进项（4 个，未做）**：data-schema.md scan 结构描述与实现差异（**✅ 已核对，块 C 任务 6，f44e7a0**）、loadPlugin name 大小写/别名匹配（**未做，仍开放**）、Pro-Q 4 Band 1 Used 状态（**✅ 已验证，块 C 任务 7：getParams 暴露 Band 1 Used name/value/param_id，setParam 按 param_id 可切换**）、getParams 响应不带 param_id（**✅ 已修，3332e3d 前已带 param_id，测试 [getParams-param-id] + [band-used] 锁定**）。
 
 ## Oracle 架构审查（2026-08-02）
 
@@ -254,8 +254,9 @@ DESIGN.md                 # 设计文档
 - [x] **任务 3 Generic 编辑器兜底**（1dcb013 已实现，本块验证）：Main.cpp:1617-1628 fallback（createEditorSafe null → GenericAudioProcessorEditor + try/catch → 仍失败 "Loaded (no editor)"）；真机 Pro-Q 4 "Editor ok" 原生编辑器，fallback 不误触发
 - [x] **任务 4 观察者指针生命周期加固**（add971c）：PluginEditorWindow::closeButtonPressed 先 move 出回调再调用（回调内 delete-this 加固）；其余观察者（ChangeListener/Timer/CommandParser 回调）审查确认析构顺序安全
 - [x] **任务 5 CGII.vst3 预防性黑名单**（见"已知残留"）：`blacklistUnregistered` + `isBlacklistedPath` + scanDirectory 跳过接线；4 个单测锁定；真机二次热启无 CGII 重扫
-- [ ] 任务 6 data-schema scan 结构最终核对
-- [ ] 任务 7 getParams Band Used 状态
+- [x] **任务 6 data-schema scan 结构最终核对**（f44e7a0）：§5 scan 与 scanToJSON 逐字段核对一致（顶层 scan/context 七字段/family/精度/dataset 内嵌）；补 context 顶层 sample_rate + source 断言锁定（[export][scan-schema] 30 断言）；data-schema.md 记核对记录
+- [x] **任务 7 getParams Band Used 状态**：Pro-Q 4 真机验证——getParams 暴露 "Band 1 Used"（name/param_id/value），setParam 按 param_id 切换成功（0→1 回读确认）；TestPlugin 锁定测试 [band-used]；STATUS 待改进项 3/4 标记解决
+- [ ] ~~任务 6/7 收尾~~（已完成）
 
 
 ## 2026-08-08 文档同步记录（81a935d → 063edf3）
