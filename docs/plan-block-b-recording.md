@@ -1,6 +1,6 @@
 # PluginLab 块 3：B 记录模式实施计划
 
-> 2026-08-08 制定（v2 细化版）。路线图总览见 `docs/roadmap-next.md` 块 3。执行顺序：E（块 1）→ B（块 3）→ D（块 4）。
+> 2026-08-08 制定（v2 细化版）。路线图总览见 `docs/roadmap-next.md` 块 3。执行顺序：E（块 1，**已完成**，见 docs/archive/plan-block-e-measurement-quality.md）→ B（块 3，**当前块**）→ D（块 4）。
 > **brainstorming 草案答案已内嵌**（每任务 "DECISION" 标注，开工时用户确认即可；有异议则按 roadmap 铁律先访谈定案）。
 > 现状核实：WAV mirror 已部分覆盖（CaptureBuffer flush 单文件交织 24-bit `[dry ch0..N-1, wet ch0..N-1]`，崩溃安全镜像，**冻结不改**）；`ParameterTimeline` / `WavExporter` 在 DESIGN.md §8.2 规划但 P2-13 显式延后未实现。
 

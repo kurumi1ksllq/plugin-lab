@@ -1,10 +1,10 @@
 # Plugin Lab — 项目知识库
 
-**更新:** 2026-08-08 · **Commit:** 063edf3 · **Branch:** main
+**更新:** 2026-08-10 · **Commit:** 7480612 · **Branch:** main
 
 ## OVERVIEW
 
-VST3 插件黑盒测量实验室（Windows 桌面 GUI，C++20 + JUCE 9 + CMake + Catch2）。AI 通过 Named Pipe IPC（`\\.\pipe\PluginLab`）驱动 GUI：加载插件 → 测量（扫频/谐波/压缩/GR 时间线）→ JSON 导出 → 反推插件参数。纯黑盒原则——不依赖插件内部先验知识。设计/状态文档：`DESIGN.md`（方法论+协议）、`STATUS.md`（决策史+阶段记录）、`docs/data-schema.md`（8 类导出 JSON schema）。
+VST3 插件黑盒测量实验室（Windows 桌面 GUI，C++20 + JUCE 9 + CMake + Catch2）。AI 通过 Named Pipe IPC（`\\.\pipe\PluginLab`）驱动 GUI：加载插件 → 测量（扫频/谐波/压缩/GR 时间线）→ JSON 导出 → 反推插件参数。纯黑盒原则——不依赖插件内部先验知识。**开发目标（最终目标）：让 AI 用测量数据反推插件"处理方式"作为后续 VST 开发规格——见 `DESIGN.md` 开头「开发目标」章节**。设计/状态文档：`DESIGN.md`（方法论+协议）、`STATUS.md`（决策史+阶段记录）、`docs/data-schema.md`（8 类导出 JSON schema）。
 
 ## STRUCTURE
 
@@ -20,7 +20,7 @@ PluginLab/
 │   ├── ipc/           # Named Pipe 服务器 + 命令解析
 │   ├── ui/            # PlotWidget + PluginEditorWindow
 │   └── utils/         # FftHelper / MathUtils / CrashLog
-├── tests/             # Catch2 单元测试(158/158 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
+├── tests/             # Catch2 单元测试(199/199 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
 ├── tools/             # VST3Scanner(死代码但仍在构建) + CMakeLists + PS/Python 工具脚本
 ├── docs/              # data-schema.md / roadmap-next.md / 活跃 plan-block-*（已完成计划在 archive/）
 └── samples/take01.wav # vocal 测试素材（已入库）

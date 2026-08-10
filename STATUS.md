@@ -77,17 +77,12 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 - 关键路径：`2 → max(3,4) → 5`
 - vocal 素材：`samples/take01.wav`（48k/16bit/stereo/17.0s，阶段 2 已入库）
 
-## 待办（下一步）
+## 待办（下一步）—— 以 docs/roadmap-next.md 为准
 
-- **T3 数据记录系统**（2026-08-02 定稿，详见 DESIGN.md §8）：
-  - **阶段 1 ✅ 已完成（2026-08-02）**：测试设施 + 4 bug 修复 + IPC 恢复 + EQ 测量接通 + 右面板曲线 + Pro-Q 4 验收通过（见下"阶段 1 完成记录"）
-  - **阶段 2 ✅ 已完成**：输入源（FilePlayback/noise/dynamic，6054e57）
-  - **阶段 3 ✅ 已完成（2026-08-02）**：参数扫描（ScanEngine + GUI 扫描面板 + HSL 色板 + CompressionFamily 网格，5d2c86b..7fa3068）
-  - **阶段 4 ✅ 已完成（2026-08-02）**：动态压缩行为（GR 时间线 gr_timeline + τ 估计 + 实时 GR 表头，995fc54；见下"阶段 3+4 完成记录"）
-  - **阶段 5 ✅ 已完成（2026-08-02）**：建模与数据整合（datasetToJSON 数据包 + data-schema.md + reverse_derive.py 反推验证，2698068；见下"阶段 5 完成记录"）
-  - **收尾修复 ✅ 已完成（2026-08-02 深夜，957e597..b3e1813）**：GR τ 修复（IPC 暴露 carrier_start_hz 默认 10000 + GainReduction 1ms RMS 窗口 + 正 dB 副本估计，Pro-C 3 实测 τ 有效）+ ipc_client.ps1 响应超时 + JSON 解析悬挂/param_id 转义修复 + measure/scan helper 抽取 + schema 文档修正（见下"收尾修复记录"）
-  - **剩余（可选）**：4 个待改进项见"收尾修复记录"末尾
-- **T2 稳定加固**（EditorCrashGuard /EHa TU、Generic 编辑器兜底、观察者指针清理）— 当前已足够稳定，可按需实施
+> 2026-08-10 更新：下方 T2/T3 历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成）。当前待办为路线图块 B / D，见 `docs/roadmap-next.md` §五执行状态：
+
+- **块 3 B 记录模式**（当前块）：实施计划 v2 已定（`docs/plan-block-b-recording.md`，含接口签名/测试骨架/4 条 brainstorming 草案决策），**确认即可开工**；B1 WavExporter / B2 ParameterTimeline / B3 新 capture 模式+IPC+GUI
+- **块 4 D 进程外托管**（设计门）：`docs/plan-block-d-out-of-process.md` 6 设计问题各附推荐+理由+备选+决策标准，逐条确认即拆票（D0-D6）
 
 ## 阶段 1 完成记录（2026-08-02）
 
@@ -269,7 +264,7 @@ DESIGN.md                 # 设计文档
   修复：超时/挂起持久化黑名单的路径全部 setCacheFile(tmp)；changeListenerCallback 改 pending flag + triggerAsyncUpdate（AsyncUpdater ≤50ms 合并刷新）。验证全量绿（commit message 记 158/158），Debug 热扫 ~1s。
 - **`063edf3`** docs：sync AGENTS.md —— 刷新 commit ref + 测试计数对齐（commit message 记 126/126，**实测为 158/158**，后续以 tests/AGENTS.md 158 为准）。
 
-**测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（158 个 TEST_CASE）。
+**测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158、186/186 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（199 个 TEST_CASE，2026-08-10 实测）。
 
 ## E 块任务 E3 验证记录（2026-08-08）
 
@@ -281,3 +276,17 @@ DESIGN.md                 # 设计文档
   - 进度：progress(round+1, totalRounds) 每轮后回调 ✅
   - 块 A 复用：dataset 命令基于 ScanEngine（docs/archive/plan-batch-pipeline.md S1/S4 真机通过）✅
 - 结论：E3 无缺口，标记完成。
+
+## E 块完成记录（2026-08-08，块 1 E 测量质量改进；计划 v2 见 docs/archive/plan-block-e-measurement-quality.md）
+
+**commit 范围**：`7c83631`（E3 文档）→ `850ecc3`（E2）→ `4ed51e4`（E1）→ `7480612`（E 收尾审查修复，HEAD 已 push origin/main）。
+
+**关键交付**：
+
+- **E1 MLS 接入 EQ 频响**（4ed51e4，+ 7480612 修复）：`FreqResponse::analyzeMLS` 整段 FFT 频域除法（H=Y/X，FFT size = 2×mlsLength 补零避免循环卷积混叠 + 低能量保护）；重构抽取 `applySmoothing`/`applyPhasePost` 私有辅助（H1 扫频路径共用，既有 [freqresponse] 用例锁定行为）；`MeasurementSession::setFreqExcitation(useMLS)` + IPC measure/dataset 可选 `excitation:"sweep"|"mls"` 字段（缺省 sweep 向后兼容）。真机验收：MLS vs sweep 100Hz-10kHz 平均 |Δ| < 0.5dB PASS
+- **E2 MultiTone 确定性随机初始相位**（850ecc3）：`setRandomPhaseSeed(seed)`——0（默认）= 旧全零相位波形字节级不变；非 0 = xorshift32 确定性 PRNG 每频点 [0,2π) 相位，降峰值因子（8 音 CF < 4.0）。4 个 [multitone] 用例锁定（CF 下降 / 同种子位级可复现 / 异种子不同 / seed 0 兼容）
+- **E3 runMultiple 验证型**（7c83631，无新增代码）：ScanEngine::run 完整覆盖多轮扫描/曲线族/取消/快照恢复/进度，块 A 复用兑现
+
+**测试**：199/199 全绿（基线 186 + E2 4 + E1 5 + 审查修复 4；含激励泄漏收敛 3 用例 + analyzeMLS 短录制 clamp 1 用例），`ctest --timeout 180` 双跑 + 真机验收 + 双轴审查（Standards + Spec）。
+
+**审查修复要点**（7480612）：scan/dataset/measure 三路径激励泄漏收敛（`scan` 结束复位 freq excitation 防残留、dataset scan 块透传 excitation、非 freq 类型忽略 excitation）+ analyzeMLS 短录制（< MLS 周期）DFT clamp 防越界。

@@ -8,5 +8,6 @@
 | `plan-scan-optimization.md` | 扫描优化（缓存/线程/看门狗/黑名单） | STATUS.md「扫描优化专项」10 项决策记录（155/155 绿） |
 | `plan-batch-pipeline.md` | 块 A 批量采集管线（dataset IPC + Python 管线） | roadmap 块 2 ✅；真机验收 S1/S4 通过 |
 | `plan-block-c-stability.md` | 块 C 稳定加固（异常保护/黑名单/schema） | roadmap 块 0 ✅；186 测试全绿 + 双轴审查 |
+| `plan-block-e-measurement-quality.md` | 块 E 测量质量（MLS 频响 / MultiTone 相位 / runMultiple 验证） | roadmap 块 1 ✅；199 测试双跑绿 + 真机 MLS vs sweep \|Δ\|<0.5dB + 双轴审查 |
 
-活跃计划（未完成）在 docs/ 根：`roadmap-next.md` / `plan-block-e-measurement-quality.md`（块 1 E）/ `plan-block-b-recording.md`（块 3 B）/ `plan-block-d-out-of-process.md`（块 4 D 设计门）。
+活跃计划（未完成）在 docs/ 根：`roadmap-next.md` / `plan-block-b-recording.md`（块 3 B，当前块，确认即开工）/ `plan-block-d-out-of-process.md`（块 4 D 设计门）。

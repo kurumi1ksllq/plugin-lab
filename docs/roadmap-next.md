@@ -17,7 +17,7 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
 
 ## 二、各块内容
 
-### 块 0：C 稳定加固 + 残余小项（小，低风险）— 当前块
+### 块 0：C 稳定加固 + 残余小项（小，低风险）— 已完成（2026-08-08，见 docs/archive/plan-block-c-stability.md）
 
 任务清单（按实施顺序）：
 
@@ -33,21 +33,21 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
 7. **getParams 响应带 Band Used 状态**（Pro-Q 4 Band 1，待改进项 3）
 - **验收**：158+ 测试全绿；热启无 CGII 重扫；schema 与实现一致；异常保护项有测试锁定
 
-### 块 1：E 测量质量改进（小-中）
+### 块 1：E 测量质量改进（小-中）— 已完成（2026-08-08，计划 v2 见 docs/archive/plan-block-e-measurement-quality.md）
 
 - Impulse/MLS 接入 EQ 线性测量（比扫频快，DESIGN.md §9.2 P2）
 - MultiTone 加随机初始相位（固定种子可复现，降峰值因子，DESIGN.md §9.2 P2）
 - `MeasurementSession::runMultiple` 多轮参数扫描接口（DESIGN.md §9.2 P2，块 A 可选复用）
 - **验收**：MLS 频响与扫频结果一致性测试；MultiTone 峰值因子下降且同种子可复现
 
-### 块 2：A 批量采集管线（中低，Python 为主）— 当前块
+### 块 2：A 批量采集管线（中低，Python 为主）— 已完成（2026-08-08，见 docs/archive/plan-batch-pipeline.md）
 
 - `dataset` IPC 导出命令（`datasetToJSON` 当前**未暴露**到 IPC，已核实 source/ipc 无引用；按 source/ipc/AGENTS.md 四件套新增）
 - Python 无人值守采集管线（tools/，stdlib-only）：loadPlugin → 全测量类型（freq/harmonic/compression/grTimeline）→ dataset 聚合 → reverse_derive 反推报告
 - 目标：把实验室变成 AI 可驱动、可批量、可复现的采集管线（核心目标"AI 反推"的最后一公里）
 - **验收**：脚本驱动真插件（Pro-Q 4/Pro-C 3）全流程出 dataset + 反推报告；无人值守跑批多插件
 
-### 块 3：B 记录模式（中大型 C++）
+### 块 3：B 记录模式（中大型 C++）— 当前块（计划 v2 已定，确认即开工）
 
 - WavExporter：干/湿/基准多轨 WAV（可听对比；WAV mirror 已部分覆盖，此块补完整录制模式）
 - ParameterTimeline：参数自动化录制 + 回放
@@ -78,7 +78,7 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
 ## 五、执行状态
 
 - [x] 块 0 C 稳定加固 + 残余小项（**2026-08-08 完成**，见 docs/archive/plan-block-c-stability.md 完成记录；7 任务全交付：异常保护/EditorCrashGuard 入测试/Generic 兜底验证/观察者加固/CGII 黑名单/schema 核对/getParams Band Used；186 测试全绿 + 真机验收 + 双轴审查）
-- [x] 块 1 E 测量质量改进（**2026-08-08 完成**，计划 v2 见 docs/plan-block-e-measurement-quality.md；E1 MLS 接入频响 / E2 MultiTone 随机相位 / E3 runMultiple 验证型；全量 199 测试双跑绿 + 真机验收 MLS vs sweep |Δ|<0.5dB PASS + 双轴审查修复（scan/dataset/measure 激励泄漏收敛 + analyzeMLS 短录制 DFT clamp））
+- [x] 块 1 E 测量质量改进（**2026-08-08 完成**，计划 v2 见 docs/archive/plan-block-e-measurement-quality.md；E1 MLS 接入频响 / E2 MultiTone 随机相位 / E3 runMultiple 验证型；全量 199 测试双跑绿 + 真机验收 MLS vs sweep |Δ|<0.5dB PASS + 双轴审查修复（scan/dataset/measure 激励泄漏收敛 + analyzeMLS 短录制 DFT clamp））
 - [x] 块 2 A 批量采集管线（2026-08-08 完成，见 docs/archive/plan-batch-pipeline.md 完成记录；真机验收 S1/S4 通过）
 - [ ] 块 3 B 记录模式（**实施计划已定 v2，见 docs/plan-block-b-recording.md**——含接口签名/测试骨架/4 条 brainstorming 草案决策，确认即可开工；B1 WavExporter / B2 ParameterTimeline / B3 新 capture 模式+IPC+GUI）
 - [ ] 块 4 D 进程外托管（**设计门，见 docs/plan-block-d-out-of-process.md**——6 设计问题各附推荐+理由+备选+决策标准，逐条确认即拆票；实施顺序 D0-D6 带验收）
@@ -91,4 +91,4 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
    - 代码事实：测量路径（SweepRunner::run → JUCE VST3 processBlock）零异常捕获；SweepRunner 每 block `runDispatchLoopUntil(2)` 消息循环重入，LA-2A 编辑器消息在测量期间被处理；JUCE 9 wrapper processBlock 亦无 try/catch
    - 复现实验：IPC 加载+测量 LA-2A（无编辑器窗口）**成功**（4s/240000 samples）；GUI 点击（编辑器窗口打开）闪退 → 差异为编辑器窗口，指向重入路径
    - 处置：加固工作并入块 C 任务 1（无论本次根因细节如何，测量路径异常保护缺失是确定缺陷）
-2. **2026-08-08（工作文档 v2 细化）**：E/B/D 三块工作文档升级到"可直接照做"粒度——`plan-block-e-measurement-quality.md` v2 含完整测试代码与实现代码（E1 analyzeMLS 频域除法实现 + FreqResponse 重构抽取 applySmoothing/applyPhasePost + 四件套；E2 MultiToneTests 4 用例 + xorshift32 实现；E3 验证清单）；`plan-block-b-recording.md` v2 含接口签名/测试骨架/4 条 brainstorming 草案决策（单文件 6 声道、bypass=dry 副本、rate 可配置、timeline 专用命令）；`plan-block-d-out-of-process.md` v2 6 设计问题各附推荐+理由+备选+决策标准（B+ 边界 / 编辑器 c 降级 / 宿主黑名单唯一写者 / 崩溃恢复 3 次上限 / stdin-stdout 协议 / 子进程内录制），实施顺序 D0-D6 带验收。执行顺序不变：E（下一步）→ B → D。
+2. **2026-08-08（工作文档 v2 细化）**：E/B/D 三块工作文档升级到"可直接照做"粒度——`plan-block-e-measurement-quality.md` v2 含完整测试代码与实现代码（E1 analyzeMLS 频域除法实现 + FreqResponse 重构抽取 applySmoothing/applyPhasePost + 四件套；E2 MultiToneTests 4 用例 + xorshift32 实现；E3 验证清单）；`plan-block-b-recording.md` v2 含接口签名/测试骨架/4 条 brainstorming 草案决策（单文件 6 声道、bypass=dry 副本、rate 可配置、timeline 专用命令）；`plan-block-d-out-of-process.md` v2 6 设计问题各附推荐+理由+备选+决策标准（B+ 边界 / 编辑器 c 降级 / 宿主黑名单唯一写者 / 崩溃恢复 3 次上限 / stdin-stdout 协议 / 子进程内录制），实施顺序 D0-D6 带验收。执行顺序不变：E（已完成）→ **B（下一步）** → D。
