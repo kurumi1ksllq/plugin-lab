@@ -1,6 +1,6 @@
 # Plugin Lab — 项目知识库
 
-**更新:** 2026-08-10 · **Commit:** 7480612 · **Branch:** main
+**更新:** 2026-08-10 · **Commit:** 531c9eb · **Branch:** main
 
 ## OVERVIEW
 
@@ -35,6 +35,8 @@ PluginLab/
 | 参数扫描                  | `source/scan/ScanEngine.*`                           | 快照/恢复/取消 RAII                         |
 | 信号生成（新增生成器）    | `source/signal/`                                     | 实现 `SignalGenerator` 接口                 |
 | JSON 导出/格式化          | `source/analysis/Export.cpp`                         | 手写转义，非 juce::JSON                     |
+| 录制 WAV 导出（6 声道多轨）| `source/analysis/WavExporter.*`                      | `exportTracks` 24-bit `[dry,wet,bypass=dry]` |
+| 参数自动化录制/回放        | `source/capture/ParameterTimeline.*`                 | AudioProcessorListener + rate 可配置回放    |
 | IPC 命令                  | `source/ipc/` + `docs/data-schema.md`                | 协议契约（含 `getScanStatus` 扫描状态快照） |
 | 实时曲线渲染              | `source/ui/PlotWidget.cpp`                           | 增量绘制 + 50ms 节流                        |
 | 崩溃日志/minidump         | `source/utils/CrashLog.cpp`                          | `%TEMP%\pluginlab_crashlog.txt`             |

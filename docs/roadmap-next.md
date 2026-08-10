@@ -47,12 +47,13 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
 - 目标：把实验室变成 AI 可驱动、可批量、可复现的采集管线（核心目标"AI 反推"的最后一公里）
 - **验收**：脚本驱动真插件（Pro-Q 4/Pro-C 3）全流程出 dataset + 反推报告；无人值守跑批多插件
 
-### 块 3：B 记录模式（中大型 C++）— 当前块（计划 v2 已定，确认即开工）
+### 块 3：B 记录模式（中大型 C++）— 已完成（2026-08-10，计划 v2 见 docs/archive/plan-block-b-recording.md）
 
 - WavExporter：干/湿/基准多轨 WAV（可听对比；WAV mirror 已部分覆盖，此块补完整录制模式）
 - ParameterTimeline：参数自动化录制 + 回放
 - 新 capture 模式 + IPC 命令 + GUI 面板
 - **验收**：录制-回放参数时间线与输入一致；干/湿 WAV 时长/对齐正确
+- **完成记录**：B1 WavExporter（`exportTracks` 6 声道 24-bit `[dry, wet, bypass=dry]` + IPC `exportWav`）；B2 ParameterTimeline（事件录制/回放，rate 可配置，R2 参数恢复）+ IPC `recordTimeline`（非阻塞事件录制）/`stopTimeline`（导出 timeline JSON）/`playTimeline`（回放+音频采集）；B3 GUI 面板（Record/Stop TL/Play + 进度条）。208 测试双跑绿；真机验收（Pro-Q 4：exportWav 6 声道/48k/24bit/5.000s PASS；record→3×setParam→stop→play 全流程 + R2 恢复 PASS）；双轴审查各轮修复（B1 测试补强/误编辑修复；B2 playTimeline 守卫 + stopRecording 重排 + findParam 去重；B3 回放期重入守卫）；GUI 点击路径因前台全屏游戏受阻未自动化（IPC 主路径已验证，GUI 为同一 handleCommand 薄包装）。
 
 ### 块 4：D 进程外托管（大工程，设计门）
 
@@ -80,8 +81,8 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
 - [x] 块 0 C 稳定加固 + 残余小项（**2026-08-08 完成**，见 docs/archive/plan-block-c-stability.md 完成记录；7 任务全交付：异常保护/EditorCrashGuard 入测试/Generic 兜底验证/观察者加固/CGII 黑名单/schema 核对/getParams Band Used；186 测试全绿 + 真机验收 + 双轴审查）
 - [x] 块 1 E 测量质量改进（**2026-08-08 完成**，计划 v2 见 docs/archive/plan-block-e-measurement-quality.md；E1 MLS 接入频响 / E2 MultiTone 随机相位 / E3 runMultiple 验证型；全量 199 测试双跑绿 + 真机验收 MLS vs sweep |Δ|<0.5dB PASS + 双轴审查修复（scan/dataset/measure 激励泄漏收敛 + analyzeMLS 短录制 DFT clamp））
 - [x] 块 2 A 批量采集管线（2026-08-08 完成，见 docs/archive/plan-batch-pipeline.md 完成记录；真机验收 S1/S4 通过）
-- [ ] 块 3 B 记录模式（**实施计划已定 v2，见 docs/plan-block-b-recording.md**——含接口签名/测试骨架/4 条 brainstorming 草案决策，确认即可开工；B1 WavExporter / B2 ParameterTimeline / B3 新 capture 模式+IPC+GUI）
-- [ ] 块 4 D 进程外托管（**设计门，见 docs/plan-block-d-out-of-process.md**——6 设计问题各附推荐+理由+备选+决策标准，逐条确认即拆票；实施顺序 D0-D6 带验收）
+- [x] 块 3 B 记录模式（**2026-08-10 完成**，见 docs/archive/plan-block-b-recording.md；B1 WavExporter / B2 ParameterTimeline / B3 GUI 面板；208 测试双跑绿 + 真机验收 Pro-Q 4 全流程 + 双轴审查修复）
+- [ ] 块 4 D 进程外托管（**下一步，设计门，见 docs/plan-block-d-out-of-process.md**——6 设计问题各附推荐+理由+备选+决策标准，逐条确认即拆票；实施顺序 D0-D6 带验收）
 
 ## 六、决策记录补充（2026-08-08 晚）
 
