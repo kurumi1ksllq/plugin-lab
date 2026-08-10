@@ -1,4 +1,4 @@
-# Plugin Lab — 当前状态 (2026-08-08)
+# Plugin Lab — 当前状态 (2026-08-10)
 
 ## 已验证通过 ✅
 
@@ -79,10 +79,9 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 ## 待办（下一步）—— 以 docs/roadmap-next.md 为准
 
-> 2026-08-10 更新：下方 T2/T3 历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成）。当前待办为路线图块 B / D，见 `docs/roadmap-next.md` §五执行状态：
+> 2026-08-10 更新：下方 T2/T3 历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成；块 B 记录模式于 2026-08-10 完成，见下方完成记录）。当前待办为路线图块 D，见 `docs/roadmap-next.md` §五执行状态：
 
-- **块 3 B 记录模式**（当前块）：实施计划 v2 已定（`docs/plan-block-b-recording.md`，含接口签名/测试骨架/4 条 brainstorming 草案决策），**确认即可开工**；B1 WavExporter / B2 ParameterTimeline / B3 新 capture 模式+IPC+GUI
-- **块 4 D 进程外托管**（设计门）：`docs/plan-block-d-out-of-process.md` 6 设计问题各附推荐+理由+备选+决策标准，逐条确认即拆票（D0-D6）
+- **块 4 D 进程外托管**（**下一步**，设计门）：`docs/plan-block-d-out-of-process.md` 6 设计问题各附推荐+理由+备选+决策标准，逐条确认即拆票（D0-D6）
 
 ## 阶段 1 完成记录（2026-08-02）
 
@@ -204,8 +203,8 @@ source/
 ├── host/PluginManager    # VST3 扫描/加载（/EHa + 黑名单 + 死马踏板 + 看门狗）
 ├── ui/PluginEditorWindow # 独立插件编辑器窗口（DocumentWindow 子类）
 ├── signal/               # 信号生成器 (SineSweep/MultiTone/ToneBurst/Impulse/FilePlayback/NoiseGenerator/EnvelopeSignal)
-├── capture/              # 采集引擎 (AudioBuffer::CaptureBuffer/SweepRunner/MeasurementSession)
-├── analysis/             # 分析引擎 (FreqResponse/Harmonic/CompressionCurve/GainReduction/TimeConstants/CompressionFamily + Export)
+├── capture/              # 采集引擎 (AudioBuffer::CaptureBuffer/SweepRunner/MeasurementSession/ParameterTimeline)
+├── analysis/             # 分析引擎 (FreqResponse/Harmonic/CompressionCurve/GainReduction/TimeConstants/CompressionFamily + Export + WavExporter)
 ├── ipc/                  # Named Pipe 控制 (PipeServer/CommandParser/Protocol)
 ├── ui/PlotWidget         # 绘图组件
 └── utils/                # FftHelper/MathUtils/CrashLog
@@ -217,7 +216,7 @@ tools/verify_export.py    # 导出 JSON 峰值/Q 验证（stdlib-only）
 DESIGN.md                 # 设计文档
 ```
 
-> 注：`RecorderEngine`/`ParameterTimeline`/`AnalysisStrategy`/`WavExporter` 为 §8.2 设计组件，依 plan-phase2-5 P2-13 **显式延后未实现**（实际落地见阶段 3-5 记录）。
+> 注：`RecorderEngine`/`AnalysisStrategy` 为 §8.2 设计组件，依 plan-phase2-5 P2-13 **显式延后未实现**（实际落地见阶段 3-5 记录）；`ParameterTimeline`/`WavExporter` 同列 §8.2 组件，**已于 2026-08-10 块 B 落地**（见下方 B 块完成记录）。
 
 ## 扫描优化专项（2026-08-03/04，计划见 docs/archive/plan-scan-optimization.md）
 
@@ -264,7 +263,7 @@ DESIGN.md                 # 设计文档
   修复：超时/挂起持久化黑名单的路径全部 setCacheFile(tmp)；changeListenerCallback 改 pending flag + triggerAsyncUpdate（AsyncUpdater ≤50ms 合并刷新）。验证全量绿（commit message 记 158/158），Debug 热扫 ~1s。
 - **`063edf3`** docs：sync AGENTS.md —— 刷新 commit ref + 测试计数对齐（commit message 记 126/126，**实测为 158/158**，后续以 tests/AGENTS.md 158 为准）。
 
-**测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158、186/186 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（199 个 TEST_CASE，2026-08-10 实测）。
+**测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158、186/186、199/199 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（208 个 TEST_CASE，2026-08-10 实测）。
 
 ## E 块任务 E3 验证记录（2026-08-08）
 
@@ -290,3 +289,23 @@ DESIGN.md                 # 设计文档
 **测试**：199/199 全绿（基线 186 + E2 4 + E1 5 + 审查修复 4；含激励泄漏收敛 3 用例 + analyzeMLS 短录制 clamp 1 用例），`ctest --timeout 180` 双跑 + 真机验收 + 双轴审查（Standards + Spec）。
 
 **审查修复要点**（7480612）：scan/dataset/measure 三路径激励泄漏收敛（`scan` 结束复位 freq excitation 防残留、dataset scan 块透传 excitation、非 freq 类型忽略 excitation）+ analyzeMLS 短录制（< MLS 周期）DFT clamp 防越界。
+
+## B 块完成记录（2026-08-10，块 3 B 记录模式；计划 v2 见 docs/archive/plan-block-b-recording.md）
+
+**commit 范围**：`5c128da`（B1）→ `b6d90b9`（B2）→ `531c9eb`（B3）→ `50cb115`（B 收尾文档，HEAD 已 push origin/main）。
+
+**开工决策**（brainstorming 草案逐条确认）：D1 单文件 6 声道交织 `[dryL,R wetL,R bypassL,R]`；D2 recordTimeline **v1 仅事件**非阻塞 + 独立 stopTimeline（音频由 playTimeline 采集）；D3 timeline 专用命令，不进 measure source 枚举；rate 可配置默认 1.0。
+
+**关键交付**：
+
+- **B1 WavExporter**（5c128da）：`WavExporter::exportTracks(dry, wet, sampleRate, wavPath)` 手写 44 字节 RIFF + 24-bit PCM（量化镜像 CaptureBuffer flush），单文件 3×声道交织，bypass = dry 副本（v1）；错误 → false + CRASH_LOG_WARN，无异常。IPC `exportWav`（四件套：Protocol.h + handleCommand + CommandParserTests + data-schema.md §9）：从最近一次测量的 session result 导出，路径复用 `wavPathFor`（.json→.wav）。**真机 Pro-Q 4：6 声道/48k/24bit/5.000s PASS**（时长与测量精确一致）。审查修复：测试补 6 声道全查（ch1/3/5）+ bitsPerSample 断言 + IPC 级内容布局验证（setGain 2.0 使 wet=2×dry 区分三轨）
+- **B2 ParameterTimeline**（b6d90b9）：事件录制——AudioProcessorListener（JUCE 9 **双纯虚**：audioProcessorParameterChanged + audioProcessorChanged 均覆写）、mutex + 原子时间戳（C8 回调可触发于 IPC 线程）、param_id 稳定 id（R9 跳过空 id）、wall-clock 起点；回放——rate 预缩放（effectiveMs = timeMs/rate）、applyEventsUpTo 按光标推进、R2 参数快照恢复。MeasurementSession `setTimelinePlayback`（blockCallback seam 包装，**SweepRunner 冻结未动**；一次性标志防陈旧时间线泄漏；R2 恢复覆盖失败/取消路径）。IPC 三命令：`recordTimeline`（非阻塞 {ok,recording:true}）/`stopTimeline`（手写 JSON 导出 timeline）/`playTimeline`（阻塞镜像 measure 派发；WAV 复用 B1；play JSON 兄弟 `_play.json` 绝不覆盖输入）。**真机 Pro-Q 4：record → 3×setParam（time_ms 322/843/1363，id/值精确）→ stop（3 事件 JSON）→ play（240000 samples，WAV 6 声道）→ R2 参数恢复 PASS**。审查修复：playTimeline 拒绝录制中（防回放/R2 恢复污染录音）、stopRecording 锁外分离 removeListener（消丢事件竞态 + 规避 JUCE 通知锁死锁）、findParam 同模块去重（ParameterTimeline::findParam 静态，MeasurementSession 复用）+ 文档同步（tests/AGENTS.md 208、capture 7 文件、根 AGENTS.md 62 文件）
+- **B3 GUI 面板**（531c9eb）：MainContentComponent Record/Stop TL/Play 按钮 + ProgressBar（JUCE 9 API：构造取 `double&` 引用 + 内部 50ms 定时器自刷新，值 <0 显示 spinner）；按钮为同一 handleCommand 薄包装（R4：IPC 主路径，GUI 后置）；**回放期置 measurementInProgress 共享重入守卫**（闭合 Measure/Scan/Record 重入口）；布局第 4 行（controls 124px）。审查修复：重入守卫 + 死状态 timelinePlaybackInProgress 清除 + 布局 124px + 注释准确性
+
+**测试**：**208/208 全绿**（199 + B1 3 [wavexporter][exportwav] + B2 6 [paramtimeline][commandparser] timeline 命令），`ctest --timeout 180` 双跑 + 真机验收 + 双轴审查（Standards + Spec，每任务一轮，修复后复跑双绿）。
+
+**已知限制**：
+
+- **GUI 点击路径未自动化验证**（2026-08-10 真机时前台有全屏游戏遮挡窗口，置顶失败；按钮为 IPC 已验证命令的薄包装 + 构建 clean + 审查通过；产物 `cwd/pluginlab_timeline.json`）
+- **UADx 系列不可测**：processBlock 抛未知异常（块 C 保护兜底，测量返回失败不崩宿主）；magic.CURVE 编辑器消息重入致静默退出——真机验收统一用 Pro-Q 4（UADx 1176/LA-2A 等加载 OK 但测量不可用）
+- **回放进度为 spinner**（spec 原提"显示当前事件序号"未实现——playTimeline 协议无进度流，需扩展协议面，留待后续）
