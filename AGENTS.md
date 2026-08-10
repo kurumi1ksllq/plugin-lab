@@ -10,7 +10,7 @@ VST3 插件黑盒测量实验室（Windows 桌面 GUI，C++20 + JUCE 9 + CMake +
 
 ```
 PluginLab/
-├── source/            # 全部生产代码（58 文件，8 模块）——见 source/AGENTS.md
+├── source/            # 全部生产代码（62 文件，8 模块）——见 source/AGENTS.md
 │   ├── Main.cpp       # 入口 + 装配中枢（1829 行 god file）
 │   ├── host/          # VST3 扫描/加载（/EHa 崩溃保护 + 黑名单）
 │   ├── signal/        # 信号生成器接口 + 7 生成器
@@ -20,7 +20,7 @@ PluginLab/
 │   ├── ipc/           # Named Pipe 服务器 + 命令解析
 │   ├── ui/            # PlotWidget + PluginEditorWindow
 │   └── utils/         # FftHelper / MathUtils / CrashLog
-├── tests/             # Catch2 单元测试(199/199 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
+├── tests/             # Catch2 单元测试(208/208 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
 ├── tools/             # VST3Scanner(死代码但仍在构建) + CMakeLists + PS/Python 工具脚本
 ├── docs/              # data-schema.md / roadmap-next.md / 活跃 plan-block-*（已完成计划在 archive/）
 └── samples/take01.wav # vocal 测试素材（已入库）

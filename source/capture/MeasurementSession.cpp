@@ -8,6 +8,17 @@
 #include "../signal/EnvelopeSignal.h"
 #include "../utils/MathUtils.h"
 
+namespace
+{
+// Restores a parameter to its pre-playback value (R2). Reuses the shared
+// stable-id lookup on ParameterTimeline (one lookup across capture/).
+void restoreParamValue (juce::AudioPluginInstance* plugin, const juce::String& paramId, float value)
+{
+    if (auto* param = ParameterTimeline::findParam (*plugin, paramId))
+        param->setValueNotifyingHost (value);
+}
+}  // namespace
+
 void MeasurementSession::setPluginInstance (juce::AudioPluginInstance* p)
 {
     plugin = p;
@@ -39,6 +50,36 @@ void MeasurementSession::setDynamicADSR (double attackSec, double decaySec,
     dynamicADSR[3] = releaseSec;
 }
 
+void MeasurementSession::setTimelinePlayback (std::vector<TimelineEvent> events, double playbackRate)
+{
+    timelinePlayback.setPlayback (std::move (events), playbackRate);
+    timelinePlaybackActive = true;
+
+    // R2: snapshot the current value of every parameter the timeline will
+    // touch, so the play run can restore them afterwards.
+    timelineRestore.clear();
+    if (plugin == nullptr)
+        return;
+
+    juce::StringArray seenIds;
+    for (const auto& ev : timelinePlayback.getEvents())
+    {
+        if (seenIds.contains (ev.paramId))
+            continue;
+        seenIds.add (ev.paramId);
+
+        for (auto* candidate : plugin->getParameters())
+        {
+            auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*> (candidate);
+            if (hosted != nullptr && hosted->getParameterID() == ev.paramId)
+            {
+                timelineRestore.emplace_back (ev.paramId, candidate->getValue());
+                break;
+            }
+        }
+    }
+}
+
 void MeasurementSession::captureParameterSnapshot()
 {
     if (plugin == nullptr)
@@ -67,6 +108,12 @@ void MeasurementSession::captureParameterSnapshot()
 
 bool MeasurementSession::run()
 {
+    // Timeline playback (B2): one-shot — this run consumes the flag even if
+    // it fails early, so a stale playback timeline can never leak into a
+    // later measurement run.
+    const bool timelineActive = timelinePlaybackActive;
+    timelinePlaybackActive = false;
+
     if (plugin == nullptr)
         return false;
 
@@ -199,11 +246,41 @@ bool MeasurementSession::run()
             progressCallback (p);
     });
 
+    // Timeline playback (B2): apply the timeline's events between blocks
+    // (elapsed wall-clock ms since the run started). The block callback is
+    // wrapped so the caller's own callback still fires.
+    const int64_t runStartMs = static_cast<int64_t> (juce::Time::getMillisecondCounter());
+
+    runner.setBlockCallback ([this, timelineActive, runStartMs] (float progress,
+                                                                 const juce::AudioBuffer<float>& dryBlock,
+                                                                 const juce::AudioBuffer<float>& wetBlock)
+    {
+        if (timelineActive && plugin != nullptr)
+        {
+            const auto elapsedMs = static_cast<int64_t> (
+                static_cast<uint32_t> (juce::Time::getMillisecondCounter())
+                - static_cast<uint32_t> (runStartMs));
+            timelinePlayback.applyEventsUpTo (elapsedMs, plugin);
+        }
+        if (blockCallback)
+            blockCallback (progress, dryBlock, wetBlock);
+    });
+
     // Capture the parameter snapshot before running
     captureParameterSnapshot();
 
     // Run
-    if (! runner.run())
+    const bool runOk = runner.run();
+
+    // R2: restore the parameters the playback timeline touched — also on a
+    // failed/cancelled run, so the host never keeps the playback values.
+    if (timelineActive && plugin != nullptr)
+    {
+        for (const auto& [paramId, value] : timelineRestore)
+            restoreParamValue (plugin, paramId, value);
+    }
+
+    if (! runOk)
         return false;
 
     // Capture source metadata from the generator for the export (file only).

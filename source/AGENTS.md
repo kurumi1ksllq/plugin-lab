@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-8 个子模块 + Main.cpp 共 58 文件（29 .cpp + 29 .h）。模块边界由根 CMakeLists.txt 单一 target_sources 清单强制，目录不自包含。全局风格/构建命令/通用反模式见根 `AGENTS.md`，此处只写 source 层独有的结构、接线与边界。
+8 个子模块 + Main.cpp 共 62 文件（31 .cpp + 31 .h）。模块边界由根 CMakeLists.txt 单一 target_sources 清单强制，目录不自包含。全局风格/构建命令/通用反模式见根 `AGENTS.md`，此处只写 source 层独有的结构、接线与边界。
 
 ## STRUCTURE
 

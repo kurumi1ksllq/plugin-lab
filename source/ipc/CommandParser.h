@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include "../host/PluginManager.h"
 #include "../capture/MeasurementSession.h"
+#include "../capture/ParameterTimeline.h"
 #include "../analysis/FreqResponse.h"
 #include "../analysis/HarmonicAnalysis.h"
 #include "../analysis/CompressionCurve.h"
@@ -93,6 +94,11 @@ private:
     PluginManager* pluginManager = nullptr;
     MeasurementSession* session = nullptr;
     juce::AudioPluginInstance* plugin = nullptr;
+
+    // Parameter-automation recorder (B2, recordTimeline/stopTimeline).
+    // Owned here — recording is non-blocking event capture, independent of
+    // the session's playback timeline.
+    ParameterTimeline timeline;
 
     std::function<void(const juce::PluginDescription&)> loadPluginCallback;
     std::function<void(const juce::String&)> statusCallback;

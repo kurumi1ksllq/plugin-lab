@@ -1187,6 +1187,174 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         return Protocol::makeResponse (true, R"("wav_path":")" + escapeJsonString (wavFile.getFullPathName()) + "\"");
     }
 
+    // --- recordTimeline ---
+    // Non-blocking, events-only parameter automation recording (B2): attach
+    // as an AudioProcessorListener and queue every setValueNotifyingHost
+    // change (from any thread, C8) with a wall-clock timestamp. No audio is
+    // captured — the recorded events are replayed later by playTimeline.
+    if (cmd == Protocol::Command::recordTimeline)
+    {
+        if (plugin == nullptr)
+            return Protocol::makeResponse (false, R"("error":"no plugin loaded")");
+
+        if (timeline.isRecording())
+            return Protocol::makeResponse (false, R"("error":"already recording")");
+
+        timeline.startRecording (plugin);
+        return Protocol::makeResponse (true, R"("recording":true)");
+    }
+
+    // --- stopTimeline ---
+    // Detaches the recorder, writes the recorded events to a timeline JSON
+    // file and reports the event count. Shape documented in
+    // docs/data-schema.md §10.
+    if (cmd == Protocol::Command::stopTimeline)
+    {
+        if (! timeline.isRecording())
+            return Protocol::makeResponse (false, R"("error":"not recording")");
+
+        auto path = obj->getProperty ("path").toString();
+        if (path.isEmpty())
+            return Protocol::makeResponse (false, R"("error":"path required")");
+
+        auto events = timeline.stopRecording();
+
+        // Hand-written JSON (project convention: raw string literals +
+        // escapeJsonString).
+        juce::String timelineJson = R"({"type":"parameter_timeline","events":[)";
+        for (size_t i = 0; i < events.size(); ++i)
+        {
+            timelineJson += R"({"time_ms":)" + juce::String (events[i].timeMs)
+                          + R"(,"param_id":")" + escapeJsonString (events[i].paramId)
+                          + R"(","value":)" + juce::String (events[i].valueNormalized, 4) + "}";
+            if (i + 1 < events.size())
+                timelineJson += ",";
+        }
+        timelineJson += "]}";
+
+        if (! Export::writeToFile (timelineJson, juce::File (path)))
+            return Protocol::makeResponse (false, R"("error":"timeline export failed")");
+
+        return Protocol::makeResponse (true,
+            R"("timeline_path":")" + escapeJsonString (path) + "\""
+            + R"(,"events":)" + juce::String (static_cast<int64_t> (events.size())));
+    }
+
+    // --- playTimeline ---
+    // Reads a timeline JSON, plays it through the plugin inside a
+    // measurement run (per-block automation application) and exports the
+    // dry/wet result as a WAV plus a play-result JSON. Blocks exactly like
+    // measure (WaitableEvent + callAsync to the message thread).
+    if (cmd == Protocol::Command::playTimeline)
+    {
+        if (session == nullptr || plugin == nullptr)
+            return Protocol::makeResponse (false, R"("error":"no session or plugin")");
+
+        // Recording and playback are mutually exclusive: playback applies
+        // setValueNotifyingHost per block and the R2 restore would pollute
+        // an in-flight recording (both would be captured as events).
+        if (timeline.isRecording())
+            return Protocol::makeResponse (false, R"("error":"stop recording first")");
+
+        auto path = obj->getProperty ("path").toString();
+        if (path.isEmpty())
+            return Protocol::makeResponse (false, R"("error":"path required")");
+
+        juce::File timelineFile (path);
+        if (! timelineFile.existsAsFile())
+            return Protocol::makeResponse (false, R"("error":"file not found")");
+
+        double rate = 1.0;
+        if (obj->hasProperty ("rate"))
+        {
+            rate = static_cast<double> (obj->getProperty ("rate"));
+            if (rate <= 0.0)
+                return Protocol::makeResponse (false, R"("error":"invalid rate")");
+        }
+
+        // --- parse the timeline JSON ---
+        auto parsed = juce::JSON::parse (timelineFile.loadFileAsString());
+        auto* tlObj = parsed.getDynamicObject();
+        if (tlObj == nullptr)
+            return Protocol::makeResponse (false, R"("error":"invalid timeline json")");
+
+        auto eventsVar = tlObj->getProperty ("events");
+        if (! eventsVar.isArray())
+            return Protocol::makeResponse (false, R"("error":"invalid timeline json")");
+
+        std::vector<TimelineEvent> events;
+        events.reserve (static_cast<size_t> (eventsVar.size()));
+        for (int i = 0; i < eventsVar.size(); ++i)
+        {
+            auto* evObj = eventsVar[i].getDynamicObject();
+            if (evObj == nullptr)
+                return Protocol::makeResponse (false, R"("error":"invalid timeline json")");
+            TimelineEvent ev;
+            ev.timeMs = static_cast<int64_t> (evObj->getProperty ("time_ms"));
+            ev.paramId = evObj->getProperty ("param_id").toString();
+            ev.valueNormalized = static_cast<float> (static_cast<double> (evObj->getProperty ("value")));
+            events.push_back (ev);
+        }
+
+        // Configure the session for a raw signal-source run (frequency-
+        // response type; sample rate / block size stay as configured).
+        session->setMeasurementType (MeasurementSession::Type::frequencyResponse);
+        session->setSource (MeasurementSession::Source::signal);
+        session->setFreqExcitation (false);
+        session->setPluginInstance (plugin);
+
+        // The play-result JSON never overwrites the input timeline file:
+        // "tl.json" → "tl_play.json" (sibling name built by hand —
+        // withFileExtension would yield "tl._play.json").
+        const juce::File playJsonFile = timelineFile.getSiblingFile (
+            timelineFile.getFileNameWithoutExtension() + "_play.json");
+        const juce::File wavFile = wavPathFor (playJsonFile.getFullPathName());
+
+        // R2: the parameter snapshot happens inside setTimelinePlayback; the
+        // session's run() restores the values afterwards.
+        session->setTimelinePlayback (std::move (events), rate);
+
+        if (statusCallback)
+            juce::MessageManager::callAsync ([this] { statusCallback ("Playing timeline..."); });
+
+        auto runPlayback = [&]() -> juce::String
+        {
+            if (! session->run())
+                return Protocol::makeResponse (false, R"("error":"measurement failed")");
+
+            const bool wavOk = WavExporter::exportTracks (session->getResult().getDryBuffer(),
+                                                          session->getResult().getWetBuffer(),
+                                                          session->getResult().getSampleRate(),
+                                                          wavFile);
+            if (! wavOk)
+                return Protocol::makeResponse (false, R"("error":"wav export failed")");
+
+            juce::String playJson = juce::String (R"({"type":"parameter_timeline_play")")
+                + R"(,"timeline_path":")" + escapeJsonString (path) + "\""
+                + R"(,"rate":)" + juce::String (rate, 4)
+                + R"(,"samples":)" + juce::String (session->getResult().getNumRecordedSamples())
+                + R"(,"sample_rate":)" + juce::String (session->getResult().getSampleRate()) + "}";
+            Export::writeToFile (playJson, playJsonFile);
+
+            juce::String d = R"("samples":)" + juce::String (session->getResult().getNumRecordedSamples())
+                           + R"(,"rate":)" + juce::String (rate, 4)
+                           + R"(,"export_path":")" + escapeJsonString (playJsonFile.getFullPathName()) + "\""
+                           + R"(,"wav_path":")" + escapeJsonString (wavFile.getFullPathName()) + "\"";
+            return Protocol::makeResponse (true, d);
+        };
+
+        // Dispatch strategy mirrors the measure command: synchronous on the
+        // message thread, callAsync + WaitableEvent from any other thread.
+        if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+            return runPlayback();
+
+        juce::WaitableEvent done;
+        juce::String response;
+        juce::MessageManager::callAsync ([&] { response = runPlayback(); done.signal(); });
+        done.wait();
+        return response;
+    }
+
     // --- stop ---
     if (cmd == "stop")
     {

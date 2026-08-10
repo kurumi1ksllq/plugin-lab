@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；199 个 TEST_CASE（2026-08-10 实测 199/199 绿：基线 186 + 块 E2 4 个 [multitone] + 块 E1 5 个（2 [freqresponse][mls] + 3 [commandparser][measure][excitation]）+ 块 E 审查修复 4 个（[freqresponse][mls] 1 + [commandparser][measure][excitation] 3））。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
+Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；208 个 TEST_CASE（2026-08-10 实测 208/208 绿：基线 186 + 块 E2 4 个 [multitone] + 块 E1 5 个（2 [freqresponse][mls] + 3 [commandparser][measure][excitation]）+ 块 E 审查修复 4 个（[freqresponse][mls] 1 + [commandparser][measure][excitation] 3）+ 块 B1 3 个（[wavexporter] 1 + [commandparser][exportwav] 2）+ 块 B2 6 个（[paramtimeline] 3 + [commandparser] timeline 命令 3））。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
 
 ## RUN
 

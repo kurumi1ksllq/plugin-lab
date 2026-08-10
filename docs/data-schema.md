@@ -30,6 +30,11 @@
 > 2026-08-10 变更记录（块 B 任务 1）：新增 IPC 协议命令 `exportWav`——把**最后一次
 > 测量**的 dry/wet（+ bypass = dry 副本）导出为单个 24-bit PCM WAV 文件。二进制导出，
 > 不入 §9 JSON schema，命令与文件布局见 §9「exportWav 命令（WAV 导出）」。
+>
+> 2026-08-10 变更记录（块 B 任务 2）：新增 IPC 协议命令 `recordTimeline` /
+> `stopTimeline` / `playTimeline`——参数自动化（automation）的录制与回放。录制产物为
+> `parameter_timeline` JSON（见 §10），回放产物为 `parameter_timeline_play` JSON +
+> dry/wet WAV。属协议命令 + 新导出文档，见 §10。
 
 ## 导出类型一览
 
@@ -489,6 +494,81 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
 
 **建模用途**：dry/wet 双路参照供反推插件处理方式（绕过 = dry 副本，v1 语义）；
 与导出 JSON 的 `context` 配合即可精确复现测量条件。
+
+---
+
+## 10. 参数自动化时间线（parameter_timeline / parameter_timeline_play）
+
+块 B 任务 2：`recordTimeline` / `stopTimeline` / `playTimeline` 三命令的录制/回放契约。
+录制**只记参数事件，不录音频**（D2）；音频采集发生在 `playTimeline`。实现：
+`source/capture/ParameterTimeline.*`（录制 + 回放）、`MeasurementSession::setTimelinePlayback`
+（每 block 应用事件 + R2 参数恢复）、`CommandParser`（三命令接线）。
+
+### 10.1 命令契约
+
+| 命令 | 请求 | 成功响应 | 失败响应 |
+| ---- | ---- | -------- | -------- |
+| `recordTimeline` | `{}`（无参） | `{"ok":true,"recording":true}` | `no plugin loaded` / `already recording` |
+| `stopTimeline` | `{"path":<timeline .json 路径>}` | `{"ok":true,"timeline_path":<路径>,"events":N}` | `not recording` / `path required` / `timeline export failed` |
+| `playTimeline` | `{"path":<timeline .json 路径>,"rate":<倍速, 可选, 缺省 1.0>}` | `{"ok":true,"samples":N,"rate":R,"export_path":<play json 路径>,"wav_path":<wav 路径>}` | `no session or plugin` / `path required` / `file not found` / `invalid rate` / `invalid timeline json` / `measurement failed` / `wav export failed` |
+
+要点：
+
+- **`recordTimeline` 非阻塞**（C4 例外）：立即返回，监听器保持挂载，期间每次
+  `setValueNotifyingHost`（任何线程，C8）都被记录；`stopTimeline` 才卸载监听器并落盘。
+- **事件即变更**：只在参数值实际变化时触发（`setValueNotifyingHost` 的语义）。
+- **R9**：无稳定 id 的非托管参数（`param_id` 为空）不记录。
+- **`playTimeline` 阻塞**（与 measure 同构：WaitableEvent + callAsync 回消息线程）：
+  在测量 run 中逐 block 应用自动化（elapsed wall-clock ms 对比事件 `time_ms`，`rate`
+  预缩放为 `effectiveMs = time_ms / rate`），结束后**恢复被触及参数的播放前值（R2）**。
+- **回放产物绝不覆盖输入 timeline 文件**：`"tl.json"` → play JSON `"tl_play.json"`
+  （sibling 手工拼接，`withFileExtension` 会产出 `tl._play.json`），WAV = `wavPathFor`（
+  `.json→.wav` → `"tl_play.wav"`），布局同 §9（3 × 插件声道 `[dry, wet, bypass=dry]`）。
+
+### 10.2 parameter_timeline（`stopTimeline` 导出）
+
+```json
+{
+  "type": "parameter_timeline",
+  "events": [
+    { "time_ms": 0,   "param_id": "drive", "value": 0.7 },
+    { "time_ms": 30,  "param_id": "mix",   "value": 0.2 }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| `type` | string | 固定 `"parameter_timeline"` |
+| `events[]` | array | 按 `time_ms` 升序（同毫秒内保参数到达顺序） |
+| `events[].time_ms` | int | 相对录制起点（`recordTimeline`）的墙钟毫秒 |
+| `events[].param_id` | string | 参数稳定 id（与 `getParams` 响应的 `param_id` 一致） |
+| `events[].value` | number | 归一化值 0..1 |
+
+**建模用途**：自动化轨迹——AI 回放同一参数操作序列复现插件在动态参数下的行为。
+
+### 10.3 parameter_timeline_play（`playTimeline` 导出）
+
+```json
+{
+  "type": "parameter_timeline_play",
+  "timeline_path": "C:\\tmp\\tl.json",
+  "rate": 1.0,
+  "samples": 240000,
+  "sample_rate": 48000.0
+}
+```
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| `type` | string | 固定 `"parameter_timeline_play"` |
+| `timeline_path` | string | 本次回放的输入 timeline 文件路径 |
+| `rate` | number | 本次回放倍速 |
+| `samples` | int | 回放 run 的录音样本数 |
+| `sample_rate` | number | 录音采样率 |
+
+**回放音频**：`wav_path` 指向的 WAV（布局同 §9，dry/wet/bypass 三路）供 AI 对比
+"自动化驱动下的插件输出 vs 输入"，从而反推参数→处理的动态关系。
 
 ---
 

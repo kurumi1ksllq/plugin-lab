@@ -2744,3 +2744,283 @@ TEST_CASE ("CommandParser: measure ignores excitation for non-freq types",
     juce::File (exportPath).deleteFile();
     juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
+
+//==============================================================================
+// Block B task 2 — parameter automation timeline (recordTimeline /
+// stopTimeline / playTimeline)
+//==============================================================================
+
+namespace
+{
+/** Records every parameter-change value it sees (application evidence for
+    playTimeline: the timeline must have touched the plugin during the run). */
+struct ParamValueRecorder final : juce::AudioProcessorListener
+{
+    void audioProcessorParameterChanged (juce::AudioProcessor*,
+                                         int,
+                                         float newValue) override
+    {
+        values.push_back (newValue);
+    }
+
+    void audioProcessorChanged (juce::AudioProcessor*,
+                                const juce::AudioProcessorListener::ChangeDetails&) override {}
+
+    std::vector<float> values;
+};
+
+bool timelineValuesContain (const std::vector<float>& values, float probe)
+{
+    return std::find_if (values.begin(), values.end(),
+                         [probe] (float v) { return std::fabs (v - probe) < 1e-4f; })
+           != values.end();
+}
+}  // namespace
+
+TEST_CASE ("CommandParser: recordTimeline/setParam/stopTimeline round-trip exports timeline JSON",
+           "[commandparser][recordTimeline]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    auto* drive = plugin->addTestParameter ("drive", "Drive", 0.0f);
+    auto* mix   = plugin->addTestParameter ("mix", "Mix", 0.5f);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::File tlPath = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                  .getChildFile ("pluginlab_timeline_roundtrip.json");
+    tlPath.deleteFile();
+
+    // ---- Act ----
+    auto recResponse = parser.handleCommand (R"({"cmd":"recordTimeline"})");
+    REQUIRE (recResponse.contains ("\"ok\":true"));
+    REQUIRE (recResponse.contains ("\"recording\":true"));
+
+    // setParam by stable id fires the listener chain on this thread.
+    auto set1 = parser.handleCommand (R"({"cmd":"setParam","param_id":"drive","value":0.7})");
+    REQUIRE (set1.contains ("\"ok\":true"));
+    juce::Thread::sleep (30);   // separate the two events in wall-clock time
+    auto set2 = parser.handleCommand (R"({"cmd":"setParam","param_id":"mix","value":0.2})");
+    REQUIRE (set2.contains ("\"ok\":true"));
+
+    const juce::String stopCmd =
+        juce::String (R"({"cmd":"stopTimeline","path":)")
+        + juce::JSON::toString (tlPath.getFullPathName()) + "}";
+    auto stopResponse = parser.handleCommand (stopCmd);
+
+    // ---- Assert ----
+    REQUIRE (stopResponse.contains ("\"ok\":true"));
+    REQUIRE (stopResponse.contains ("\"events\":2"));
+    REQUIRE (stopResponse.contains ("\"timeline_path\":"));
+    REQUIRE (tlPath.existsAsFile());
+
+    // The exported timeline parses as strict JSON and carries both events in
+    // recording order (drive before mix; time_ms monotonic).
+    auto parsed = juce::JSON::parse (tlPath.loadFileAsString());
+    auto* tlObj = parsed.getDynamicObject();
+    REQUIRE (tlObj != nullptr);
+    REQUIRE (tlObj->getProperty ("type").toString() == "parameter_timeline");
+    auto events = tlObj->getProperty ("events");
+    REQUIRE (events.isArray());
+    REQUIRE (events.size() == 2);
+
+    auto* ev0 = events[0].getDynamicObject();
+    auto* ev1 = events[1].getDynamicObject();
+    REQUIRE (ev0 != nullptr);
+    REQUIRE (ev1 != nullptr);
+    REQUIRE (ev0->getProperty ("param_id").toString() == "drive");
+    REQUIRE (static_cast<double> (ev0->getProperty ("value")) == Catch::Approx (0.7));
+    REQUIRE (ev1->getProperty ("param_id").toString() == "mix");
+    REQUIRE (static_cast<double> (ev1->getProperty ("value")) == Catch::Approx (0.2));
+    REQUIRE (static_cast<int64_t> (ev1->getProperty ("time_ms"))
+             >= static_cast<int64_t> (ev0->getProperty ("time_ms")));
+
+    // Recording stopped: a second stopTimeline fails.
+    auto stopAgain = parser.handleCommand (stopCmd);
+    REQUIRE (stopAgain.contains ("\"ok\":false"));
+    REQUIRE (stopAgain.contains ("not recording"));
+
+    // The plugin values themselves were NOT changed by recording (events-only).
+    REQUIRE (drive->getValue() == Catch::Approx (0.7f));
+    REQUIRE (mix->getValue() == Catch::Approx (0.2f));
+
+    // Cleanup
+    tlPath.deleteFile();
+}
+
+TEST_CASE ("CommandParser: playTimeline applies automation, exports WAV and restores params",
+           "[commandparser][playTimeline]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestPlugin>();
+    auto* drive = plugin->addTestParameter ("drive", "Drive", 0.0f);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // Pre-play value (must be restored afterwards — R2) + a change recorder
+    // attached AFTER the pre-play set so it only sees playback changes.
+    drive->setValueNotifyingHost (0.25f);
+    ParamValueRecorder recorder;
+    plugin->addListener (&recorder);
+
+    const juce::File tlPath = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                  .getChildFile ("pluginlab_timeline_play_in.json");
+    const juce::File playJson = tlPath.getSiblingFile ("pluginlab_timeline_play_in_play.json");
+    const juce::File playWav  = playJson.withFileExtension (".wav");
+    tlPath.deleteFile();
+    playJson.deleteFile();
+    playWav.deleteFile();
+
+    // Timeline: drive jumps to 0.9 at t=0, then to 0.1 at t=1000 ms — both
+    // inside the 5 s default sweep run.
+    tlPath.replaceWithText (R"({"type":"parameter_timeline","events":[)"
+                            R"({"time_ms":0,"param_id":"drive","value":0.9},)"
+                            R"({"time_ms":1000,"param_id":"drive","value":0.1}]})");
+
+    // ---- Act ----
+    const juce::String playCmd =
+        juce::String (R"({"cmd":"playTimeline","rate":1.0,"path":)")
+        + juce::JSON::toString (tlPath.getFullPathName()) + "}";
+    auto response = parser.handleCommand (playCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"samples\":"));
+    REQUIRE (response.contains ("\"rate\":"));
+    REQUIRE (response.contains ("\"export_path\":"));
+    REQUIRE (response.contains ("\"wav_path\":"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    // Both automation events were applied during the run.
+    REQUIRE (timelineValuesContain (recorder.values, 0.9f));
+    REQUIRE (timelineValuesContain (recorder.values, 0.1f));
+
+    // R2: the pre-play value is restored after the run.
+    REQUIRE (drive->getValue() == Catch::Approx (0.25f));
+
+    // Play-result JSON exists, parses, and never overwrote the timeline file.
+    REQUIRE (playJson.existsAsFile());
+    auto playParsed = juce::JSON::parse (playJson.loadFileAsString());
+    auto* playObj = playParsed.getDynamicObject();
+    REQUIRE (playObj != nullptr);
+    REQUIRE (playObj->getProperty ("type").toString() == "parameter_timeline_play");
+    REQUIRE (playObj->getProperty ("timeline_path").toString() == tlPath.getFullPathName());
+    REQUIRE (playObj->getProperty ("rate") == Catch::Approx (1.0));
+    REQUIRE (static_cast<int64_t> (playObj->getProperty ("samples")) > 0);
+    // The input timeline file is untouched (still the original 2 events).
+    auto tlParsed = juce::JSON::parse (tlPath.loadFileAsString());
+    auto* tlObj = tlParsed.getDynamicObject();
+    REQUIRE (tlObj != nullptr);
+    REQUIRE (tlObj->getProperty ("events").size() == 2);
+
+    // WAV exists and carries the 3×2 interleaved dry/wet/bypass tracks.
+    juce::AudioFormatManager mgr;
+    mgr.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (mgr.createReaderFor (playWav));
+    REQUIRE (reader != nullptr);
+    REQUIRE (reader->numChannels == 6);
+    REQUIRE (reader->bitsPerSample == 24);
+    REQUIRE (reader->sampleRate == Catch::Approx (48000.0));
+
+    // Cleanup
+    plugin->removeListener (&recorder);
+    tlPath.deleteFile();
+    playJson.deleteFile();
+    playWav.deleteFile();
+}
+
+TEST_CASE ("CommandParser: timeline commands error paths",
+           "[commandparser][recordTimeline][playTimeline]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->addTestParameter ("drive", "Drive", 0.0f);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // stopTimeline without recording → not recording
+    auto stopNoRec = parser.handleCommand (R"({"cmd":"stopTimeline","path":"x.json"})");
+    REQUIRE (stopNoRec.contains ("\"ok\":false"));
+    REQUIRE (stopNoRec.contains ("not recording"));
+
+    // recordTimeline without a plugin → no plugin loaded
+    CommandParser bareParser;
+    auto recNoPlugin = bareParser.handleCommand (R"({"cmd":"recordTimeline"})");
+    REQUIRE (recNoPlugin.contains ("\"ok\":false"));
+    REQUIRE (recNoPlugin.contains ("no plugin loaded"));
+
+    // Double recordTimeline → already recording
+    REQUIRE (parser.handleCommand (R"({"cmd":"recordTimeline"})").contains ("\"ok\":true"));
+    auto recAgain = parser.handleCommand (R"({"cmd":"recordTimeline"})");
+    REQUIRE (recAgain.contains ("\"ok\":false"));
+    REQUIRE (recAgain.contains ("already recording"));
+    // Un-wind so the parser is left in a clean state.
+    const juce::File unwindTl = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                    .getChildFile ("pluginlab_timeline_cleanup.json");
+    REQUIRE (parser.handleCommand (juce::String (R"({"cmd":"stopTimeline","path":)")
+                                  + juce::JSON::toString (unwindTl.getFullPathName()) + "}")
+                 .contains ("\"ok\":true"));
+    unwindTl.deleteFile();
+
+    // playTimeline with a nonexistent file → file not found
+    auto noFile = parser.handleCommand (R"({"cmd":"playTimeline","path":"Z:\\nonexistent_tl.json"})");
+    REQUIRE (noFile.contains ("\"ok\":false"));
+    REQUIRE (noFile.contains ("file not found"));
+
+    // playTimeline with a non-JSON file → invalid timeline json
+    const juce::File badTl = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                 .getChildFile ("pluginlab_timeline_bad.json");
+    badTl.replaceWithText ("this is not json");
+    const juce::String badCmd =
+        juce::String (R"({"cmd":"playTimeline","path":)")
+        + juce::JSON::toString (badTl.getFullPathName()) + "}";
+    auto badJson = parser.handleCommand (badCmd);
+    REQUIRE (badJson.contains ("\"ok\":false"));
+    REQUIRE (badJson.contains ("invalid timeline json"));
+    badTl.deleteFile();
+
+    // playTimeline with rate <= 0 → invalid rate (valid file required so the
+    // rate check is what fails)
+    const juce::File okTl = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                .getChildFile ("pluginlab_timeline_ok.json");
+    okTl.replaceWithText (R"({"type":"parameter_timeline","events":[]})");
+    const juce::String badRateCmd =
+        juce::String (R"({"cmd":"playTimeline","rate":0,"path":)")
+        + juce::JSON::toString (okTl.getFullPathName()) + "}";
+    auto badRate = parser.handleCommand (badRateCmd);
+    REQUIRE (badRate.contains ("\"ok\":false"));
+    REQUIRE (badRate.contains ("invalid rate"));
+    okTl.deleteFile();
+    juce::File::getSpecialLocation (juce::File::tempDirectory)
+        .getChildFile ("pluginlab_timeline_ok_play.json").deleteFile();
+    juce::File::getSpecialLocation (juce::File::tempDirectory)
+        .getChildFile ("pluginlab_timeline_ok_play.wav").deleteFile();
+}

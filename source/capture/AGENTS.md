@@ -1,6 +1,6 @@
 # Capture — 采集/测量管线
 
-**位置:** `source/capture/`（6 文件）· **模块角色:** 测量编排层
+**位置:** `source/capture/`（7 文件）· **模块角色:** 测量编排层
 
 ## OVERVIEW
 
@@ -39,7 +39,29 @@ create → configure → run → read result → destroy。`run()` 阻塞至完�
 - `setFreqExcitation(useMLS)`（块 E 任务 1）：频响激励选择——true = MLS（Impulse，16383 样本 ≈ 0.34s，快一个量级；run() 的 frequencyResponse 分支选生成器）；false = SineSweep 5s（默认，向后兼容）；`getFreqMLSLength()` 供分析层取序列长
 - `setDynamicCarrierFreq/Amplitude/Speed/ADSR/CarrierStartHz`；dynamic 默认参数精确复刻原 signal，未调用前不影响现有命令
 - `captureParameterSnapshot`：记录测量时参数值供导出
-- `setProgressCallback`（0.0-1.0）；`setBlockCallback`（T4.4 live GR 头）：每 block 回调总进度 + dry/wet block，透传 SweepRunner
+- `setProgressCallback`（0.0-1.0）；`setBlockCallback`（T4.4 live GR 头）：每 block 回调总进度 + dry/wet block，会话存副本，`run()` 包一层转发到 SweepRunner（回放时间线应用也在这层，见下）
+- `setTimelinePlayback(events, rate)`（块 B 任务 2）：下一次 `run()` 播放参数自动化时间线——每 block 以 run 起始墙钟为基准调用 `ParameterTimeline::applyEventsUpTo(elapsedMs, plugin)`（rate 预缩放，`effectiveMs = time_ms / rate`）；**一次性**：`run()` 入口消费标志，失败/取消的 run 也消费，陈旧时间线不会泄漏进后续测量；R2：`setTimelinePlayback` 时快照被触及参数的当前值，run 结束后（含失败/取消）恢复
+
+## TIMELINE PLAYBACK（ParameterTimeline，块 B 任务 2）
+
+`source/capture/ParameterTimeline.*`：参数自动化录制 + 回放。
+
+- **录制**：`startRecording(plugin)` 挂 `AudioProcessorListener`；每次
+  `setValueNotifyingHost`（**任意线程**，C8——IPC setParam 在 IPC 线程触发）按
+  墙钟 ms 打戳并入队（mutex）；`stopRecording()` 卸载监听器 + 按 timeMs 稳定排序返回。
+  R9：无稳定 id（空 `param_id`）的非托管参数跳过。回调内**禁止调用插件 API**。
+- **回放**：`setPlayback(events, rate)` 预缩放时间戳 + 稳定排序；`applyEventsUpTo(nowMs,
+  plugin)` 从游标起应用 `timeMs <= nowMs` 的事件（stable-id 查找，镜像 CommandParser
+  `findParamByStableId` 的 6 行查找——刻意复制避免 capture↔ipc 耦合），缺失参数跳过不计数。
+- **接线**：CommandParser 持录制用 `ParameterTimeline`（recordTimeline/stopTimeline，
+  非阻塞事件录制，D2 不录音频）；MeasurementSession 持回放用 `ParameterTimeline`
+  （playTimeline 经 `setTimelinePlayback` 喂入，逐 block 应用）。
+- **JUCE 9 事件链**：`AudioProcessorParameter::setValueNotifyingHost` →
+  `sendValueChangedMessageToListeners` → per-parameter finalListener
+  （`ParameterChangeForwarder`，addParameter 时 `setOwner` 注册）→
+  `AudioProcessor::audioProcessorParameterChanged` → 已注册 `AudioProcessorListener`。
+  两纯虚必须 override：`audioProcessorParameterChanged` + `audioProcessorChanged`（C1）；
+  gesture begin/end 有默认实现，勿覆写。
 
 ## THREADING RULES
 

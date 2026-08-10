@@ -30,6 +30,9 @@ namespace Protocol
         constexpr auto exportWav    = "exportWav";
         constexpr auto getScanStatus = "getScanStatus";   // 计划步骤 5：插件扫描状态快照
         constexpr auto dataset      = "dataset";          // 批量采集：默认 4 类型 + 可选 scan/compression_family
+        constexpr auto recordTimeline = "recordTimeline"; // 参数自动化录制（B2，非阻塞事件录制）
+        constexpr auto stopTimeline   = "stopTimeline";   // 停止录制并导出 timeline JSON
+        constexpr auto playTimeline   = "playTimeline";   // 播放 timeline（自动化 + 音频采集）
     }
 
     //==============================================================================

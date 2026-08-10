@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include "SweepRunner.h"
 #include "AudioBuffer.h"
+#include "ParameterTimeline.h"
 #include "../host/PluginManager.h"
 #include "../signal/NoiseGenerator.h"
 
@@ -140,13 +141,22 @@ public:
 
     /** Register a per-block callback (T4.4 live GR header): invoked after
      *  every processed block with the total progress and the dry/wet block
-     *  contents just appended to the result. Passthrough to SweepRunner. */
+     *  contents just appended to the result. Forwarded to SweepRunner by
+     *  run() (which may wrap it with timeline-playback handling). */
     void setBlockCallback (std::function<void(float progress,
                                                const juce::AudioBuffer<float>& dryBlock,
                                                const juce::AudioBuffer<float>& wetBlock)> cb)
     {
-        runner.setBlockCallback (std::move (cb));
+        blockCallback = std::move (cb);
     }
+
+    /** Set a parameter-automation timeline to play during the next run()
+     *  (B2 playTimeline): its events are applied to the plugin between
+     *  blocks (elapsed wall-clock ms since the run started), and the
+     *  affected parameters are restored to the values they hold at the
+     *  time of this call after the run finishes (R2). One-shot — run()
+     *  consumes the timeline and resets it. */
+    void setTimelinePlayback (std::vector<TimelineEvent> events, double playbackRate);
 
     //==============================================================================
     /** Source metadata captured by run() from the generator (used for export).
@@ -186,6 +196,13 @@ private:
     SweepRunner runner;
     float lastProgress = 0.0f;
     std::function<void(float)> progressCallback;
+    std::function<void(float, const juce::AudioBuffer<float>&, const juce::AudioBuffer<float>&)> blockCallback;
+
+    // Timeline playback state (B2). timelineRestore holds the pre-play
+    // values of the parameters the playback timeline touches (R2).
+    ParameterTimeline timelinePlayback;
+    bool timelinePlaybackActive = false;
+    std::vector<std::pair<juce::String, float>> timelineRestore;
 
     juce::String paramSnapshot;
 

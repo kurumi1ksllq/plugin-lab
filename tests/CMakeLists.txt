@@ -19,6 +19,7 @@ target_sources(unit_tests PRIVATE
     ../source/signal/EnvelopeSignal.cpp
     ../source/capture/AudioBuffer.cpp ../source/capture/SweepRunner.cpp
     ../source/capture/MeasurementSession.cpp
+    ../source/capture/ParameterTimeline.cpp
     ../source/scan/ScanEngine.cpp
     ../source/analysis/FreqResponse.cpp ../source/analysis/HarmonicAnalysis.cpp
     ../source/analysis/CompressionCurve.cpp ../source/analysis/Export.cpp
@@ -40,7 +41,8 @@ target_sources(unit_tests PRIVATE
     CompressionFamilyTests.cpp
     ComponentVisibilityTests.cpp
     EditorCrashGuardTests.cpp
-    WavExporterTests.cpp)
+    WavExporterTests.cpp
+    ParameterTimelineTests.cpp)
 target_link_libraries(unit_tests PRIVATE
     juce::juce_audio_basics juce::juce_audio_processors juce::juce_audio_utils juce::juce_dsp
     juce::juce_audio_formats

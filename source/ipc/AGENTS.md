@@ -20,6 +20,9 @@
 | stop                | `{}` → `{ok}`                                                                                                                                                                                     |
 | exportData          | `{path}` → `{ok}`                                                                                                                                                                                 |
 | exportWav           | `{path}` → `{ok, wav_path}` ——从最近一次测量的 CaptureBuffer 导出 3×声道 24-bit 多轨 WAV（dry/wet/bypass=dry 副本；路径 .json→.wav 复用 wavPathFor；B1） |
+| recordTimeline      | `{}` → `{ok, recording:true}` ——参数自动化录制开始（**非阻塞**，C4 例外：立即返回，监听器保持挂载；D2 不录音频）；失败：`no plugin loaded` / `already recording`（B2） |
+| stopTimeline        | `{path}` → `{ok, timeline_path, events:N}` ——停止录制并导出 `parameter_timeline` JSON（`{"type":"parameter_timeline","events":[{time_ms,param_id,value}]}`，§10）；失败：`not recording` / `path required` / `timeline export failed`（B2） |
+| playTimeline        | `{path, rate?}` → `{ok, samples, rate, export_path, wav_path}` ——读取 timeline JSON 并在测量 run 中逐 block 播放自动化（阻塞，dispatch 同 measure）；导出 `parameter_timeline_play` JSON（`tl_play.json`，**绝不覆盖输入文件**）+ dry/wet WAV（§10）；R2：播放后恢复被触及参数的播放前值；失败：`no session or plugin` / `path required` / `file not found` / `invalid rate` / `invalid timeline json` / `measurement failed` / `wav export failed`（B2） |
 | getScanStatus       | `{}` → `{ok, running, done, progress, count, blacklisted, hangCount, currentFile}`——插件扫描状态快照（计划步骤 5；快照+推送双轨的快照侧，中途连接者以此拿当前状态；命名避开参数扫描 `scan` 语义） |
 
 - 进度流式推送：measure 期间持续发 `{"ok":true,"progress":0.10}` 行，完成后发最终结果
@@ -28,6 +31,7 @@
 - dataset 可选块：`scan`（`param_id`+`values` 必填；`type` 省略默认 frequency_response，拒绝 gr_timeline）与 `compression_family`（`levels_db`/`speeds` 可省略，内部默认 `[-12,0]` × `[0.5,1,2]`）；校验失败仅跳过该块，其余照常执行
 - JSON 手写 raw string literal + `escapeJsonString`；`Protocol.h` 持消息类型常量与响应辅助函数
 - exportWav（块 B 任务 1）：离线全量导出上次测量 dry/wet——**3×插件声道**布局 `[dry, wet, bypass=dry 副本]`（立体声 → 6 声道 24-bit），与下节崩溃镜像（**2×声道**增量）是两种不同产物；实现 `WavExporter`，契约见 `docs/data-schema.md` §9
+- 参数时间线（块 B 任务 2）：`CommandParser` 持 `ParameterTimeline timeline;` 做录制（recordTimeline/stopTimeline，非阻塞事件录制）；`playTimeline` 走 `session->setTimelinePlayback`（会话持回放时间线，逐 block 应用 + R2 恢复）；播放结果 JSON 路径 = 输入 timeline 的 sibling `*_play.json`（手工拼接，`withFileExtension("_play.json")` 会产出 `tl._play.json` 故不可用），WAV 复用 `wavPathFor`；契约见 `docs/data-schema.md` §10
 
 ## RAW-CAPTURE WAV MIRROR（已接 IPC）
 
