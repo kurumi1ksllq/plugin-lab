@@ -26,6 +26,10 @@
 > 字段（`"sweep"` 缺省 / `"mls"`）——记录频响测量所用激励（MLS 频域除法解卷积 vs
 > 扫频 H1 估计），仅非缺省值（mls）时输出，缺省 sweep 导出保持字节不变；
 > `tests/CommandParserTests.cpp [commandparser][measure][excitation]` 锁定。
+>
+> 2026-08-10 变更记录（块 B 任务 1）：新增 IPC 协议命令 `exportWav`——把**最后一次
+> 测量**的 dry/wet（+ bypass = dry 副本）导出为单个 24-bit PCM WAV 文件。二进制导出，
+> 不入 §9 JSON schema，命令与文件布局见 §9「exportWav 命令（WAV 导出）」。
 
 ## 导出类型一览
 
@@ -454,6 +458,37 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
    - **time**：`gr_timeline.gr.timeline` + `tau`（动态包络）
 3. **数据一致性保证**：dataset 的每个 body 与独立导出（scanToJSON / compressionFamilyToJSON / grTimelineToJSON）**逐数据等价**（测试 `[export][dataset-body-equiv]` 锁定）——AI 可放心把 dataset 当作独立导出的并集使用。
 4. **拟合建议**：`note` 携带测量工具自动检测的线索（如峰值位置），引导建模优先级。
+
+---
+
+## 9. exportWav 命令（WAV 导出）
+
+**二进制导出**（非 JSON），属于 IPC 协议命令而非导出文档——此处记录命令契约与文件布局。
+实现：`source/analysis/WavExporter.*`；来源：最后一次测量留在会话结果（`MeasurementResults`
+底层 `CaptureBuffer`）中的 dry/wet 录音。
+
+### 命令契约
+
+| 请求 | 成功响应 | 失败响应 |
+| ---- | -------- | -------- |
+| `{"cmd":"exportWav","path":<导出 .json 路径>}` | `{"ok":true,"wav_path":<实际 .wav 路径>}` | `{"ok":false,"error":...}` |
+
+- `path`：导出目标路径（习惯给 `.json`，内部按 `.json→.wav` 换扩展名；无 `.json` 后缀则追加 `.wav`）——与 measure/scan 崩溃保护镜像的 `wavPathFor` 同一规则
+- 失败错误：`no session`（未接线会话）/ `no measurement result`（会话结果无录音样本）/ `path required` / `wav export failed`（文件创建或写入失败）
+- 不触发新测量——纯离线导出内存中的上次测量结果
+
+### WAV 文件布局
+
+- **格式**：单文件 24-bit PCM（44 字节 RIFF 头，byteRate/blockAlign 标准，与
+  CaptureBuffer 增量镜像一致的手写 writer）
+- **声道**：`3 × 插件声道`，交织布局 `[dry ch0..N-1, wet ch0..N-1, dry ch0..N-1]`
+  （立体声插件 → 6 声道）；**bypass = dry 副本（v1）**
+- **采样**：sample → int32 = `jlimit(-1.0, 1.0, sample) * 8388607`，小端 3 字节
+  （low/mid/high）——与 CaptureBuffer 量化逐位一致
+- **长度**：`dry.getNumSamples()`（= 上次测量的录音样本数）
+
+**建模用途**：dry/wet 双路参照供反推插件处理方式（绕过 = dry 副本，v1 语义）；
+与导出 JSON 的 `context` 配合即可精确复现测量条件。
 
 ---
 

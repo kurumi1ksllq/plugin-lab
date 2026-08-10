@@ -6,6 +6,7 @@
 #include "../analysis/GainReduction.h"
 #include "../analysis/TimeConstants.h"
 #include "../analysis/CompressionFamily.h"
+#include "../analysis/WavExporter.h"
 
 #include <cfloat>
 
@@ -1153,6 +1154,37 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         juce::MessageManager::callAsync ([&] { response = runDataset(); done.signal(); });
         done.wait();
         return response;
+    }
+
+    // --- exportWav ---
+    // Exports the last measurement's captured dry/wet (plus bypass = dry
+    // copy) as a single 24-bit PCM WAV — see WavExporter. Pure offline
+    // export of the in-memory session result; no measurement runs here.
+    if (cmd == Protocol::Command::exportWav)
+    {
+        if (session == nullptr)
+            return Protocol::makeResponse (false, R"("error":"no session")");
+
+        auto& result = session->getResult();
+        if (result.getNumRecordedSamples() <= 0)
+            return Protocol::makeResponse (false, R"("error":"no measurement result")");
+
+        auto path = obj->getProperty ("path").toString();
+        if (path.isEmpty())
+            return Protocol::makeResponse (false, R"("error":"path required")");
+
+        // Derive the .wav path the same way the measure/scan crash-protection
+        // mirror does: ".json" → ".wav" swap, else append ".wav".
+        auto wavFile = wavPathFor (path);
+
+        const bool success = WavExporter::exportTracks (result.getDryBuffer(),
+                                                        result.getWetBuffer(),
+                                                        result.getSampleRate(),
+                                                        wavFile);
+        if (! success)
+            return Protocol::makeResponse (false, R"("error":"wav export failed")");
+
+        return Protocol::makeResponse (true, R"("wav_path":")" + escapeJsonString (wavFile.getFullPathName()) + "\"");
     }
 
     // --- stop ---

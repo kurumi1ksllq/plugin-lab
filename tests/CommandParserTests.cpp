@@ -1119,6 +1119,137 @@ TEST_CASE ("CommandParser: measure with noise source flushes dry/wet capture to 
     tempDir.deleteRecursively();
 }
 
+TEST_CASE ("CommandParser: exportWav writes dry/wet/bypass tracks from the last measurement",
+           "[commandparser][exportwav]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (2.0);
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // 1. Run a real measure first so the session result holds a dry/wet pair.
+    const juce::File measureJson = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                       .getChildFile ("pluginlab_exportwav_measure.json");
+    const juce::File measureWav = measureJson.withFileExtension (".wav");
+    measureJson.deleteFile();
+    measureWav.deleteFile();
+
+    const juce::String measureCmd =
+        juce::String (R"({"cmd":"measure","type":"frequency_response","path":)")
+        + juce::JSON::toString (measureJson.getFullPathName()) + "}";
+    auto measureResponse = parser.handleCommand (measureCmd);
+    flushMessageManager (200);
+    REQUIRE (measureResponse.contains ("\"ok\":true"));
+
+    // 2. exportWav with a fresh .json path in the temp dir (the .wav is
+    //    derived by swapping the extension).
+    const juce::File exportJson = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                      .getChildFile ("pluginlab_exportwav_out.json");
+    const juce::File exportWav = exportJson.withFileExtension (".wav");
+    exportJson.deleteFile();
+    exportWav.deleteFile();
+
+    const juce::String exportCmd =
+        juce::String (R"({"cmd":"exportWav","path":)")
+        + juce::JSON::toString (exportJson.getFullPathName()) + "}";
+    auto response = parser.handleCommand (exportCmd);
+
+    // 3. Assert success + wav_path, then read the wav back: 2 plugin channels
+    //    -> 6 interleaved channels [dry 2, wet 2, bypass 2].
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"wav_path\":"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    REQUIRE (exportWav.existsAsFile());
+    juce::AudioFormatManager mgr;
+    mgr.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (mgr.createReaderFor (exportWav));
+    REQUIRE (reader != nullptr);
+    REQUIRE (reader->numChannels == 6);
+    REQUIRE (reader->sampleRate == Catch::Approx (44100.0));
+    REQUIRE (reader->lengthInSamples == session.getResult().getNumRecordedSamples());
+    REQUIRE (reader->bitsPerSample == 24);
+
+    // Content layout: gain 2.0 → wet ≈ 2 × dry, bypass = dry copy. Pick a
+    // probe index whose dry sample sits in [0.2, 0.45] so 2 × dry stays well
+    // below the 1.0 clamp; 24-bit quantization margins then apply.
+    const auto& dryBuf = session.getResult().getDryBuffer();
+    int probe = 0;
+    for (int i = 0; i < dryBuf.getNumSamples(); ++i)
+    {
+        const float v = std::fabs (dryBuf.getSample (0, i));
+        if (v >= 0.2f && v <= 0.45f)
+        {
+            probe = i;
+            break;
+        }
+    }
+    const float dryProbe = dryBuf.getSample (0, probe);
+    REQUIRE (std::fabs (dryProbe) >= 0.2f);
+    REQUIRE (std::fabs (dryProbe) <= 0.45f);
+
+    juce::AudioBuffer<float> readBack (6, static_cast<int> (reader->lengthInSamples));
+    reader->read (&readBack, 0, static_cast<int> (reader->lengthInSamples), 0, true, true);
+    REQUIRE (readBack.getSample (0, probe) == Catch::Approx (dryProbe).margin (2e-4));
+    REQUIRE (readBack.getSample (2, probe) == Catch::Approx (2.0f * dryProbe).margin (2e-4));
+    REQUIRE (readBack.getSample (4, probe) == Catch::Approx (dryProbe).margin (2e-4));
+
+    // Clean up
+    measureJson.deleteFile();
+    measureWav.deleteFile();
+    exportJson.deleteFile();
+    exportWav.deleteFile();
+}
+
+TEST_CASE ("CommandParser: exportWav fails without a prior measurement",
+           "[commandparser][exportwav]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::File exportJson = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                      .getChildFile ("pluginlab_exportwav_noresult.json");
+    const juce::File exportWav = exportJson.withFileExtension (".wav");
+    exportJson.deleteFile();
+    exportWav.deleteFile();
+
+    // No measure ran -> the session result holds no recorded samples.
+    const juce::String exportCmd =
+        juce::String (R"({"cmd":"exportWav","path":)")
+        + juce::JSON::toString (exportJson.getFullPathName()) + "}";
+    auto response = parser.handleCommand (exportCmd);
+
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("no measurement result"));
+
+    // Clean up
+    exportJson.deleteFile();
+    exportWav.deleteFile();
+}
+
 TEST_CASE ("CommandParser: dynamic source wraps carrier in envelope and exports raw_capture JSON",
            "[commandparser][source-dynamic]")
 {

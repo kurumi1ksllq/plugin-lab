@@ -1,6 +1,6 @@
 # analysis（分析器 + JSON 导出层）
 
-**生成:** 2026-08-03 · **规模:** 14 文件（6 分析器 × .h/.cpp + Export.h/.cpp，Export 23 符号为最大）
+**生成:** 2026-08-03 · **规模:** 16 文件（6 分析器 × .h/.cpp + Export.h/.cpp + WavExporter.h/.cpp，Export 23 符号为最大）
 
 ## OVERVIEW
 
@@ -29,6 +29,17 @@
 - 手写 JSON：raw string literal + escapeJsonString；juce::JSON::toString 已弃用（引号转义 bug，pluginName.quoted() 不转内部引号，Oracle P0-4）。
 - datasetToJSON 聚合 scan 族 / gr_timeline / compression_family 为单个 Dataset 包；appendDatasetScanFamily 辅助函数。
 - 既有导出函数不变，body-equiv 测试锁等价性。
+
+## WAV EXPORT（WavExporter，块 B 任务 1）
+
+- **角色**：把**内存中的 dry/wet 录音**（来自 MeasurementResults 底层 CaptureBuffer）导出为单个 24-bit PCM WAV，供 AI 拿 dry/wet 双路参照反推插件处理方式。纯离线导出，不触发测量、无状态。
+- **接口**：`WavExporter::exportTracks(dry, wet, sampleRate, wavPath)`——namespace 风格深模块，单函数入口。
+- **布局**：3 × dry 声道交织 `[dry ch0..N-1, wet ch0..N-1, dry ch0..N-1]`（立体声 → 6 声道）；**bypass = dry 副本（v1）**；`wet.getNumChannels() < dry` → false。
+- **格式**：44 字节手写 RIFF 头 + 24-bit PCM（`jlimit(-1,1,sample) * 8388607`，小端 3 字节）——量化与 CaptureBuffer 增量镜像逐位一致（镜像 AudioBuffer.cpp writeWavHeader/flush 风格）；先算尺寸后写真实头（全内存，无占位回填）。
+- **错误**：文件创建/写入失败 → CRASH_LOG_WARN（含路径）+ return false；无 C++ 异常。
+- **接线**：IPC `exportWav` 命令（CommandParser.cpp）→ 会话结果 → 本模块；路径 `.json→.wav` 复用 `wavPathFor` 规则。
+- **协议契约**：docs/data-schema.md §9（二进制导出，不入 JSON schema）。
+- **测试**：tests/WavExporterTests.cpp（round-trip 逐采样比对）+ tests/CommandParserTests.cpp [exportwav]（命令级）。
 
 ## SCHEMA CONTRACT
 

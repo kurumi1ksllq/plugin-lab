@@ -27,6 +27,7 @@ namespace Protocol
         constexpr auto scan         = "scan";
         constexpr auto stop         = "stop";
         constexpr auto exportCmd    = "exportData";
+        constexpr auto exportWav    = "exportWav";
         constexpr auto getScanStatus = "getScanStatus";   // 计划步骤 5：插件扫描状态快照
         constexpr auto dataset      = "dataset";          // 批量采集：默认 4 类型 + 可选 scan/compression_family
     }
