@@ -237,6 +237,25 @@ public:
         scanProgressLabel->setFont (juce::FontOptions (12.0f));
         addAndMakeVisible (scanProgressLabel.get());
 
+        // Timeline record/playback panel (B3): Record/Stop/Play drive the same
+        // recordTimeline/stopTimeline/playTimeline commands as the IPC pipe.
+        // The progress bar shows an indeterminate spinner while recording and
+        // an elapsed-time estimate during playback.
+        recordButton.reset (new juce::TextButton ("Record"));
+        recordButton->onClick = [this] { startTimelineRecording(); };
+        addAndMakeVisible (recordButton.get());
+
+        stopButton.reset (new juce::TextButton ("Stop TL"));
+        stopButton->onClick = [this] { stopTimelineRecording(); };
+        addAndMakeVisible (stopButton.get());
+
+        playButton.reset (new juce::TextButton ("Play"));
+        playButton->onClick = [this] { playTimeline(); };
+        addAndMakeVisible (playButton.get());
+
+        timelineProgress.reset (new juce::ProgressBar (timelineProgressValue));
+        addAndMakeVisible (timelineProgress.get());
+
         pluginManager = std::make_shared<PluginManager>();
         scanAlive = std::make_shared<std::atomic<bool>> (true);
         loadAlive = std::make_shared<std::atomic<bool>> (true);
@@ -391,7 +410,7 @@ public:
         // source-parameter row + scan row), then the magnitude plot (~65%)
         // and phase plot (~35%) below.
         auto plotArea = area;
-        auto controls = plotArea.removeFromTop (122).reduced (0, 2);
+        auto controls = plotArea.removeFromTop (124).reduced (0, 2);
         {
             const int gap = 6;
 
@@ -432,6 +451,17 @@ public:
             stopScanButton->setBounds (row3.removeFromLeft (56).reduced (0, 2));
             row3.removeFromLeft (gap);
             scanProgressLabel->setBounds (row3);
+
+            // Row 4: timeline record/stop/play buttons + progress bar.
+            controls.removeFromTop (4);
+            auto row4 = controls.removeFromTop (26);
+            recordButton->setBounds (row4.removeFromLeft (70).reduced (0, 2));
+            row4.removeFromLeft (gap);
+            stopButton->setBounds (row4.removeFromLeft (62).reduced (0, 2));
+            row4.removeFromLeft (gap);
+            playButton->setBounds (row4.removeFromLeft (60).reduced (0, 2));
+            row4.removeFromLeft (gap);
+            timelineProgress->setBounds (row4);
         }
 
         // GR header strip (T4.4): takes the top of the plot area while the
@@ -1150,6 +1180,130 @@ private:
     }
 
     //==============================================================================
+    // Timeline record/playback (B3) — GUI mirror of the IPC timeline commands
+    // (recordTimeline/stopTimeline/playTimeline).
+
+    /** Default timeline export/playback file in the app's working directory. */
+    juce::File defaultTimelinePath() const
+    {
+        return juce::File::getCurrentWorkingDirectory().getChildFile ("pluginlab_timeline.json");
+    }
+
+    /** Keep the three timeline buttons consistent with the plugin/recording state. */
+    void setTimelineButtons()
+    {
+        recordButton->setEnabled (pluginLoaded && ! timelineRecording);
+        stopButton->setEnabled (timelineRecording);
+        playButton->setEnabled (pluginLoaded && ! timelineRecording);
+    }
+
+    /** GUI Record: start non-blocking parameter-automation recording. */
+    void startTimelineRecording()
+    {
+        if (measurementInProgress || scanInProgress)
+        {
+            statusLabel->setText ("Busy - wait for the current job", juce::dontSendNotification);
+            return;
+        }
+        if (! pluginLoaded)
+        {
+            statusLabel->setText ("Load a plugin first", juce::dontSendNotification);
+            return;
+        }
+
+        const auto response = commandParser->handleCommand (R"({"cmd":"recordTimeline"})");
+        const auto responseVar = juce::JSON::parse (response);
+        if (auto* obj = responseVar.getDynamicObject())
+        {
+            if ((bool) obj->getProperty (Protocol::Status::ok))
+            {
+                timelineRecording = true;
+                timelineProgressValue = -1.0;   // < 0 → indeterminate spinner
+                statusLabel->setText ("Recording timeline - press Stop when done", juce::dontSendNotification);
+            }
+            else
+            {
+                statusLabel->setText ("Record failed: "
+                    + obj->getProperty (Protocol::Status::error).toString(), juce::dontSendNotification);
+            }
+        }
+        setTimelineButtons();
+    }
+
+    /** GUI Stop: detach the recorder and export the timeline JSON. */
+    void stopTimelineRecording()
+    {
+        if (! timelineRecording)
+        {
+            statusLabel->setText ("Not recording", juce::dontSendNotification);
+            return;
+        }
+
+        const auto json = juce::String (R"({"cmd":"stopTimeline","path":)")
+                          + juce::JSON::toString (defaultTimelinePath().getFullPathName()) + "}";
+        const auto response = commandParser->handleCommand (json);
+        timelineRecording = false;
+        timelineProgressValue = 0.0;
+        setTimelineButtons();
+
+        const auto responseVar = juce::JSON::parse (response);
+        if (auto* obj = responseVar.getDynamicObject())
+        {
+            if ((bool) obj->getProperty (Protocol::Status::ok))
+                statusLabel->setText ("Timeline exported: " + defaultTimelinePath().getFullPathName(),
+                                      juce::dontSendNotification);
+            else
+                statusLabel->setText ("Stop failed: "
+                    + obj->getProperty (Protocol::Status::error).toString(), juce::dontSendNotification);
+        }
+    }
+
+    /** GUI Play: replay the timeline through a measurement run (blocking on
+     *  the message thread; SweepRunner yields the loop, so the progress bar's
+     *  own timer keeps repainting during the ~5 s run). */
+    void playTimeline()
+    {
+        if (measurementInProgress || scanInProgress)
+        {
+            statusLabel->setText ("Busy - wait for the current job", juce::dontSendNotification);
+            return;
+        }
+        if (! pluginLoaded)
+        {
+            statusLabel->setText ("Load a plugin first", juce::dontSendNotification);
+            return;
+        }
+
+        const auto json = juce::String (R"({"cmd":"playTimeline","path":)")
+                          + juce::JSON::toString (defaultTimelinePath().getFullPathName())
+                          + R"(,"rate":1.0})";
+        // Re-entry guard: this run blocks the message thread (~5 s) while the
+        // message loop yields, so measure/scan/record clicks stay clickable.
+        // measurementInProgress is the shared guard — set it for the run so a
+        // re-entrant click no-ops instead of launching an overlapping run.
+        measurementInProgress = true;
+        timelineProgressValue = -1.0;   // spinner while the blocking run executes
+        statusLabel->setText ("Playing timeline...", juce::dontSendNotification);
+
+        const auto response = commandParser->handleCommand (json);
+
+        measurementInProgress = false;
+        timelineProgressValue = 1.0;
+        setTimelineButtons();
+
+        const auto responseVar = juce::JSON::parse (response);
+        if (auto* obj = responseVar.getDynamicObject())
+        {
+            if ((bool) obj->getProperty (Protocol::Status::ok))
+                statusLabel->setText ("Playback done: "
+                    + obj->getProperty ("wav_path").toString(), juce::dontSendNotification);
+            else
+                statusLabel->setText ("Play failed: "
+                    + obj->getProperty (Protocol::Status::error).toString(), juce::dontSendNotification);
+        }
+    }
+
+    //==============================================================================
     // Parameter-scan helpers (T3.3).
 
     /** Fill the scan parameter combo from the loaded plugin (name shown,
@@ -1744,6 +1898,15 @@ private:
     std::unique_ptr<juce::TextButton> scanRunButton;
     std::unique_ptr<juce::TextButton> stopScanButton;
     std::unique_ptr<juce::Label> scanProgressLabel;
+
+    // Timeline record/playback panel (B3) — GUI mirror of the IPC timeline
+    // commands (recordTimeline/stopTimeline/playTimeline).
+    std::unique_ptr<juce::TextButton> recordButton;
+    std::unique_ptr<juce::TextButton> stopButton;
+    std::unique_ptr<juce::TextButton> playButton;
+    double timelineProgressValue = 0.0;   // referenced by the ProgressBar below
+    std::unique_ptr<juce::ProgressBar> timelineProgress;
+    bool timelineRecording = false;
 
     /** Stable parameter IDs parallel to scanParamCombo items (item i+1 → ids[i]). */
     std::vector<juce::String> scanParamIds;
