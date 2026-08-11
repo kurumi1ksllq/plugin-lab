@@ -348,3 +348,5 @@ DESIGN.md                 # 设计文档
 **新增文件**：`.github/workflows/build.yml`（CI）、`.github/pull_request_template.md`（PR 模板：what/why/验证清单）；`.gitignore` 追加 `opencode.json`（本地 IDE MCP 配置，机器相关）。
 
 **流程约定**：见根 AGENTS.md「WORKFLOW」节——`feat/*`/`fix/*`/`chore/*`/`docs/*` 分支 → Conventional Commits → `gh pr create` → CI 绿 → squash 合并。本地遗留分支 `feat/phase1-freq-response`、`feat/phase2-input-signal`（历史阶段已并入 main）未删除。
+
+**CI 首跑即抓出隐藏缺陷**（2026-08-11，PR #1 验证流程时）：265 个测试中唯一带非 ASCII 字符（°）的测试名 `FreqResponse identity: dry==wet gives 0dB/0°` 在 CI 上 0.02s 挂掉——ctest 把测试名作过滤串传给测试二进制，° 的 UTF-8 字节在 runner（cp437/cp1252）往返损坏 → Catch2 `No test cases matched` → 测试未执行即判失败；本地 cp936 恰好保字节故长期 265/265 绿。修复：测试名改纯 ASCII（`0dB flat/zero phase`）+ tests/AGENTS.md 立约定。另将 JUCE 由 `GIT_TAG master` 钉到 release tag `9.0.1`（master 漂移致本地缓存与 CI 拉取不同版本，构建不可复现）。

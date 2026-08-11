@@ -39,6 +39,7 @@ Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`ju
 ## CONVENTIONS
 
 - `TEST_CASE` 描述性命名 + tags（如 `[timeconstants][known-attack]`）
+- **测试名必须纯 ASCII**：非 ASCII 字符（如 °）会在 ctest→Catch2 过滤串经 cp437/cp1252 控制台（GitHub Actions runner）往返时损坏——Catch2 报 `No test cases matched`，测试静默不跑且 ctest 判失败（2026-08-11 真机：唯一带 ° 的测试在 CI 必挂、本地 cp936 恰可跑，见 STATUS.md）
 - Arrange/Act/Assert 注释分节
 - DSP 浮点断言用 `Catch::Approx(...).margin(...)`
 - 回调完成标志用 `std::atomic<bool>` 按引用捕获
