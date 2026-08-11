@@ -227,9 +227,12 @@ TEST_CASE ("FreqResponse: analyzeMLS identity gives 0dB flat response", "[freqre
 
 //==============================================================================
 // Test 1: Identity — dry == wet gives flat 0 dB / 0° response.
+// NOTE: test name must stay ASCII — ctest→Catch2 filter round-trip corrupts
+// non-ASCII chars (°) on cp437/cp1252 consoles (CI): "No test cases matched"
+// → test silently never runs there (caught 2026-08-11 on GitHub Actions).
 //==============================================================================
 
-TEST_CASE ("FreqResponse identity: dry==wet gives 0dB/0°", "[freqresponse][h1]")
+TEST_CASE ("FreqResponse identity: dry==wet gives 0dB flat/zero phase", "[freqresponse][h1]")
 {
     const double sr = 48000.0;
     const double duration = 5.0;
