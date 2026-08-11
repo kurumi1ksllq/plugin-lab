@@ -13,8 +13,31 @@ void PipeServer::setCommandHandler (CommandHandler handler)
     commandHandler = std::move (handler);
 }
 
+void PipeServer::setControlCommands (std::vector<juce::String> controlCommandNames_)
+{
+    controlCommandNames = std::move (controlCommandNames_);
+}
+
+bool PipeServer::isControlCommand (const juce::String& commandJson) const
+{
+    if (controlCommandNames.empty() || commandJson.isEmpty())
+        return false;
+
+    const auto parsed = juce::JSON::parse (commandJson);
+    const auto* obj = parsed.getDynamicObject();
+    if (obj == nullptr)
+        return false;
+
+    const auto cmd = obj->getProperty ("cmd").toString();
+    for (const auto& name : controlCommandNames)
+        if (cmd == name)
+            return true;
+    return false;
+}
+
 void PipeServer::startup()
 {
+    workerThread = std::thread ([this] { workerLoop(); });
     startThread();
 }
 
@@ -23,13 +46,13 @@ void PipeServer::shutdown()
     if (isThreadRunning())
     {
         {
-            const juce::ScopedLock sl (lock);
+            // CancelIoEx completes a pending overlapped ConnectNamedPipe
+            // (or a synchronous ReadFile) so CloseHandle returns
+            // immediately instead of blocking. Closing the handle also
+            // wakes a synchronous ReadFile.
+            std::lock_guard<std::mutex> lock (ioMutex);
             if (hPipe != nullptr)
             {
-                // CancelIoEx completes a pending overlapped ConnectNamedPipe
-                // (or a synchronous ReadFile) so CloseHandle returns
-                // immediately instead of blocking. Closing the handle also
-                // wakes a synchronous ReadFile.
                 ::CancelIoEx ((HANDLE) hPipe, nullptr);
                 ::CloseHandle ((HANDLE) hPipe);
                 hPipe = nullptr;
@@ -38,6 +61,70 @@ void PipeServer::shutdown()
         stopThread (5000);
     }
     clientConnected = false;
+
+    // Stop the worker: Main.cpp cancels the session BEFORE shutdown(), so an
+    // in-flight command returns promptly and the bounded join below succeeds.
+    {
+        std::lock_guard<std::mutex> lock (workerMutex);
+        workerExit = true;
+    }
+    workerCv.notify_all();
+    if (workerThread.joinable())
+        workerThread.join();
+}
+
+void PipeServer::emitLine (const juce::String& line)
+{
+    // Only during a worker-served command: the GUI path never pushes.
+    if (! workerBusy.load())
+        return;
+    writeLine (line, connectionGeneration, true);
+}
+
+void PipeServer::writeLine (const juce::String& response, uint64_t generation, bool requireWorkerBusy)
+{
+    if (requireWorkerBusy && ! workerBusy.load())
+        return;
+
+    std::lock_guard<std::mutex> lock (ioMutex);
+    if (hPipe == nullptr || generation != connectionGeneration)
+        return;
+
+    auto responseStr = response.toRawUTF8();
+    DWORD bytesWritten = 0;
+    ::WriteFile ((HANDLE) hPipe, responseStr,
+                 (DWORD) std::strlen (responseStr), &bytesWritten, nullptr);
+}
+
+void PipeServer::workerLoop()
+{
+    for (;;)
+    {
+        std::pair<juce::String, uint64_t> job;
+        {
+            std::unique_lock<std::mutex> lock (workerMutex);
+            workerCv.wait (lock, [&] { return workerExit || ! workerQueue.empty(); });
+            if (workerExit)
+            {
+                workerBusy.store (false);
+                return;
+            }
+            job = std::move (workerQueue.front());
+            workerQueue.pop_front();
+        }
+
+        // The handler may block for seconds (measure / playTimeline). The
+        // read loop keeps serving control commands meanwhile (issue #3).
+        const auto response = commandHandler ? commandHandler (job.first)
+                                             : juce::String ("{}");
+        writeLine (response, job.second, false);
+
+        {
+            std::lock_guard<std::mutex> lock (workerMutex);
+            if (workerQueue.empty())
+                workerBusy.store (false);
+        }
+    }
 }
 
 void PipeServer::run()
@@ -63,8 +150,9 @@ void PipeServer::run()
 
         // Assign before ConnectNamedPipe so shutdown() can CancelIoEx/CloseHandle it.
         {
-            const juce::ScopedLock sl (lock);
+            std::lock_guard<std::mutex> lock (ioMutex);
             hPipe = pipe;
+            ++connectionGeneration;
         }
 
         // Overlapped connect: unlike the synchronous ConnectNamedPipe, it can be
@@ -101,37 +189,65 @@ void PipeServer::run()
             // Connection failed or was cancelled by shutdown() — close exactly
             // once (shutdown() may have already closed the handle) and loop
             // back; the loop condition picks up threadShouldExit().
-            const juce::ScopedLock sl (lock);
+            std::lock_guard<std::mutex> lock (ioMutex);
             if (hPipe != nullptr)
                 ::CloseHandle (pipe);
             hPipe = nullptr;
+            ++connectionGeneration;
             continue;
         }
 
         clientConnected = true;
 
+        // Poll-based read loop: PeekNamedPipe (non-blocking) instead of a
+        // blocking ReadFile. A pending synchronous ReadFile on the same
+        // message-mode handle is BROKEN by a concurrent WriteFile from the
+        // worker / emitLine thread (observed: the pending read fails and the
+        // loop mistakes it for a disconnect, ERROR_PIPE_NOT_CONNECTED on the
+        // client). Polling leaves no pending read, so concurrent writes are
+        // safe — the same pattern ChildProcessCoordinator's reader uses.
         while (! threadShouldExit())
         {
-            DWORD bytesRead = 0;
-            BOOL readResult = ReadFile (pipe, buffer.data(),
-                                        bufferSize - 1, &bytesRead, nullptr);
+            DWORD available = 0, totalBytes = 0;
+            if (! ::PeekNamedPipe (pipe, nullptr, 0, nullptr, &available, &totalBytes))
+                break;   // client disconnected
 
-            if (! readResult || bytesRead == 0)
+            if (available == 0)
+            {
+                wait (10);
+                continue;
+            }
+
+            DWORD bytesRead = 0;
+            if (! ReadFile (pipe, buffer.data(), bufferSize - 1, &bytesRead, nullptr)
+                || bytesRead == 0)
                 break;
 
             buffer[bytesRead] = '\0';
             juce::String command (buffer.data(), (int) bytesRead);
             command = command.trim();
 
-            if (commandHandler && command.isNotEmpty())
-            {
-                juce::String response = commandHandler (command);
+            if (! commandHandler || command.isEmpty())
+                continue;
 
-                DWORD bytesWritten = 0;
-                auto responseStr = response.toRawUTF8();
-                WriteFile (pipe, responseStr,
-                           (DWORD) std::strlen (responseStr),
-                           &bytesWritten, nullptr);
+            if (isControlCommand (command))
+            {
+                // Control commands (stop / status snapshots) are served
+                // inline so they stay reachable while a long command runs.
+                const auto response = commandHandler (command);
+                writeLine (response, connectionGeneration, false);
+            }
+            else
+            {
+                // Everything else queues on the worker: all plugin/session
+                // access is serialized there (never concurrent), and the read
+                // loop stays free for control commands (issue #3).
+                workerBusy.store (true);
+                {
+                    std::lock_guard<std::mutex> lock (workerMutex);
+                    workerQueue.emplace_back (command, connectionGeneration);
+                }
+                workerCv.notify_one();
             }
         }
 
@@ -139,13 +255,14 @@ void PipeServer::run()
         {
             // Close exactly once: shutdown() may have already closed the
             // handle to wake the synchronous ReadFile above.
-            const juce::ScopedLock sl (lock);
+            std::lock_guard<std::mutex> lock (ioMutex);
             if (hPipe != nullptr)
             {
                 DisconnectNamedPipe (pipe);
                 ::CloseHandle (pipe);
                 hPipe = nullptr;
             }
+            ++connectionGeneration;
         }
     }
 }

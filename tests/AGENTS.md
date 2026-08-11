@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；265 个 TEST_CASE（2026-08-11 实测 265/265 绿：基线 208 + 块 D 新增 57 个——[childcoordinator] 11（S1-S7 + R1-R4）+ [childprotocol] 3 + [childrestart] 7（R1-R7）+ [childparity] 2 + [wavcapturereader] 5 + [childmeasure] 6（R1-R5 + success-resets）+ [commandparser][routing] 5 + [commandparser][loadplugin-blacklist] 5 + [pipeserver] 2（R1 reconnect + R2 shutdown）+ 其余配套 11）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
+Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；270 个 TEST_CASE（2026-08-11 实测 270/270 绿：基线 208 + 块 D 新增 57 + issue #2/#3 并发改造新增 5——[paramtimeline] 播放游标可观测 1 + [childorchestrator][cancel] 测量中取消 1 + [pipeserver][concurrency] 3（控制命令并发/快命令排队/emitLine 进度推送））。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
 
 ## RUN
 

@@ -260,7 +260,16 @@ bool MeasurementSession::run()
             const auto elapsedMs = static_cast<int64_t> (
                 static_cast<uint32_t> (juce::Time::getMillisecondCounter())
                 - static_cast<uint32_t> (runStartMs));
+            const auto cursorBefore = timelinePlayback.getPlaybackCursor();
             timelinePlayback.applyEventsUpTo (elapsedMs, plugin);
+            const auto cursorAfter = timelinePlayback.getPlaybackCursor();
+            // Issue #2: fire only when an event was actually applied (cursor
+            // advanced) — event-driven, not per-block spam. Runs on the
+            // message thread, same thread that owns the cursor.
+            if (cursorAfter != cursorBefore && playbackProgressCallback)
+                playbackProgressCallback (static_cast<int> (cursorAfter),
+                                          static_cast<int> (timelinePlayback.getPlaybackEventCount()),
+                                          elapsedMs);
         }
         if (blockCallback)
             blockCallback (progress, dryBlock, wetBlock);

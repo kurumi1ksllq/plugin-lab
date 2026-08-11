@@ -179,6 +179,52 @@ TEST_CASE ("ChildMeasureOrchestrator: non-frequency types fail without touching 
 }
 
 //==============================================================================
+// Cancel (issue #3): a user stop during the child's measure wait must return
+// {"ok":false,"error":"cancelled"} WITHOUT touching the crash-loop gate or
+// crashCount — a deliberate stop is NOT a crash event (D3 semantics).
+//==============================================================================
+
+TEST_CASE ("ChildMeasureOrchestrator: cancel during measure returns cancelled, no crash count",
+           "[childorchestrator][cancel]")
+{
+    // Arrange — progress_only: the child never answers the measure result,
+    // so run() blocks in waitForLine until the cancel is honoured.
+    REQUIRE (testChildExe().existsAsFile());
+    modeFile().replaceWithText ("progress_only");
+
+    PluginHostChildCoordinator coord (testChildExe().getFullPathName());
+    std::atomic<bool> crashed { false };
+    coord.setOnCrash ([&] (const juce::String&) { crashed.store (true); });
+    ChildMeasureOrchestrator orchestrator (&coord, "C:\\fake\\plugin.vst3", 5000);
+    const auto exportPath = tempFile ("pluginlab_orch_cancel_", ".json");
+    const auto wavPath = tempFile ("pluginlab_orch_cancel_", ".wav");
+
+    // A canceller thread fires coordinator->requestCancel() while run() is
+    // blocked waiting for the measure result line.
+    std::thread canceller ([&]
+    {
+        juce::Thread::sleep (300);
+        coord.requestCancel();
+    });
+
+    // Act
+    const auto outcome = orchestrator.run (sweepRequest (exportPath, wavPath));
+    canceller.join();
+
+    // Assert — deliberate cancel: "cancelled" vocabulary, the child is
+    // stopped deliberately (no crash report, no crashCount bump).
+    INFO ("outcome.error: " << outcome.error);
+    REQUIRE_FALSE (outcome.ok);
+    REQUIRE (outcome.error == "cancelled");
+    REQUIRE_FALSE (crashed.load());
+    REQUIRE (coord.crashCount() == 0);
+    REQUIRE_FALSE (coord.isRunning());
+
+    exportPath.deleteFile();
+    wavPath.deleteFile();
+}
+
+//==============================================================================
 // R3 — crash-loop gate (design Q4 / D3b): 连续崩溃 ≥3 次（跨 run 累积，baseline
 //      = 上次成功 run 后的 crashCount）→ 第 4 次 run 在碰子进程之前直接拒绝，
 //      {"ok":false,"error":"child process crashed (restarting)"}。Runs 1-3 让

@@ -510,7 +510,7 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
 | ---- | ---- | -------- | -------- |
 | `recordTimeline` | `{}`（无参） | `{"ok":true,"recording":true}` | `no plugin loaded` / `already recording` |
 | `stopTimeline` | `{"path":<timeline .json 路径>}` | `{"ok":true,"timeline_path":<路径>,"events":N}` | `not recording` / `path required` / `timeline export failed` |
-| `playTimeline` | `{"path":<timeline .json 路径>,"rate":<倍速, 可选, 缺省 1.0>}` | `{"ok":true,"samples":N,"rate":R,"export_path":<play json 路径>,"wav_path":<wav 路径>}` | `no session or plugin` / `path required` / `file not found` / `invalid rate` / `invalid timeline json` / `measurement failed` / `wav export failed` |
+| `playTimeline` | `{"path":<timeline .json 路径>,"rate":<倍速, 可选, 缺省 1.0>}` | 回放期推送进度行（见下），完成后 `{"ok":true,"samples":N,"rate":R,"export_path":<play json 路径>,"wav_path":<wav 路径>}` | `no session or plugin` / `path required` / `file not found` / `invalid rate` / `invalid timeline json` / `measurement failed` / `wav export failed` |
 
 要点：
 
@@ -521,6 +521,16 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
 - **`playTimeline` 阻塞**（与 measure 同构：WaitableEvent + callAsync 回消息线程）：
   在测量 run 中逐 block 应用自动化（elapsed wall-clock ms 对比事件 `time_ms`，`rate`
   预缩放为 `effectiveMs = time_ms / rate`），结束后**恢复被触及参数的播放前值（R2）**。
+- **回放进度行（issue #2）**：每应用一个事件，服务器在最终响应前推送一行
+  `{"ok":true,"progress":<fraction>,"event_index":N,"event_total":M,"time_ms":T}`
+  （`time_ms` 为 run 内 elapsed ms；进度行是中间行，最终响应带 `samples`/`export_path`/
+  `wav_path`，客户端据此区分）。GUI 面板同步显示「事件 N/M」（~50 ms 节流）。
+  依赖 PipeServer 并发模型（长命令在 worker 上跑，读循环继续服务控制命令——
+  见 `source/ipc/AGENTS.md`）。
+- **事件按墙钟 elapsed 应用**：`applyEventsUpTo` 用 run 内 wall-clock ms 对比事件
+  `time_ms`。run 处理快于实时（纯计算，无音频设备时 5 s sweep 约 1 s 墙钟完成），
+  **墙钟超过 run 时长的晚事件不会应用**——录制时间戳含客户端进程延迟时尤其明显；
+  用 `rate` 预缩放（`effectiveMs = time_ms / rate`）把事件压进 run 墙钟窗口。
 - **回放产物绝不覆盖输入 timeline 文件**：`"tl.json"` → play JSON `"tl_play.json"`
   （sibling 手工拼接，`withFileExtension` 会产出 `tl._play.json`），WAV = `wavPathFor`（
   `.json→.wav` → `"tl_play.wav"`），布局同 §9（3 × 插件声道 `[dry, wet, bypass=dry]`）。

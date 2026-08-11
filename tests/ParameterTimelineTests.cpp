@@ -60,3 +60,27 @@ TEST_CASE ("ParameterTimeline: playback rate scales timestamps", "[paramtimeline
     REQUIRE (tl.applyEventsUpTo (250, &plugin) == 1);
     REQUIRE (drive->getValue() == Catch::Approx (0.9f));
 }
+
+TEST_CASE ("ParameterTimeline: playback cursor and total are observable", "[paramtimeline][playback]")
+{
+    // Issue #2: the GUI / IPC progress shows the current event index — the
+    // timeline must expose how far playback has advanced.
+    TestPlugin plugin;
+    auto* drive = plugin.addTestParameter ("drive", "Drive", 0.0f);
+    ParameterTimeline tl;
+    tl.setPlayback ({{ 0, "drive", 0.3f }, { 500, "drive", 0.9f }, { 900, "drive", 0.5f }}, 1.0);
+
+    REQUIRE (tl.getPlaybackEventCount() == 3);
+    REQUIRE (tl.getPlaybackCursor() == 0);
+
+    REQUIRE (tl.applyEventsUpTo (100, &plugin) == 1);
+    REQUIRE (tl.getPlaybackCursor() == 1);
+    REQUIRE (drive->getValue() == Catch::Approx (0.3f));
+
+    REQUIRE (tl.applyEventsUpTo (600, &plugin) == 1);
+    REQUIRE (tl.getPlaybackCursor() == 2);
+    REQUIRE (drive->getValue() == Catch::Approx (0.9f));
+
+    REQUIRE (tl.applyEventsUpTo (1000, &plugin) == 1);
+    REQUIRE (tl.getPlaybackCursor() == 3);   // all events consumed
+}

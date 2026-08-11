@@ -42,6 +42,15 @@ public:
      *  Read-only view used by the caller to snapshot the affected params. */
     const std::vector<TimelineEvent>& getEvents() const { return playbackEvents; }
 
+    /** Playback progress (issue #2): how many events have been applied so
+     *  far. Read on the measurement (message) thread only — the same thread
+     *  that advances the cursor via applyEventsUpTo — so no atomic is needed.
+     *  The event index displayed by the GUI / pushed over IPC. */
+    size_t getPlaybackCursor() const { return playbackCursor; }
+
+    /** Total playback events after rate pre-application (progress denominator). */
+    size_t getPlaybackEventCount() const { return playbackEvents.size(); }
+
     // ---- AudioProcessorListener (both pure virtuals) ----
     void audioProcessorParameterChanged (juce::AudioProcessor* processor, int parameterIndex, float newValue) override;
     void audioProcessorChanged (juce::AudioProcessor*, const juce::AudioProcessorListener::ChangeDetails&) override {}

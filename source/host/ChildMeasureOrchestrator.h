@@ -69,6 +69,12 @@ public:
         docs for the sequence, the crash gate and the error vocabulary). */
     ChildMeasureContract::ChildMeasureOutcome run (const ChildMeasureContract::ChildMeasureRequest& request);
 
+    /** Request cancellation of an in-flight run (issue #3): forwards to the
+        coordinator's cancel flag, which the run's waitForLine polls. The
+        run then stops the child deliberately and returns a "cancelled"
+        outcome — never a crash. Thread-safe (atomic). */
+    void cancel();
+
 private:
     //==============================================================================
     /** Pop response lines until one matches `needle` or is an explicit
@@ -88,6 +94,11 @@ private:
         crash/generic vocabulary. */
     ChildMeasureContract::ChildMeasureOutcome childOrGenericError (const juce::String& responseLine,
                                                                    int baseline) const;
+
+    /** Deliberate-cancel outcome (issue #3): stops the child (NOT a crash
+        event — crashCount and the crash-loop gate stay untouched) and
+        returns {"ok":false,"error":"cancelled"}. */
+    ChildMeasureContract::ChildMeasureOutcome cancelledOutcome() const;
 
     PluginHostChildCoordinator* coordinator;
     juce::String pluginPath;

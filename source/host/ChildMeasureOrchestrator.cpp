@@ -33,6 +33,10 @@ ChildMeasureContract::ChildMeasureOutcome ChildMeasureOrchestrator::run (
 {
     ChildMeasureContract::ChildMeasureOutcome outcome;
 
+    // Issue #3: a fresh run starts with a clean cancel state — a stop that
+    // landed between runs (nothing in flight) must not cancel this run.
+    coordinator->resetCancel();
+
     // a. ADR-D-7: the child only implements frequency_response. Everything
     //    else fails WITHOUT touching the child — and never falls back to
     //    loading the (blacklisted) plugin in this process.
@@ -57,6 +61,10 @@ ChildMeasureContract::ChildMeasureOutcome ChildMeasureOrchestrator::run (
         return outcome;
     }
 
+    // b2. A cancel that arrived before the sequence starts bails immediately.
+    if (coordinator->isCancelRequested())
+        return cancelledOutcome();
+
     // c. Recovery sequence (D3): a fresh child per run. restart() refuses a
     //    still-running child, so stop() first when a previous run left one
     //    alive (a deliberate stop is not a crash event).
@@ -64,6 +72,8 @@ ChildMeasureContract::ChildMeasureOutcome ChildMeasureOrchestrator::run (
         coordinator->stop();
     if (! coordinator->restart())
         return failedOutcome ("child measurement failed", baseline);
+    if (coordinator->isCancelRequested())
+        return cancelledOutcome();
 
     // start handshake
     if (! coordinator->sendLine (R"({"cmd":"start"})"))
@@ -72,10 +82,16 @@ ChildMeasureContract::ChildMeasureOutcome ChildMeasureOrchestrator::run (
     {
         juce::String line;
         if (! waitForLine ("\"pid\"", kHandshakeTimeoutMs, baseline, line))
+        {
+            if (coordinator->isCancelRequested())
+                return cancelledOutcome();
             return failedOutcome ("child measurement failed", baseline);
+        }
         if (! line.contains ("\"ok\":true"))
             return childOrGenericError (line, baseline);
     }
+    if (coordinator->isCancelRequested())
+        return cancelledOutcome();
 
     // load
     {
@@ -88,10 +104,16 @@ ChildMeasureContract::ChildMeasureOutcome ChildMeasureOrchestrator::run (
 
         juce::String line;
         if (! waitForLine ("\"name\"", kLoadTimeoutMs, baseline, line))
+        {
+            if (coordinator->isCancelRequested())
+                return cancelledOutcome();
             return failedOutcome ("child measurement failed", baseline);
+        }
         if (! line.contains ("\"ok\":true"))
             return childOrGenericError (line, baseline);
     }
+    if (coordinator->isCancelRequested())
+        return cancelledOutcome();
 
     // restore_params: splice the cached snapshot (D3 recovery) only when one
     // exists — an empty cache means nothing was snapshotted, nothing to
@@ -106,11 +128,17 @@ ChildMeasureContract::ChildMeasureOutcome ChildMeasureOrchestrator::run (
 
             juce::String line;
             if (! waitForLine ("\"ok\":", kHandshakeTimeoutMs, baseline, line))
+            {
+                if (coordinator->isCancelRequested())
+                    return cancelledOutcome();
                 return failedOutcome ("child measurement failed", baseline);
+            }
             if (! line.contains ("\"ok\":true"))
                 return childOrGenericError (line, baseline);
         }
     }
+    if (coordinator->isCancelRequested())
+        return cancelledOutcome();
 
     // measure: reuse the frozen Field constants so host and child vocabulary
     // cannot drift (ChildMeasureContract.h).
@@ -128,10 +156,15 @@ ChildMeasureContract::ChildMeasureOutcome ChildMeasureOrchestrator::run (
             return failedOutcome ("child measurement failed", baseline);
 
         // Result collection: progress lines pass through, a mid-measure
-        // crash bails early (waitForLine), a silent child times out.
+        // crash bails early (waitForLine), a silent child times out, and a
+        // user cancel (issue #3) stops the child deliberately.
         juce::String line;
         if (! waitForLine ("\"samples\"", resultTimeoutMs, baseline, line))
+        {
+            if (coordinator->isCancelRequested())
+                return cancelledOutcome();
             return failedOutcome ("child measurement failed", baseline);
+        }
         if (! line.contains ("\"ok\":true"))
             return childOrGenericError (line, baseline);
 
@@ -171,6 +204,11 @@ bool ChildMeasureOrchestrator::waitForLine (const juce::String& needle, int time
 
     while (juce::Time::getMillisecondCounter() < deadline)
     {
+        // Issue #3: a user cancel is honoured at the poll granularity — the
+        // caller then returns the deliberate-cancel outcome.
+        if (coordinator->isCancelRequested())
+            return false;
+
         const auto line = coordinator->popLine (kPopPollMs);
         if (! line.isEmpty())
         {
@@ -196,6 +234,25 @@ bool ChildMeasureOrchestrator::waitForLine (const juce::String& needle, int time
     }
 
     return false;   // timeout
+}
+
+//==============================================================================
+
+void ChildMeasureOrchestrator::cancel()
+{
+    coordinator->requestCancel();
+}
+
+ChildMeasureContract::ChildMeasureOutcome ChildMeasureOrchestrator::cancelledOutcome() const
+{
+    // Issue #3: deliberate user cancel — stop the child (a stop is never a
+    // crash event, so crashCount / the crash-loop gate / the blacklist stay
+    // untouched) and report the cancel vocabulary.
+    coordinator->stop();
+    ChildMeasureContract::ChildMeasureOutcome outcome;
+    outcome.ok = false;
+    outcome.error = "cancelled";
+    return outcome;
 }
 
 ChildMeasureContract::ChildMeasureOutcome ChildMeasureOrchestrator::failedOutcome (

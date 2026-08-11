@@ -108,6 +108,19 @@ public:
         Must not run concurrently with the destructor. */
     void stop();
 
+    /** Request cancellation of an in-flight child measure (issue #3). A
+        thread-safe flag the orchestrator's waitForLine polls; when set, the
+        orchestrator stops the child DELIBERATELY (stop(), never a crash —
+        crashCount and the blacklist must not see it). */
+    void requestCancel() noexcept { cancelRequested.store (true); }
+
+    /** Clear a stale cancel so a fresh run starts clean. Called by the
+        orchestrator at run() entry. */
+    void resetCancel() noexcept { cancelRequested.store (false); }
+
+    /** True while a cancel has been requested and not yet reset. */
+    bool isCancelRequested() const noexcept { return cancelRequested.load(); }
+
     /** Install the crash callback. Call before start() (the reader thread
         may invoke it as soon as the child misbehaves). */
     void setOnCrash (CrashCallback callback);
@@ -163,6 +176,7 @@ private:
     std::atomic<bool> stopRequested { false };
     std::atomic<bool> crashReported { false };
     std::atomic<bool> readerDone { false };
+    std::atomic<bool> cancelRequested { false };      // issue #3: deliberate cancel flag
     std::atomic<uint32> lastHeartbeatMs { 0 };   // wrap-safe via uint32 deltas
     std::atomic<int> crashCountValue { 0 };      // cumulative crash reports (D3b restart)
 

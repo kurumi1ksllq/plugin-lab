@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Command,
-    [int]$TimeoutSeconds = 120
+    [int]$TimeoutSeconds = 120,
+    [int]$CancelAfterMs = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,11 +32,16 @@ public static class Kernel32
         out uint lpNumberOfBytesRead, IntPtr lpOverlapped);
 
     [DllImport("kernel32.dll", SetLastError=true)]
+    public static extern bool PeekNamedPipe(IntPtr hNamedPipe, byte[] lpBuffer, uint nBufferSize,
+        out uint lpBytesRead, out uint lpTotalBytesAvail, out uint lpBytesLeftThisMessage);
+
+    [DllImport("kernel32.dll", SetLastError=true)]
     public static extern bool CloseHandle(IntPtr hObject);
 }
 '@
 
 $pipe = [IntPtr]::Zero
+$finalResponse = $null
 try {
     Add-Type -TypeDefinition $script:Kernel32Def -ErrorAction Stop
 
@@ -63,23 +69,59 @@ try {
         throw "WriteFile failed (last error $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))"
     }
 
-    # Read the response line. The server writes one JSON line per response.
+    # Issue #3: optionally send {"cmd":"stop"} on the SAME connection after
+    # $CancelAfterMs ms — the server serves control commands inline while the
+    # long command runs on its worker, so stop is reachable mid-measure.
+    $sendTime = [DateTime]::UtcNow
+    $cancelSent = $false
+    $stopBytes = [Text.Encoding]::UTF8.GetBytes('{"cmd":"stop"}' + "`n")
+
+    # Read response LINES until the FINAL response. The server writes one
+    # message per line; progress lines ({"ok":true,"progress":...}) and
+    # control acks ({"ok":true}) are intermediate and go to stderr — the final
+    # response carries "samples" / "export_path" / "error" and goes to stdout.
+    # PeekNamedPipe (non-blocking) instead of a blocking ReadFile, so the
+    # cancel can fire while the server is busy (mirrors the server's poll).
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $readBuffer = New-Object byte[] 65536
-    $response = ""
+    $pending = ""
     while ([DateTime]::UtcNow -lt $deadline) {
-        $read = [uint32]0
-        if ([Kernel32]::ReadFile($pipe, $readBuffer, 65536, [ref]$read, [IntPtr]::Zero)) {
-            if ($read -gt 0) {
-                $response += [Text.Encoding]::UTF8.GetString($readBuffer, 0, [int]$read)
-                if ($response.Contains("`n")) { break }
-                continue
+        $avail = [uint32]0; $total = [uint32]0; $left = [uint32]0
+        $peeked = [Kernel32]::PeekNamedPipe($pipe, $null, 0, [ref]$avail, [ref]$total, [ref]$left)
+        if ($peeked -and $total -gt 0) {
+            $read = [uint32]0
+            if ([Kernel32]::ReadFile($pipe, $readBuffer, 65536, [ref]$read, [IntPtr]::Zero) -and $read -gt 0) {
+                $pending += [Text.Encoding]::UTF8.GetString($readBuffer, 0, [int]$read)
+                while ($pending.Contains("`n")) {
+                    $nl = $pending.IndexOf("`n")
+                    $line = $pending.Substring(0, $nl).TrimEnd("`r")
+                    $pending = $pending.Substring($nl + 1)
+                    if ($line -match '"samples"|"export_path"|"error"') {
+                        $finalResponse = $line
+                        break
+                    }
+                    # Intermediate line (progress / control ack) — stderr.
+                    if ($line) { [Console]::Error.WriteLine($line) }
+                }
+                if ($null -ne $finalResponse) { break }
             }
+        } elseif (-not $peeked) {
+            # Pipe broken — the server closed the connection.
+            break
         }
-        # No data yet — poll (server may be processing a blocking command).
+
+        # Fire the cancel after the requested delay (issue #3).
+        if ($CancelAfterMs -gt 0 -and -not $cancelSent -and
+            ([DateTime]::UtcNow - $sendTime).TotalMilliseconds -ge $CancelAfterMs) {
+            $written2 = [uint32]0
+            [Kernel32]::WriteFile($pipe, $stopBytes, [uint32]$stopBytes.Length, [ref]$written2, [IntPtr]::Zero) | Out-Null
+            $cancelSent = $true
+            [Console]::Error.WriteLine("-- stop sent after ${CancelAfterMs}ms --")
+        }
+
         Start-Sleep -Milliseconds 50
     }
-    if ($response.Length -eq 0) {
+    if ($null -eq $finalResponse) {
         throw "IPC response timed out after ${TimeoutSeconds}s"
     }
 
@@ -87,7 +129,7 @@ try {
     # ERROR_BROKEN_PIPE and returns to its accept loop (proven path — the
     # PipeServerTests R1 helper does exactly this).
     [Kernel32]::CloseHandle($pipe) | Out-Null
-    Write-Output $response.TrimEnd("`r", "`n")
+    Write-Output $finalResponse
     exit 0
 } catch {
     Write-Error "IPC error: $_"
