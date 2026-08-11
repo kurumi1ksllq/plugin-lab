@@ -9,10 +9,13 @@ if(MSVC)
 endif()
 
 # ── Fetch JUCE ──────────────────────────────────────────────────────────────
+# Pinned to the release tag (not master): master moves, so CI and local builds
+# would otherwise silently pull different JUCE versions (2026-08-11: master
+# drifted 7dda739b → 9.0.1). Reproducible builds are a PR gate.
 include(FetchContent)
 FetchContent_Declare(JUCE
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG master
+    GIT_TAG 9.0.1
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(JUCE)
