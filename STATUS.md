@@ -350,3 +350,18 @@ DESIGN.md                 # 设计文档
 **流程约定**：见根 AGENTS.md「WORKFLOW」节——`feat/*`/`fix/*`/`chore/*`/`docs/*` 分支 → Conventional Commits → `gh pr create` → CI 绿 → squash 合并。本地遗留分支 `feat/phase1-freq-response`、`feat/phase2-input-signal`（历史阶段已并入 main）未删除。
 
 **CI 首跑即抓出隐藏缺陷**（2026-08-11，PR #1 验证流程时）：265 个测试中唯一带非 ASCII 字符（°）的测试名 `FreqResponse identity: dry==wet gives 0dB/0°` 在 CI 上 0.02s 挂掉——ctest 把测试名作过滤串传给测试二进制，° 的 UTF-8 字节在 runner（cp437/cp1252）往返损坏 → Catch2 `No test cases matched` → 测试未执行即判失败；本地 cp936 恰好保字节故长期 265/265 绿。修复：测试名改纯 ASCII（`0dB flat/zero phase`）+ tests/AGENTS.md 立约定。另将 JUCE 由 `GIT_TAG master` 钉到 release tag `9.0.1`（master 漂移致本地缓存与 CI 拉取不同版本，构建不可复现）。
+
+## issue #2/#3 并发改造记录（2026-08-11，PipeServer 双轨并发模型）
+
+**背景**：issue #2（playTimeline 回放进度）与 #3（hosted 子进程测量期间 stop 可达）共享同一个根——PipeServer 单线程同步 read→write，长命令阻塞期间读不了第二条命令。项目决策史（plan-scan-optimization.md）曾因「PipeServer 同步 read→write」否决推送式进度、改选快照式（getScanStatus），但快照式同样要求管道并发读，被同一个根卡住。Oracle 设计评审后定案。
+
+**架构**（`source/ipc/PipeServer.*`，TDD 驱动）：
+
+- **双轨并发**：控制命令（`stop`/`getScanStatus`，`setControlCommands` 配置）在管道读线程**内联**执行（只碰原子/快照）；**其余一切命令**（长命令 measure/playTimeline/dataset/scan + setParam 等快命令）FIFO 排队到**单个 worker 线程**串行执行——杜绝并发触碰 plugin/session 的竞态，同时让长命令期间读循环保持活跃。
+- **写路径**：所有 WriteFile（内联/worker 最终/emitLine 进度行）经 `ioMutex` + 连接代数（generation）防写已关闭/复用句柄。
+- **读路径关键坑**：阻塞 ReadFile 会被另一线程的并发 WriteFile **打断**（实测客户端 ERROR_PIPE_NOT_CONNECTED，误判断连）→ 读循环改 **PeekNamedPipe 轮询**（与 ChildProcessCoordinator 读者同模式）。
+- **#3 子进程取消**：`PluginHostChildCoordinator::requestCancel()` 原子标志 → `ChildMeasureOrchestrator::waitForLine` 每轮检查 → 取消 = `coordinator->stop()` **主动弃子**（D3 本就每 run 全新子进程；主动 stop ≠ 崩溃，不增 crashCount、不触发黑名单/崩溃基线），返回 `{"ok":false,"error":"cancelled"}`。`CommandParser::setCancelRequestCallback`（Main.cpp 接线：session + orchestrator 双取消）。
+- **#2 回放进度**：`ParameterTimeline::getPlaybackCursor/getPlaybackEventCount` + `MeasurementSession::setPlaybackProgressCallback`（block callback 中 cursor 前进即发，消息线程）→ GUI「事件 N/M」（~50ms 节流）+ IPC 推送 `{"ok":true,"progress":...,"event_index":N,"event_total":M,"time_ms":T}` 进度行（`Protocol::makeProgress` 复用，子进程先例）。
+- **客户端**：`tools/ipc_client.ps1` 改 PeekNamedPipe 轮询多行读取（进度行/控制 ack 走 stderr，最终响应带 `samples`/`export_path`/`error` 走 stdout）+ `-CancelAfterMs` 连接内发 stop。
+
+**验证**：270/270 测试双跑绿（新增 5：paramtimeline 游标 1 + orchestrator 取消 1 + pipeserver 并发 3）。新增测试曾抓出 PipeServer 读循环被并发写打断的实测 bug（err=233）。协议契约见 `source/ipc/AGENTS.md` + `docs/data-schema.md` §10.1。
