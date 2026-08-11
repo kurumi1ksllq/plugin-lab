@@ -150,6 +150,15 @@ public:
         blockCallback = std::move (cb);
     }
 
+    /** Set a playback-progress callback (issue #2): fired on the measurement
+     *  (message) thread whenever the timeline cursor advances during a
+     *  playTimeline run — (eventIndex, eventTotal, elapsedMs). The GUI shows
+     *  the event index; the IPC path forwards it as a progress line. */
+    void setPlaybackProgressCallback (std::function<void (int eventIndex, int eventTotal, int64_t elapsedMs)> cb)
+    {
+        playbackProgressCallback = std::move (cb);
+    }
+
     /** Set a parameter-automation timeline to play during the next run()
      *  (B2 playTimeline): its events are applied to the plugin between
      *  blocks (elapsed wall-clock ms since the run started), and the
@@ -197,6 +206,7 @@ private:
     float lastProgress = 0.0f;
     std::function<void(float)> progressCallback;
     std::function<void(float, const juce::AudioBuffer<float>&, const juce::AudioBuffer<float>&)> blockCallback;
+    std::function<void(int, int, int64_t)> playbackProgressCallback;
 
     // Timeline playback state (B2). timelineRestore holds the pre-play
     // values of the parameters the playback timeline touches (R2).

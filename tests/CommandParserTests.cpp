@@ -229,9 +229,9 @@ TEST_CASE ("CommandParser: measure compression curve exports JSON and fires call
 
     MeasurementSession session;
     session.setPluginInstance (plugin.get());
-    session.setSampleRate (44100.0);
+    session.setSampleRate (48000.0);
     session.setBlockSize (256);
-    session.setMeasurementType (MeasurementSession::Type::compressionCurve);
+    session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
 
     CommandParser parser;
     parser.setPluginInstance (plugin.get());
@@ -2871,6 +2871,16 @@ TEST_CASE ("CommandParser: playTimeline applies automation, exports WAV and rest
     session.setBlockSize (256);
     session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
 
+    // Issue #2: playback progress — the callback must fire with the advancing
+    // event index as the timeline is applied during the run.
+    std::vector<int> progressIndices;
+    std::vector<int> progressTotals;
+    session.setPlaybackProgressCallback ([&] (int eventIndex, int eventTotal, int64_t)
+    {
+        progressIndices.push_back (eventIndex);
+        progressTotals.push_back (eventTotal);
+    });
+
     CommandParser parser;
     parser.setPluginInstance (plugin.get());
     parser.setSession (&session);
@@ -2914,6 +2924,15 @@ TEST_CASE ("CommandParser: playTimeline applies automation, exports WAV and rest
     // Both automation events were applied during the run.
     REQUIRE (timelineValuesContain (recorder.values, 0.9f));
     REQUIRE (timelineValuesContain (recorder.values, 0.1f));
+
+    // Playback progress (issue #2): the callback fired with each advancing
+    // event index (1 then 2 of 2 total).
+    REQUIRE_FALSE (progressIndices.empty());
+    REQUIRE (progressIndices.back() == 2);
+    REQUIRE (progressTotals.back() == 2);
+    REQUIRE (std::find (progressIndices.begin(), progressIndices.end(), 1) != progressIndices.end());
+    for (int t : progressTotals)
+        REQUIRE (t == 2);
 
     // R2: the pre-play value is restored after the run.
     REQUIRE (drive->getValue() == Catch::Approx (0.25f));
