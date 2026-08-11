@@ -82,7 +82,7 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
 - [x] 块 1 E 测量质量改进（**2026-08-08 完成**，计划 v2 见 docs/archive/plan-block-e-measurement-quality.md；E1 MLS 接入频响 / E2 MultiTone 随机相位 / E3 runMultiple 验证型；全量 199 测试双跑绿 + 真机验收 MLS vs sweep |Δ|<0.5dB PASS + 双轴审查修复（scan/dataset/measure 激励泄漏收敛 + analyzeMLS 短录制 DFT clamp））
 - [x] 块 2 A 批量采集管线（2026-08-08 完成，见 docs/archive/plan-batch-pipeline.md 完成记录；真机验收 S1/S4 通过）
 - [x] 块 3 B 记录模式（**2026-08-10 完成**，见 docs/archive/plan-block-b-recording.md；B1 WavExporter / B2 ParameterTimeline / B3 GUI 面板；208 测试双跑绿 + 真机验收 Pro-Q 4 全流程 + 双轴审查修复）
-- [x] 块 4 D 进程外托管（**已完成 2026-08-11**，见 docs/plan-block-d-out-of-process.md——D0 设计门 6 决策全部按推荐定案；D1 子进程骨架（PluginHostChild + Coordinator 崩溃检测/心跳看门狗）、D2 测量入子进程（SweepRunner 复用 + WAV 中转，真插件 parity max|ΔdB|=0）、D3 崩溃恢复（stable-id 快照/自动重启/续测/3 次上限，ExitProcess 实证）、D6 双路径路由（黑名单→子进程/白名单→直载，含 loadPlugin 黑名单寻址）+ 双轴审查 5 缺口修复；**D4 Pianoteq 实战验收达成**（Pianoteq 9 黑名单条目经子进程加载即杀子进程 → 宿主检测 heartbeat timeout → 自动重启 3 次上限 → 返回明确错误，宿主永不死亡）；265/265 测试绿；D5 编辑器 SetParent 按 v1 决策后置（AI 主路径不需要）；**预存缺陷修复**：ipc_client.ps1 改原生 Win32 客户端（.NET Dispose 不释放句柄致真机多连接卡死）+ PipeServerTests R1/R2 回归锁定）
+- [x] 块 4 D 进程外托管（**已完成 2026-08-11**，见 docs/archive/plan-block-d-out-of-process.md——D0 设计门 6 决策全部按推荐定案；D1 子进程骨架（PluginHostChild + Coordinator 崩溃检测/心跳看门狗）、D2 测量入子进程（SweepRunner 复用 + WAV 中转，真插件 parity max|ΔdB|=0）、D3 崩溃恢复（stable-id 快照/自动重启/续测/3 次上限，ExitProcess 实证）、D6 双路径路由（黑名单→子进程/白名单→直载，含 loadPlugin 黑名单寻址）+ 双轴审查 5 缺口修复；**D4 Pianoteq 实战验收达成**（Pianoteq 9 黑名单条目经子进程加载即杀子进程 → 宿主检测 heartbeat timeout → 自动重启 3 次上限 → 返回明确错误，宿主永不死亡）；265/265 测试绿；D5 编辑器 SetParent 按 v1 决策后置（AI 主路径不需要）；**预存缺陷修复**：ipc_client.ps1 改原生 Win32 客户端（.NET Dispose 不释放句柄致真机多连接卡死）+ PipeServerTests R1/R2 回归锁定）
 
 ## 六、决策记录补充（2026-08-08 晚）
 

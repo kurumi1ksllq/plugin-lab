@@ -1,6 +1,6 @@
 # Plugin Lab — 项目知识库
 
-**更新:** 2026-08-10 · **Commit:** 531c9eb · **Branch:** main
+**更新:** 2026-08-11 · **Commit:** 020e798 · **Branch:** main
 
 ## OVERVIEW
 
@@ -22,7 +22,7 @@ PluginLab/
 │   └── utils/         # FftHelper / MathUtils / CrashLog
 ├── tests/             # Catch2 单元测试(208/208 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
 ├── tools/             # VST3Scanner(死代码但仍在构建) + CMakeLists + PS/Python 工具脚本
-├── docs/              # data-schema.md / roadmap-next.md / 活跃 plan-block-*（已完成计划在 archive/）
+├── docs/              # data-schema.md（协议契约）/ roadmap-next.md（全块已完成）/ 历史计划归档在 archive/
 └── samples/take01.wav # vocal 测试素材（已入库）
 ```
 
@@ -93,7 +93,7 @@ ctest --test-dir build -C Release --timeout 180
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
-- **空 catch / 吞异常**——违规点 `source/Main.cpp:455`（`catch(...){return 0;}`）与 `:470`（空 catch，ListBox 回调）；每个 catch 必须 CRASH_LOG（参照 `PluginManager.cpp:221,345`）
+- **空 catch / 吞异常**——违规点 `source/Main.cpp:659`（`catch(...){return 0;}`）与 `:674`（空 catch，ListBox 回调）；每个 catch 必须 CRASH_LOG（参照 `PluginManager.cpp:221,345`）
 - **递归锁同一 mutex**（曾致 std::system_error 必现崩溃）——锁内只拷贝，锁外加载
 - **`JUCE_TRY`/`JUCE_CATCH_EXCEPTION`**——会重抛，禁止（用 /EHa + catch(...)）
 - **`getTotalLength()` 返回 -1**——无限长会触发 SweepRunner 静默 10s 兜底

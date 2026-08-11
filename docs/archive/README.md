@@ -9,5 +9,7 @@
 | `plan-batch-pipeline.md` | 块 A 批量采集管线（dataset IPC + Python 管线） | roadmap 块 2 ✅；真机验收 S1/S4 通过 |
 | `plan-block-c-stability.md` | 块 C 稳定加固（异常保护/黑名单/schema） | roadmap 块 0 ✅；186 测试全绿 + 双轴审查 |
 | `plan-block-e-measurement-quality.md` | 块 E 测量质量（MLS 频响 / MultiTone 相位 / runMultiple 验证） | roadmap 块 1 ✅；199 测试双跑绿 + 真机 MLS vs sweep \|Δ\|<0.5dB + 双轴审查 |
+| `plan-block-b-recording.md` | 块 B 记录模式（WavExporter/ParameterTimeline/GUI） | roadmap 块 3 ✅；208 测试双跑绿 + 真机 Pro-Q 4 验收 + 双轴审查 |
+| `plan-block-d-out-of-process.md` | 块 D 进程外托管（子进程骨架/崩溃恢复/双路路由） | roadmap 块 4 ✅；265 测试双跑绿 + Pianoteq 9 实战 + D4 五项缺口修复 |
 
-活跃计划（未完成）在 docs/ 根：`roadmap-next.md` / `plan-block-b-recording.md`（块 3 B，当前块，确认即开工）/ `plan-block-d-out-of-process.md`（块 4 D 设计门）。
+> 2026-08-11 起五块（C/E/A/B/D）全部完成归档，`docs/` 根仅剩 `roadmap-next.md`（全完成状态）与 `data-schema.md`（协议契约）。
