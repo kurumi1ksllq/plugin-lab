@@ -333,3 +333,18 @@ DESIGN.md                 # 设计文档
 - **非 freq 黑名单插件测量不可用**（ADR-D-7）：ChildWavAnalyzer 仅支持 frequency_response，harmonic/compression 黑名单插件返回 "child measurement not implemented for type X"——安全优先，绝不禁用黑名单隔离兜底宿主直载；子进程扩展 harmonic/compression 后自然解锁
 - **Pianoteq 9 黑名单条目为注入**（本机装有 Pianoteq 9，但黑名单默认无其条目——验收经 pluginlist.xml 注入条目模拟宿主杀手场景，完成后已还原；子进程加载即杀子进程的宿主侧完整链路已验证）
 - **hosted 子进程测量为同步阻塞**：黑名单插件 measure 期间 CommandParser 阻塞等待子进程（秒级），期间 stop 不可达——与宿主直测 measure 语义一致，协议面扩展留后续
+
+## 开发流程标准化记录（2026-08-11，GitHub 分支/PR 工作流）
+
+**决策**：仓库 `kurumi1ksllq/plugin-lab` 由 private 转 **public**（免费套餐下私有仓库的分支保护为 Pro 付费功能，HTTP 403；转 public 换取服务端强制分支保护）。main 分支启用完整保护，后续开发一律分支 + PR 合并。
+
+**保护配置**（服务端强制，已生效）：
+
+- **禁直接 push main**：`enforce_admins=true`（含 owner）；仅 PR 可合并
+- **CI 门禁**：required status check `build-and-test`（`.github/workflows/build.yml`，Windows/MSVC，BUILD_TESTS=ON，ctest 连跑 2 次）；strict=true（分支需最新）
+- **合并策略**：仅 squash（merge commit / rebase 已禁）+ required linear history；合并后自动删源分支；禁 force push / 禁删保护分支
+- required approvals = 0（单人仓库，PR 本身即门槛，免自我审批摩擦）
+
+**新增文件**：`.github/workflows/build.yml`（CI）、`.github/pull_request_template.md`（PR 模板：what/why/验证清单）；`.gitignore` 追加 `opencode.json`（本地 IDE MCP 配置，机器相关）。
+
+**流程约定**：见根 AGENTS.md「WORKFLOW」节——`feat/*`/`fix/*`/`chore/*`/`docs/*` 分支 → Conventional Commits → `gh pr create` → CI 绿 → squash 合并。本地遗留分支 `feat/phase1-freq-response`、`feat/phase2-input-signal`（历史阶段已并入 main）未删除。

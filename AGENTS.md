@@ -68,8 +68,17 @@ build\PluginLab_artefacts\Release\Plugin Lab.exe
 # 测试（BUILD_TESTS 默认 OFF；连跑 2 次验稳定）
 cmake -S . -B build -DBUILD_TESTS=ON && cmake --build build --config Release
 ctest --test-dir build -C Release --timeout 180
-# 无 CI、无 Makefile、无 package.json scripts（勿引用）
+# CI 见 .github/workflows/build.yml（build-and-test：Windows/MSVC 构建 + 测试，PR 门禁）
+# 无 Makefile、无 package.json scripts（勿引用）
 ```
+
+## WORKFLOW（GitHub 标准化开发流程）
+
+- **永远不在 main 上开发**：main 有分支保护（服务端强制）——直接 push 被拒，一切变更走 PR
+- 分支命名：`feat/*`、`fix/*`、`chore/*`、`docs/*`（如 `feat/ipc-export-wav`）；本地旧分支 `feat/phase1-*`、`feat/phase2-*` 为历史遗留
+- 流程：`git checkout -b feat/xxx` → 提交（Conventional Commits）→ `git push -u origin feat/xxx` → `gh pr create` → CI 绿 → 合并（squash，合后自动删分支）
+- CI 门禁：required status check `build-and-test`（`ctest` 连跑 2 次，/W4 /WX 零警告）
+- 合并策略：仅 squash + 线性历史；禁 force push / 禁删保护分支
 
 ## CONVENTIONS
 
@@ -79,7 +88,7 @@ ctest --test-dir build -C Release --timeout 180
 - 头文件 `#pragma once`；include 相对当前文件（`"../analysis/Export.h"`）
 - 错误处理：生产路径不用 C++ 异常——IPC 返回 `{"ok":false,"error":"..."}`；崩溃保护用 `/EHa` + `catch(...)` + CRASH_LOG
 - JSON 手写 raw string literal + `escapeJsonString`（曾因 `juce::JSON` 转义 bug 弃用）
-- Git：Conventional Commits（`feat(ipc): ...`），提交消息英文、文档中文
+- Git：Conventional Commits（`feat(ipc): ...`），提交消息英文、文档中文；分支/PR/CI 流程见 WORKFLOW 节
 - 线程铁律：`prepareToPlay/processBlock` 必须在测量线程；编辑器创建必须在消息线程（`callAsync`）；扫描/加载用**专用一次性 `std::thread`**（析构不 join，`release()` 放弃；**禁 `std::thread::detach`**）；UI 刷新用 AsyncUpdater
 
 ## ANTI-PATTERNS (THIS PROJECT)
