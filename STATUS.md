@@ -22,7 +22,7 @@
 1. **递归锁 bug（T1 前）：`loadPlugin()` 持有 listLock 又调 `getPluginDescription()` 内部再锁同一 mutex → std::system_error → 列表点击必失败**。修复：去掉外层锁。
 2. **Pianoteq 9 崩溃（oracle 分析确认）**：插件在 createPluginInstance 内部调用 ExitProcess/TerminateProcess，绕过所有 try/catch + SEH + minidump，宿主进程无征兆退出（无 dmp、无 crash 事件，仅 RADAR_PRE_LEAK_64 副作用）。
    - **对策**：`PluginManager::loadPlugin` 加黑名单拦截（Pianoteq 7/8/9 匹配），返回 nullptr + 警告日志，宿主不再被杀
-   - 长期方案：进程外托管（ChildProcessCoordinator，成本高，未实施）
+   - 长期方案：进程外托管（ChildProcessCoordinator）——**已实施（块 D，2026-08-11，见 docs/plan-block-d-out-of-process.md）**：黑名单插件经 PluginHostChild 子进程托管，D4 实战验收 Pianoteq 9 在子进程加载即杀子进程 → 宿主检测 heartbeat timeout → 自动重启 3 次上限 → 返回明确错误，**宿主永不死亡**
 3. **use-after-free 崩溃（Debug 构建 + 点击触发 0xc0000005，minidump 定位 atomic::operator++）**：`scanPlugins()`/`loadPluginByDescription()` 用 `std::thread([this]).detach()` + `callAsync([this])`，组件析构（关主窗口）时后台线程仍访问已析构的 this → 原子引用计数自增崩溃。
    - **对策**：改为 JUCE 标准 **ThreadPool + AsyncUpdater**（`threadPool->addJob(ThreadPoolJob)` + `triggerAsyncUpdate()`/`handleAsyncUpdate()`；析构时 `threadPool = nullptr` join 所有任务 + `cancelPendingUpdate()`）。
    - 已验证：快速点击 + 加载中关主窗口 3 次试验全部干净退出（修复前必崩）；全量 77 插件 76 成功（98.7%）0 崩溃。
@@ -263,7 +263,7 @@ DESIGN.md                 # 设计文档
   修复：超时/挂起持久化黑名单的路径全部 setCacheFile(tmp)；changeListenerCallback 改 pending flag + triggerAsyncUpdate（AsyncUpdater ≤50ms 合并刷新）。验证全量绿（commit message 记 158/158），Debug 热扫 ~1s。
 - **`063edf3`** docs：sync AGENTS.md —— 刷新 commit ref + 测试计数对齐（commit message 记 126/126，**实测为 158/158**，后续以 tests/AGENTS.md 158 为准）。
 
-**测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158、186/186、199/199 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（208 个 TEST_CASE，2026-08-10 实测）。
+**测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158、186/186、199/199、208/208 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（**265 个 TEST_CASE，2026-08-11 实测**）。
 
 ## E 块任务 E3 验证记录（2026-08-08）
 
@@ -309,3 +309,27 @@ DESIGN.md                 # 设计文档
 - **GUI 点击路径未自动化验证**（2026-08-10 真机时前台有全屏游戏遮挡窗口，置顶失败；按钮为 IPC 已验证命令的薄包装 + 构建 clean + 审查通过；产物 `cwd/pluginlab_timeline.json`）
 - **UADx 系列不可测**：processBlock 抛未知异常（块 C 保护兜底，测量返回失败不崩宿主）；magic.CURVE 编辑器消息重入致静默退出——真机验收统一用 Pro-Q 4（UADx 1176/LA-2A 等加载 OK 但测量不可用）
 - **回放进度为 spinner**（spec 原提"显示当前事件序号"未实现——playTimeline 协议无进度流，需扩展协议面，留待后续）
+
+## D 块完成记录（2026-08-11，块 4 D 进程外托管；计划 v2 见 docs/plan-block-d-out-of-process.md）
+
+**commit 范围**：`d68b094`（D1+D3）→ `9771131`（D2）→ `7fbea02`（D6）→ `7370613`（ipc 客户端修复）→ `18079ef`（构建登记）→ `26fb746`（D 收尾文档，已 push origin/main）。
+
+**设计门**（2026-08-10 D0，6 决策全部按推荐定案）：B+ 边界（load+measure 进子进程、扫描留宿主、仅黑名单插件走子进程）/ 编辑器 c 降级（Generic SetParent，v1 后置）/ 宿主唯一黑名单写者 / 崩溃恢复 3 次上限（kMaxScanHangs 语义）/ stdin-stdout JSON 行协议 / 子进程内录制 + 结果回传。ADR-D-1..7（stable-id 参数快照替代不可回灌的 captureParameterSnapshot / ExitProcess 注入必须跑子进程 / 类名 ChildProcessCoordinator 冲突改 PluginHostChildCoordinator / CreateProcess 不用 juce::ChildProcess / WAV 中转回传 / 宿主无 plugin 的 Context 构造 / 非 freq 黑名单插件安全降级）。
+
+**关键交付**：
+
+- **D1 子进程骨架**（d68b094）：`source/child/PluginHostChild.exe`（stdin/stdout JSON 行协议 start/load/heartbeat/stop/snapshot_params/restore_params，/EHa 加载保护，measure 期 progress 行防 3s 看门狗误杀）；`PluginHostChildCoordinator`（CreateProcess + 匿名管道，PeekNamedPipe 融合看门狗，**恰好一次**崩溃上报，restart()/crashCount()，崩溃路径句柄泄漏修复，handleLock 四方并发关闭互斥）。**真机**：子进程可启动、taskkill 强杀可检测、句柄 5 轮无泄漏。
+- **D2 测量入子进程**（9771131）：子进程 measure 镜像宿主生成器选择（SineSweep 5s / MLS Impulse 16383），复用冻结 SweepRunner/CaptureBuffer（WAV 崩溃镜像 [dry,wet] 交织 24-bit，ADR-D-5）；宿主 `WavCaptureReader`（手写 24-bit 读取）+ `ChildWavAnalyzer`（无 plugin 分析入口，ADR-D-6 Context 从子进程回传元数据构造）。**真机 magic.CURVE**：sweep/MLS 双路径带内 3379 点 **max |ΔdB| = 0**（验收 <0.5dB）。
+- **D3 崩溃恢复**（d68b094）：stable-id 参数快照/恢复（ADR-D-1，往返 max Δ=0）；崩溃 → 黑名单联动 + CrashLog → 自动重启 → 恢复快照 → 续测；连续崩溃 ≥3 停重启；`tests/SuicidePlugin` VST3 崩溃注入 fixture（crash_mode 参数 0 直通/1 ExitProcess/2 abort，ADR-D-2）。**真机 TestPlugin/SuicidePlugin**：崩溃→重启→续测成功，参数跨崩溃一致。
+- **D6 双路径路由**（7fbea02）：`ChildMeasureContract`（冻结契约头）+ `ChildMeasureOrchestrator`（恢复序列 + crashCount-baseline 跨 run 累积 + ADR-D-7 非 freq 拒绝）+ CommandParser measure 黑名单路由（isBlacklistedPath → 子进程，无回调显式报错，白名单宿主直载零改动）+ **loadPlugin 黑名单寻址**（扫描跳过黑名单插件 → knownPlugins 无条目，按黑名单条目文件名/精确路径匹配合成 desc）+ Main.cpp 接线（onCrash 黑名单写 + setChildMeasurePath）。**真机**：loadPlugin "Pianoteq 9" → `{"ok":true,"blacklisted":true}`。
+- **D4 Pianoteq 实战验收**（真机）：Pianoteq 9（`C:\Program Files\Common Files\VST3\Pianoteq 9`）注入黑名单条目 → loadPlugin 路由子进程 → measure → 子进程加载 Pianoteq 即被杀（heartbeat timeout 3000ms 检测）→ 自动重启 3 次上限 → `{"ok":false,"error":"child process crashed (restarting)"}`，**宿主存活**——roadmap 验收「Pianoteq 可加载测量不杀宿主」达成（黑名单条目经 pluginlist.xml 注入模拟其宿主杀手场景，验收后已还原）
+- **预存缺陷修复**（7370613）：`tools/ipc_client.ps1` 由 .NET NamedPipeClientStream 改**原生 Win32 P/Invoke**（CreateFileA/WriteFile/ReadFile/CloseHandle）——.NET Dispose 不释放 OS 管道句柄致真机多命令序列卡死（服务器 ReadFile 永不返回，后续连接排队超时）；PipeServerTests 新增 R1 重连回归 + R2 shutdown 响应性锁定。
+
+**测试**：**265/265 全绿**（208 + 块 D 新增 57：childcoordinator 11 + childprotocol 3 + childrestart 7 + childparity 2 + wavcapturereader 5 + childmeasure 6 + routing 5 + loadplugin-blacklist 5 + pipeserver 2 + 其余配套 11），`ctest --timeout 180` 双跑 + 真机验收 + 双轴审查（Standards + Spec）。
+
+**已知限制**：
+
+- **D5 编辑器 SetParent 后置**（v1 决策）：子进程 Generic 编辑器经 SetParent 显示到宿主未实施——AI 主路径不需要，黑名单插件无原生 UI 为可接受降级
+- **非 freq 黑名单插件测量不可用**（ADR-D-7）：ChildWavAnalyzer 仅支持 frequency_response，harmonic/compression 黑名单插件返回 "child measurement not implemented for type X"——安全优先，绝不禁用黑名单隔离兜底宿主直载；子进程扩展 harmonic/compression 后自然解锁
+- **Pianoteq 9 黑名单条目为注入**（本机装有 Pianoteq 9，但黑名单默认无其条目——验收经 pluginlist.xml 注入条目模拟宿主杀手场景，完成后已还原；子进程加载即杀子进程的宿主侧完整链路已验证）
+- **hosted 子进程测量为同步阻塞**：黑名单插件 measure 期间 CommandParser 阻塞等待子进程（秒级），期间 stop 不可达——与宿主直测 measure 语义一致，协议面扩展留后续
