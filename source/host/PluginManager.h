@@ -182,6 +182,13 @@ public:
         exact-or-prefix semantics as cacheIsCurrent. */
     bool isBlacklistedPath (const juce::String& fileOrIdentifier) const;
 
+    /** Thread-safe snapshot of the persistent blacklist (verifier-M1 guard:
+        JUCE's own getBlacklistedFiles() is unlocked and IPC-thread reads
+        race the scan/load threads' writes). Used by the loadPlugin command
+        to address blacklisted plugins that never entered knownPlugins (block
+        D, D6 routing gap fix — see plan-block-d-out-of-process.md). */
+    juce::StringArray getBlacklistedFilesSnapshot() const;
+
 private:
     /** Remove ghost entries (plugin files that no longer exist) and
         host-killing plugins from the in-memory list. */

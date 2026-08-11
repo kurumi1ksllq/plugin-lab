@@ -367,6 +367,14 @@ bool PluginManager::isBlacklistedPath (const juce::String& fileOrIdentifier) con
     return false;
 }
 
+juce::StringArray PluginManager::getBlacklistedFilesSnapshot() const
+{
+    // verifier-M1 guard：JUCE 的 getBlacklistedFiles() 无锁，IPC 线程读必须与
+    // 扫描/加载线程的 addToBlacklistLocked 写互斥（同一 knownListGuard）。
+    std::lock_guard<std::mutex> lock (knownListGuard);
+    return knownPlugins.getBlacklistedFiles();
+}
+
 bool PluginManager::handleScanHang()
 {
     // 看门狗（计划步骤 4）：扫描线程卡在某个插件 DLL 里（scanNextFile 永不返回），
