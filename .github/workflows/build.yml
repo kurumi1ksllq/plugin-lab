@@ -31,8 +31,10 @@ jobs:
         run: cmake --build build --config Release
 
       - name: Test (run 1)
-        run: ctest --test-dir build -C Release --timeout 180
+        run: ctest --test-dir build -C Release --timeout 180 --output-on-failure
 
-      # 项目惯例：连跑 2 次验稳定性（见 AGENTS.md COMMANDS）
+      # 项目惯例：连跑 2 次验稳定性（见 AGENTS.md COMMANDS）。
+      # run 2 无条件执行：run 1 失败但 run 2 通过 = flaky，仍需暴露出来。
       - name: Test (run 2)
-        run: ctest --test-dir build -C Release --timeout 180
+        if: always()
+        run: ctest --test-dir build -C Release --timeout 180 --output-on-failure
