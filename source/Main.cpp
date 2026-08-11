@@ -337,6 +337,34 @@ public:
             updateLiveGR();
         });
 
+        // Issue #2: playback progress — the GUI shows the current automation
+        // event index on the timeline progress bar (throttled ~50 ms, the
+        // final event always shows), and the IPC path pushes a progress line
+        // through the pipe server. Fires on the message thread (both the GUI
+        // and IPC paths run the measurement there). emitLine only writes
+        // while the pipe worker serves a command, so a GUI-triggered play
+        // never pushes to a pipe.
+        measurementSession->setPlaybackProgressCallback ([this] (int eventIndex, int eventTotal, int64_t)
+        {
+            const auto now = juce::Time::getMillisecondCounter();
+            if (eventIndex < eventTotal && now - lastTimelineProgressMs < 50)
+                return;
+            lastTimelineProgressMs = now;
+
+            timelineProgressValue = (eventTotal > 0) ? (double) eventIndex / (double) eventTotal : 0.0;
+            timelineProgress->setTextToDisplay ("事件 " + juce::String (eventIndex)
+                                                + "/" + juce::String (eventTotal));
+
+            if (pipeServer != nullptr)
+            {
+                const float fraction = (eventTotal > 0)
+                                           ? (float) eventIndex / (float) eventTotal : 0.0f;
+                pipeServer->emitLine (Protocol::makeProgress (fraction,
+                    R"("event_index":)" + juce::String (eventIndex)
+                    + R"(,"event_total":)" + juce::String (eventTotal)));
+            }
+        });
+
         commandParser = std::make_unique<CommandParser>();
         commandParser->setPluginManager (pluginManager.get());
         commandParser->setSession (measurementSession.get());
@@ -435,6 +463,18 @@ public:
                 return outcome;
             }
             return childMeasureOrchestrator->run (req);
+        });
+
+        // Issue #3: the stop command cancels the in-flight job — both the
+        // in-process measurement session and the out-of-process child
+        // orchestrator. Runs on the pipe read thread (non-blocking, atomic
+        // flag sets only). MeasurementSession::cancel is thread-safe.
+        commandParser->setCancelRequestCallback ([this]
+        {
+            if (measurementSession != nullptr)
+                measurementSession->cancel();
+            if (childMeasureOrchestrator != nullptr)
+                childMeasureOrchestrator->cancel();
         });
 
         pipeServer = std::make_unique<PipeServer>();
@@ -1439,12 +1479,14 @@ private:
         // re-entrant click no-ops instead of launching an overlapping run.
         measurementInProgress = true;
         timelineProgressValue = -1.0;   // spinner while the blocking run executes
+        timelineProgress->setTextToDisplay ("Playing...");
         statusLabel->setText ("Playing timeline...", juce::dontSendNotification);
 
         const auto response = commandParser->handleCommand (json);
 
         measurementInProgress = false;
         timelineProgressValue = 1.0;
+        timelineProgress->setTextToDisplay ({});
         setTimelineButtons();
 
         const auto responseVar = juce::JSON::parse (response);
@@ -2076,6 +2118,7 @@ private:
     std::unique_ptr<juce::TextButton> playButton;
     double timelineProgressValue = 0.0;   // referenced by the ProgressBar below
     std::unique_ptr<juce::ProgressBar> timelineProgress;
+    uint32 lastTimelineProgressMs = 0;    // issue #2: ~50 ms throttle for the progress display
     bool timelineRecording = false;
 
     /** Stable parameter IDs parallel to scanParamCombo items (item i+1 → ids[i]). */

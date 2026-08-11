@@ -1502,7 +1502,13 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     // --- stop ---
     if (cmd == "stop")
     {
-        if (session != nullptr)
+        // Issue #3: the wired callback cancels BOTH the in-process session
+        // and the out-of-process child orchestrator (atomic flag sets — safe
+        // to call from the pipe read thread while the long command runs on
+        // the worker). Falls back to the session-only cancel when unwired.
+        if (cancelRequestCallback)
+            cancelRequestCallback();
+        else if (session != nullptr)
             session->cancel();
         return Protocol::makeResponse (true);
     }

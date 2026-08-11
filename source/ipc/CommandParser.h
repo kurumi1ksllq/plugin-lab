@@ -107,6 +107,15 @@ public:
      *  with a non-empty (blacklisted) path it routes to the child. */
     void setChildMeasurePath (const juce::String& p) { childMeasurePath = p; }
 
+    /** Set a callback invoked by the stop command (issue #3): cancels the
+     *  in-flight job — the measurement session AND the out-of-process
+     *  orchestrator. Runs on the pipe read thread (control command), so it
+     *  must be non-blocking (atomic flag sets only). Wired by Main.cpp. */
+    void setCancelRequestCallback (std::function<void()> cb)
+    {
+        cancelRequestCallback = std::move (cb);
+    }
+
     //==============================================================================
     /** Process a JSON command and return a JSON response. */
     juce::String handleCommand (const juce::String& jsonCommand);
@@ -125,6 +134,7 @@ private:
     std::function<void(const juce::String&)> statusCallback;
     std::function<void(const MeasurementResults&)> measurementCompleteCallback;
     std::function<void(const ScanEngine::ScanResult&)> scanCompleteCallback;
+    std::function<void()> cancelRequestCallback;   // issue #3: stop → in-flight job cancel
     ChildMeasureContract::Callback childMeasureCallback;
 
     // D6: child-measure target path of a blacklisted plugin that was never
