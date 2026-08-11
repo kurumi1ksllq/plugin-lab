@@ -115,3 +115,17 @@ ctest --test-dir build -C Release --timeout 180
 - 知识库分层：本文件（根）+ `source/AGENTS.md` + 各模块子文件 + `tests/AGENTS.md`
 - **插件缓存**：`%APPDATA%/PluginLab/pluginlist.xml`（根 `version=1`；`loadCache/saveCache` 见 PluginManager；原子写 temp+replaceFileIn）；**黑名单随缓存往返**（`<BLACKLISTED>` 子元素）；**死马踏板** `%APPDATA%/PluginLab/deadMansPedal`（挂起/崩溃插件下次自动黑名单）
 - 扫描/加载线程模型：专用一次性 `std::thread`（**析构不 join**，放弃用 `release()`）；worker 不触碰宿主成员（shared_ptr 状态 + callAsync alive-guard）；扫描看门狗（无进展 60s→黑名单+abandon，上限 3 次）；热扫增量靠 `cacheIsCurrent()`（内层 DLL mtime 基准）
+
+## Agent skills
+
+### Issue tracker
+
+GitHub issues (gh CLI)。需求与待开发全部走 GitHub issue。See \docs/agents/issue-tracker.md\。
+
+### Triage labels
+
+needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix。See \docs/agents/triage-labels.md\。
+
+### Domain docs
+
+single-context: \CONTEXT.md\(领域词汇表)+ \docs/adr/\(决策记录),与三文档(DESIGN/SPEC/STATUS)+ AGENTS.md 并存。See \docs/agents/domain.md\。
