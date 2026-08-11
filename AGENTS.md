@@ -10,7 +10,7 @@ VST3 插件黑盒测量实验室（Windows 桌面 GUI，C++20 + JUCE 9 + CMake +
 
 ```
 PluginLab/
-├── source/            # 全部生产代码（62 文件，8 模块）——见 source/AGENTS.md
+├── source/            # 全部生产代码（73 文件，9 模块，含块 D 新增 child/）——见 source/AGENTS.md
 │   ├── Main.cpp       # 入口 + 装配中枢（1829 行 god file）
 │   ├── host/          # VST3 扫描/加载（/EHa 崩溃保护 + 黑名单）
 │   ├── signal/        # 信号生成器接口 + 7 生成器
