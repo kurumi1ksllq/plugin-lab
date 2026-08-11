@@ -223,6 +223,191 @@ TEST_CASE ("PipeServer: shutdown returns quickly with idle client connected",
 }
 
 //==============================================================================
+// Test C1 (issue #3) — a control command (stop) must be served INLINE while a
+// long command runs on the worker. Without this the pipe thread is blocked in
+// the long handler and stop is unreachable — the very gap the hosted-measure
+// cancel closes. The stop response must arrive BEFORE the long command's
+// final response.
+//==============================================================================
+
+TEST_CASE ("PipeServer: control command is served while a long command runs (issue #3)",
+           "[pipeserver][concurrency]")
+{
+    PipeServer server;
+
+    std::atomic<bool> longStarted { false };
+    std::atomic<bool> releaseLong { false };
+    server.setCommandHandler ([&] (const juce::String& command) {
+        if (command.contains ("\"cmd\":\"long\""))
+        {
+            longStarted.store (true);
+            while (! releaseLong.load())
+                std::this_thread::sleep_for (std::chrono::milliseconds (5));
+            return "{\"ok\":true,\"final\":1}\n";
+        }
+        if (command.contains ("\"cmd\":\"stop\""))
+            return "{\"ok\":true,\"cancelled\":true}\n";
+        return "{}\n";
+    });
+    server.setControlCommands ({ "stop" });
+    server.startup();
+
+    HANDLE client = connectClient();
+    REQUIRE (client != INVALID_HANDLE_VALUE);
+
+    // Send the long command; the worker picks it up.
+    DWORD written = 0;
+    const char* longCmd = "{\"cmd\":\"long\"}";
+    REQUIRE (::WriteFile (client, longCmd, (DWORD) std::strlen (longCmd),
+                          &written, nullptr) != FALSE);
+
+    // Wait until the worker is inside the long handler.
+    for (int i = 0; i < 200 && ! longStarted.load(); ++i)
+        std::this_thread::sleep_for (std::chrono::milliseconds (10));
+    REQUIRE (longStarted.load());
+
+    // While the long command runs, the read loop must still serve the
+    // control command inline — the stop ack arrives BEFORE the final.
+    REQUIRE (sendCommand (client, "{\"cmd\":\"stop\"}") == "{\"ok\":true,\"cancelled\":true}\n");
+
+    // Release the long command and read its final response.
+    releaseLong.store (true);
+    char buffer[1024] = {};
+    DWORD read = 0;
+    REQUIRE (::ReadFile (client, buffer, (DWORD) (sizeof (buffer) - 1),
+                         &read, nullptr) != FALSE);
+    buffer[read] = '\0';
+    REQUIRE (std::string (buffer) == "{\"ok\":true,\"final\":1}\n");
+
+    ::CloseHandle (client);
+    server.shutdown();
+}
+
+//==============================================================================
+// Test C2 — a fast (non-control) command sent while the worker is busy is
+// QUEUED, not dropped and not run concurrently: its response follows the long
+// command's final response in FIFO order.
+//==============================================================================
+
+TEST_CASE ("PipeServer: fast command queues behind a running long command",
+           "[pipeserver][concurrency]")
+{
+    PipeServer server;
+
+    std::atomic<bool> longStarted { false };
+    std::atomic<bool> releaseLong { false };
+    server.setCommandHandler ([&] (const juce::String& command) {
+        if (command.contains ("\"cmd\":\"long\""))
+        {
+            longStarted.store (true);
+            while (! releaseLong.load())
+                std::this_thread::sleep_for (std::chrono::milliseconds (5));
+            return "{\"ok\":true,\"final\":1}\n";
+        }
+        return "{\"ok\":true,\"fast\":1}\n";
+    });
+    server.startup();
+
+    HANDLE client = connectClient();
+    REQUIRE (client != INVALID_HANDLE_VALUE);
+
+    DWORD written = 0;
+    const char* longCmd = "{\"cmd\":\"long\"}";
+    REQUIRE (::WriteFile (client, longCmd, (DWORD) std::strlen (longCmd),
+                          &written, nullptr) != FALSE);
+
+    for (int i = 0; i < 200 && ! longStarted.load(); ++i)
+        std::this_thread::sleep_for (std::chrono::milliseconds (10));
+    REQUIRE (longStarted.load());
+
+    // The fast command must not be answered while the long command runs.
+    DWORD written2 = 0;
+    const char* fastCmd = "{\"cmd\":\"fast\"}";
+    REQUIRE (::WriteFile (client, fastCmd, (DWORD) std::strlen (fastCmd),
+                          &written2, nullptr) != FALSE);
+
+    // Nothing may be pending: PeekNamedPipe (non-blocking) must see 0 bytes.
+    DWORD available = 0, totalBytes = 0;
+    BOOL peekOk = ::PeekNamedPipe (client, nullptr, 0, nullptr, &available, &totalBytes);
+    REQUIRE (peekOk != FALSE);
+    REQUIRE (available == 0);
+
+    // Release: the long final response arrives first, then the queued fast
+    // response (FIFO order preserved).
+    releaseLong.store (true);
+    char buffer[1024] = {};
+    DWORD read = 0;
+    REQUIRE (::ReadFile (client, buffer, (DWORD) (sizeof (buffer) - 1),
+                         &read, nullptr) != FALSE);
+    buffer[read] = '\0';
+    REQUIRE (std::string (buffer) == "{\"ok\":true,\"final\":1}\n");
+    REQUIRE (::ReadFile (client, buffer, (DWORD) (sizeof (buffer) - 1),
+                         &read, nullptr) != FALSE);
+    buffer[read] = '\0';
+    REQUIRE (std::string (buffer) == "{\"ok\":true,\"fast\":1}\n");
+
+    ::CloseHandle (client);
+    server.shutdown();
+}
+
+//==============================================================================
+// Test C3 (issue #2) — emitLine pushes an intermediate progress line to the
+// client while the worker serves a long command, BEFORE the final response.
+//==============================================================================
+
+TEST_CASE ("PipeServer: emitLine pushes progress during a long command (issue #2)",
+           "[pipeserver][concurrency]")
+{
+    PipeServer server;
+
+    std::atomic<bool> longStarted { false };
+    std::atomic<bool> releaseLong { false };
+    server.setCommandHandler ([&] (const juce::String& command) {
+        if (command.contains ("\"cmd\":\"long\""))
+        {
+            longStarted.store (true);
+            while (! releaseLong.load())
+                std::this_thread::sleep_for (std::chrono::milliseconds (5));
+            return "{\"ok\":true,\"final\":1}\n";
+        }
+        return "{}\n";
+    });
+    server.startup();
+
+    HANDLE client = connectClient();
+    REQUIRE (client != INVALID_HANDLE_VALUE);
+
+    DWORD written = 0;
+    const char* longCmd = "{\"cmd\":\"long\"}";
+    REQUIRE (::WriteFile (client, longCmd, (DWORD) std::strlen (longCmd),
+                          &written, nullptr) != FALSE);
+
+    for (int i = 0; i < 200 && ! longStarted.load(); ++i)
+        std::this_thread::sleep_for (std::chrono::milliseconds (10));
+    REQUIRE (longStarted.load());
+
+    // Push a progress line while the worker is busy; the client must read it
+    // before the final response.
+    server.emitLine ("{\"ok\":true,\"progress\":0.5,\"event_index\":2,\"event_total\":4}\n");
+
+    char buffer[1024] = {};
+    DWORD read = 0;
+    REQUIRE (::ReadFile (client, buffer, (DWORD) (sizeof (buffer) - 1),
+                         &read, nullptr) != FALSE);
+    buffer[read] = '\0';
+    REQUIRE (std::string (buffer) == "{\"ok\":true,\"progress\":0.5,\"event_index\":2,\"event_total\":4}\n");
+
+    releaseLong.store (true);
+    REQUIRE (::ReadFile (client, buffer, (DWORD) (sizeof (buffer) - 1),
+                         &read, nullptr) != FALSE);
+    buffer[read] = '\0';
+    REQUIRE (std::string (buffer) == "{\"ok\":true,\"final\":1}\n");
+
+    ::CloseHandle (client);
+    server.shutdown();
+}
+
+//==============================================================================
 // Test R3 — message framing / response shape regression: several commands on
 // one connection each get exactly one exact response (message mode, no byte
 // corruption). Guards the JSON line protocol's 1:1 request/response shape.
