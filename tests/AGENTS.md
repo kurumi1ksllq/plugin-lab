@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；208 个 TEST_CASE（2026-08-10 实测 208/208 绿：基线 186 + 块 E2 4 个 [multitone] + 块 E1 5 个（2 [freqresponse][mls] + 3 [commandparser][measure][excitation]）+ 块 E 审查修复 4 个（[freqresponse][mls] 1 + [commandparser][measure][excitation] 3）+ 块 B1 3 个（[wavexporter] 1 + [commandparser][exportwav] 2）+ 块 B2 6 个（[paramtimeline] 3 + [commandparser] timeline 命令 3））。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
+Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；265 个 TEST_CASE（2026-08-11 实测 265/265 绿：基线 208 + 块 D 新增 57 个——[childcoordinator] 11（S1-S7 + R1-R4）+ [childprotocol] 3 + [childrestart] 7（R1-R7）+ [childparity] 2 + [wavcapturereader] 5 + [childmeasure] 6（R1-R5 + success-resets）+ [commandparser][routing] 5 + [commandparser][loadplugin-blacklist] 5 + [pipeserver] 2（R1 reconnect + R2 shutdown）+ 其余配套 11）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
 
 ## RUN
 
@@ -39,6 +39,7 @@ Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`ju
 ## CONVENTIONS
 
 - `TEST_CASE` 描述性命名 + tags（如 `[timeconstants][known-attack]`）
+- **测试名必须纯 ASCII**：非 ASCII 字符（如 °）会在 ctest→Catch2 过滤串经 cp437/cp1252 控制台（GitHub Actions runner）往返时损坏——Catch2 报 `No test cases matched`，测试静默不跑且 ctest 判失败（2026-08-11 真机：唯一带 ° 的测试在 CI 必挂、本地 cp936 恰可跑，见 STATUS.md）
 - Arrange/Act/Assert 注释分节
 - DSP 浮点断言用 `Catch::Approx(...).margin(...)`
 - 回调完成标志用 `std::atomic<bool>` 按引用捕获
@@ -52,4 +53,5 @@ Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`ju
 
 - `PipeServerTests` 创建**真实** `\\.\pipe\PluginLab`：必须串行运行，且同时不能有其他 PluginLab 实例
 - 禁外部音频素材、禁测试源里写 main()
+- **真插件例外（2026-08-10 块 D T3/T5 授权）**：`ChildHostParityTests.cpp` 与 `ChildProtocolTests.cpp` 用真实 VST3（`CHILD_PARITY_PLUGIN` 编译定义，当前 magic.CURVE.vst3）——前者做子进程 vs 宿主直测端到端比对（<0.5dB 验收），后者验证 snapshot_params/restore_params 稳定 id 键控（D3a，需真插件参数集）。这是「无外部素材」规则的**登记例外**（黑盒测量/参数契约验收必须真插件，假插件不能顶替）；插件缺失时 SKIP（Catch2 SKIP 语义）不 fail；其余测试仍守无外部素材
 - 不属于 ctest 的验证：`tools/verify_export.py`、`tools/reverse_derive.py`（stdlib-only Python，真插件验收，手动跑）

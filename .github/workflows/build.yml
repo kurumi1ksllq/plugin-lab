@@ -1,0 +1,42 @@
+# CI 门禁：Windows/MSVC 构建 + 单元测试（连跑 2 次验稳定）
+# 分支保护把此 job 设为 main 的 required status check —— PR 不绿不能合。
+# 本地复刻：cmake -S . -B build -DBUILD_TESTS=ON && cmake --build build --config Release
+#            ctest --test-dir build -C Release --timeout 180（连跑 2 次）
+name: build-and-test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 注意：job 名 = GitHub 上报的 check 名，必须与 main 分支保护的
+  # required status check 上下文（build-and-test）一致，否则 PR 永远 BLOCKED。
+  build-and-test:
+    name: build-and-test
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # JUCE 由根 CMakeLists.txt 经 FetchContent 拉取（master, GIT_SHALLOW）
+      - name: Configure (BUILD_TESTS=ON)
+        run: cmake -S . -B build -DBUILD_TESTS=ON
+
+      # /W4 /WX 警告即错误 —— 编译失败即 CI 失败
+      - name: Build (Release)
+        run: cmake --build build --config Release
+
+      - name: Test (run 1)
+        run: ctest --test-dir build -C Release --timeout 180 --output-on-failure
+
+      # 项目惯例：连跑 2 次验稳定性（见 AGENTS.md COMMANDS）。
+      # run 2 无条件执行：run 1 失败但 run 2 通过 = flaky，仍需暴露出来。
+      - name: Test (run 2)
+        if: always()
+        run: ctest --test-dir build -C Release --timeout 180 --output-on-failure

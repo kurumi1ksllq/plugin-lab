@@ -10,6 +10,7 @@
 #include "../analysis/GainReduction.h"
 #include "../analysis/TimeConstants.h"
 #include "../scan/ScanEngine.h"
+#include "../host/ChildMeasureContract.h"
 
 /**
  * Aggregated measurement outcome passed to the UI after analysis + export.
@@ -86,6 +87,26 @@ public:
         scanCompleteCallback = std::move (cb);
     }
 
+    /** Set the out-of-process measurement callback (block D, D6). Invoked
+     *  synchronously by the measure command when the loaded plugin is
+     *  blacklisted — a blacklisted plugin is never measured in the host.
+     *  Implemented by ChildMeasureOrchestrator (host-side); empty by default,
+     *  in which case the measure command fails with an explicit error instead
+     *  of falling back to host-direct measurement. */
+    void setChildMeasureCallback (ChildMeasureContract::Callback cb)
+    {
+        childMeasureCallback = std::move (cb);
+    }
+
+    /** Set the child-measure target path (block D, D6 routing gap fix). The
+     *  host never loads a blacklisted plugin (B+ decision), so there is no
+     *  host plugin instance for the measure command to resolve — the host
+     *  load path (Main.cpp loadPluginByDescription) reports the skipped
+     *  plugin's fileOrIdentifier here instead. With no plugin instance and
+     *  an empty path the measure command fails with "no session or plugin";
+     *  with a non-empty (blacklisted) path it routes to the child. */
+    void setChildMeasurePath (const juce::String& p) { childMeasurePath = p; }
+
     //==============================================================================
     /** Process a JSON command and return a JSON response. */
     juce::String handleCommand (const juce::String& jsonCommand);
@@ -104,6 +125,11 @@ private:
     std::function<void(const juce::String&)> statusCallback;
     std::function<void(const MeasurementResults&)> measurementCompleteCallback;
     std::function<void(const ScanEngine::ScanResult&)> scanCompleteCallback;
+    ChildMeasureContract::Callback childMeasureCallback;
+
+    // D6: child-measure target path of a blacklisted plugin that was never
+    // loaded in the host (set by the host load path; see the measure case).
+    juce::String childMeasurePath;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CommandParser)
 };

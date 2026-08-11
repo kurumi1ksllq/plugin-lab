@@ -1,6 +1,8 @@
 #include "CommandParser.h"
 #include "Protocol.h"
 #include "../analysis/Export.h"
+#include "../analysis/ChildWavAnalyzer.h"
+#include "../utils/CrashLog.h"
 #include "../analysis/HarmonicAnalysis.h"
 #include "../analysis/CompressionCurve.h"
 #include "../analysis/GainReduction.h"
@@ -442,6 +444,42 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 return Protocol::makeResponse (true, R"("name":")" + escapeJsonString (d.name) + "\"");
             }
         }
+
+        // D6 routing gap fix (Spec gap 5): a blacklisted plugin never appears
+        // in knownPlugins (the scanner skips it), so the loop above cannot
+        // address it — "plugin not found" made the child-host path
+        // (Main.cpp loadPluginByDescription blacklist branch) unreachable.
+        // Fall back to the persistent blacklist itself: match the request
+        // against each entry exactly, or by the entry's file name without its
+        // extension, case-insensitively ("Pianoteq 9" <-> "Pianoteq 9.vst3").
+        // On a hit a minimal description is synthesized and dispatched through
+        // the same loadPluginCallback — the host sees a blacklisted path and
+        // routes to the child-measure host instead of loading in-process
+        // (B+ decision, ADR-D-6/7).
+        {
+            const auto blacklist = pluginManager->getBlacklistedFilesSnapshot();
+            for (const auto& blacklistedPath : blacklist)
+            {
+                const juce::File blacklistedFile (blacklistedPath);
+                const bool exactHit = blacklistedPath == path;
+                const bool nameHit =
+                    blacklistedFile.getFileNameWithoutExtension().equalsIgnoreCase (path);
+                if (exactHit || nameHit)
+                {
+                    if (loadPluginCallback)
+                    {
+                        juce::PluginDescription desc;
+                        desc.fileOrIdentifier = blacklistedPath;
+                        desc.name = blacklistedFile.getFileNameWithoutExtension();
+                        desc.pluginFormatName = "VST3";
+                        juce::MessageManager::callAsync ([this, desc] { loadPluginCallback (desc); });
+                    }
+                    return Protocol::makeResponse (true,
+                        R"("name":")" + escapeJsonString (blacklistedFile.getFileNameWithoutExtension())
+                        + R"(","blacklisted":true)");
+                }
+            }
+        }
         return Protocol::makeResponse (false, R"("error":"plugin not found")");
     }
 
@@ -531,8 +569,41 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     // --- measure ---
     if (cmd == "measure")
     {
-        if (session == nullptr || plugin == nullptr)
+        if (session == nullptr)
             return Protocol::makeResponse (false, R"("error":"no session or plugin")");
+
+        // --- D6: out-of-process routing for blacklisted plugins ---
+        // A blacklisted plugin is a known host-killer (Pianoteq family): it
+        // is NEVER measured in the host, even as a fallback. With a host
+        // plugin instance its fileOrIdentifier is resolved exactly like
+        // buildExportContext does (fillInPluginDescription). Without one —
+        // the B+ decision: the host load path skips blacklisted plugins
+        // entirely, so plugin stays nullptr — the child-measure target path
+        // (setChildMeasurePath, Main.cpp loadPluginByDescription) carries the
+        // routing; it routes only while the target path is still blacklisted
+        // (a cleared blacklist must not silently route). When the
+        // child-measure callback is not configured the command fails
+        // explicitly instead of loading the plugin in the host (safety
+        // first — risk-1 ruling, ADR-D-7).
+        bool routeToChild = false;
+        if (plugin != nullptr)
+        {
+            juce::PluginDescription desc;
+            plugin->fillInPluginDescription (desc);
+            routeToChild = pluginManager != nullptr
+                           && pluginManager->isBlacklistedPath (desc.fileOrIdentifier);
+        }
+        else if (! childMeasurePath.isEmpty())
+        {
+            routeToChild = pluginManager != nullptr
+                           && pluginManager->isBlacklistedPath (childMeasurePath);
+        }
+
+        if (plugin == nullptr && ! routeToChild)
+            return Protocol::makeResponse (false, R"("error":"no session or plugin")");
+
+        if (routeToChild && ! childMeasureCallback)
+            return Protocol::makeResponse (false, R"("error":"child measurement not configured")");
 
         // --- input source (default: signal) ---
         auto sourceStr = obj->getProperty ("source").toString();
@@ -643,6 +714,79 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (true, d);
         };
 
+        // Child-process path (D6): build the ChildMeasureRequest from the
+        // already-validated command fields and the session, invoke the
+        // orchestrator callback synchronously (it owns the coordinator +
+        // restart + parameter-restore sequence), and map its outcome onto
+        // the same response shape the in-process path produces (ADR-D-6;
+        // field names match the contract table result row).
+        auto runChildMeasurement = [&]() -> juce::String
+        {
+            ChildMeasureContract::ChildMeasureRequest req;
+
+            // Protocol vocabulary == child vocabulary ("frequency_response"
+            // etc., contract table); `t` is already validated above. Non-freq
+            // types are rejected by the orchestrator (ADR-D-7) — CommandParser
+            // passes the error through, never routing back to the host.
+            req.type = t;
+
+            // Excitation mirrors buildExportContext: only frequency_response
+            // can be mls; other types forced sweep above.
+            req.excitation = session->getFreqExcitation() ? Protocol::Excitation::mls
+                                                          : Protocol::Excitation::sweep;
+            req.sampleRate = session->getSampleRate();
+            req.blockSize  = session->getBlockSize();
+            req.exportPath = path;
+            req.wavPath    = wavPathFor (path).getFullPathName();
+
+            const auto outcome = childMeasureCallback (req);
+
+            if (! outcome.ok)
+                return Protocol::makeResponse (false,
+                    R"("error":")" + escapeJsonString (outcome.error) + "\"");
+
+            // Host-side analysis of the child's WAV (ADR-D-6 / D2b): the
+            // child owns the plugin instance and ships a dry/wet WAV mirror
+            // plus metadata (name / class_id / latency_samples). The host
+            // has no plugin instance for a blacklisted plugin, so
+            // ChildWavAnalyzer builds the export Context from that metadata
+            // and the measure-request parameters, producing the same
+            // frequency_response JSON the in-process path writes. An
+            // unreadable WAV (empty return) fails the measurement instead of
+            // answering ok with an export file that was never written.
+            const auto& r = outcome.result;
+            const auto exportJson = ChildWavAnalyzer::analyzeChildFrequencyResponse (
+                juce::File (r.wavPath), r.channels, r.rate,
+                session->getBlockSize(), req.excitation, session->getFreqMLSLength(),
+                r.name, r.classId, r.latencySamples);
+
+            if (exportJson.isEmpty())
+                return Protocol::makeResponse (false, R"("error":"child measurement failed")");
+
+            Export::writeToFile (exportJson, juce::File (r.exportPath));
+
+            // Metadata reported by the child (it owns the instance, ADR-D-6);
+            // the four fields the in-process path also returns stay aligned.
+            juce::String d = R"("samples":)" + juce::String (r.samples)
+                           + R"(,"rate":)"    + juce::String (r.rate)
+                           + R"(,"export_path":")" + escapeJsonString (r.exportPath) + "\""
+                           + R"(,"wav_path":")" + escapeJsonString (r.wavPath) + "\""
+                           + R"(,"name":")" + escapeJsonString (r.name) + "\""
+                           + R"(,"class_id":")" + escapeJsonString (r.classId) + "\""
+                           + R"(,"channels":)" + juce::String (r.channels)
+                           + R"(,"latency_samples":)" + juce::String (r.latencySamples);
+            return Protocol::makeResponse (true, d);
+        };
+
+        // Both paths are blocking (seconds): the in-process path runs the
+        // SweepRunner, the child path waits for the orchestrator's restart +
+        // load + restore + measure sequence. Select the runner up front so a
+        // single dispatch strategy serves both (一致处理).
+        auto run = [&]() -> juce::String
+        {
+            return routeToChild ? runChildMeasurement() : runMeasurement();
+        };
+
         // Dispatch strategy:
         //   - already on the message thread (unit tests, or when called from
         //     within a message callback):  execute synchronously.
@@ -651,7 +795,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         //     thread (required by Pro-Q 4 and similar VST3 plugins).
         if (juce::MessageManager::getInstance()->isThisTheMessageThread())
         {
-            return runMeasurement();
+            return run();
         }
 
         juce::WaitableEvent done;
@@ -659,7 +803,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
         juce::MessageManager::callAsync ([&]
         {
-            response = runMeasurement();
+            response = run();
             done.signal();
         });
 

@@ -40,7 +40,7 @@ source/
 
 （根级通用约定：双编译、include 相对路径、无异常、线程铁律——见根 AGENTS.md，此处只列 source 特有）
 
-- `/EHa` 只用于指定 TU：`host/` 两个（PluginManager + EditorCrashGuard）+ `capture/SweepRunner.cpp`（2026-08-08 块 C 任务 1 授权例外：测量路径保护，根 CMake 与 tests/CMakeLists 各一处 `set_source_files_properties`），勿再扩散
+- `/EHa` 只用于指定 TU：`host/` 两个（PluginManager + EditorCrashGuard）+ `capture/SweepRunner.cpp`（2026-08-08 块 C 任务 1 授权例外：测量路径保护，根 CMake 与 tests/CMakeLists 各一处 `set_source_files_properties`）+ `source/child/PluginHostChild.cpp`（2026-08-10 块 D D1a 授权例外：子进程加载插件路径保护，仅根 CMake 一处，子进程不编入测试）+ `source/capture/SweepRunner.cpp`（子进程 PluginHostChild 目标内的第二处 /EHa，2026-08-10 块 D D2a 授权例外：子进程内同跑插件 processBlock，需在 PluginHostChild 目标下单独 set_source_files_properties，目录作用域不传播）+ `tests/ChildHostParityTests.cpp`（2026-08-10 块 D T3 授权例外：真插件端到端比对测试，进程内加载 VST3 DLL 需保护，仅 tests 一处），勿再扩散
 - 所有类 `JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR`；成员类内初始化默认值（sampleRate=48000.0, blockSize=512）
 - `Main.cpp:455/470` 是全库仅有的两个无 CRASH_LOG catch（ListBox 回调，antipattern，勿复制）
 

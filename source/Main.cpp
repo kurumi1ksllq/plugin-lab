@@ -1,5 +1,7 @@
 #include <JuceHeader.h>
 #include "host/PluginManager.h"
+#include "host/ChildProcessCoordinator.h"
+#include "host/ChildMeasureOrchestrator.h"
 #include "ui/PluginEditorWindow.h"
 #include "ui/PlotWidget.h"
 #include "utils/CrashLog.h"
@@ -60,6 +62,48 @@ struct CrashFilterInstaller
     CrashFilterInstaller() { SetUnhandledExceptionFilter (crashFilter); }
 } crashFilterInstaller;
 #endif
+
+//==============================================================================
+// Block D (out-of-process VST3 host): locate the PluginHostChild executable.
+// The VST3Scanner precedent (tools/CMakeLists.txt) copies the helper exe next
+// to Plugin Lab.exe via a POST_BUILD step; PluginHostChild has no such copy
+// yet (reported to lead), so we also discover the build-tree artefact
+// (<build>/PluginHostChild_artefacts/<config>/PluginHostChild.exe — both the
+// multi-config MSVC and single-config Ninja layouts).
+static juce::File locateChildHostExe()
+{
+    const auto exeDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile)
+                            .getParentDirectory();
+
+    // 1. Sibling of the main exe — matches the VST3Scanner deployment layout;
+    //    zero code change once the lead adds the POST_BUILD copy.
+    const auto sibling = exeDir.getChildFile ("PluginHostChild.exe");
+    if (sibling.existsAsFile())
+        return sibling;
+
+    // 2. Build-tree discovery: walk up to the build root and look for
+    //    PluginHostChild_artefacts/ (multi-config MSVC: exe inside a <config>/
+    //    subdir; single-config Ninja: exe directly inside).
+    for (auto dir = exeDir; ! dir.isRoot(); dir = dir.getParentDirectory())
+    {
+        const auto artefacts = dir.getChildFile ("PluginHostChild_artefacts");
+        if (! artefacts.isDirectory())
+            continue;
+
+        for (auto& config : artefacts.findChildFiles (juce::File::findDirectories, false))
+        {
+            const auto candidate = config.getChildFile ("PluginHostChild.exe");
+            if (candidate.existsAsFile())
+                return candidate;
+        }
+
+        const auto direct = artefacts.getChildFile ("PluginHostChild.exe");
+        if (direct.existsAsFile())
+            return direct;
+    }
+
+    return {};
+}
 
 //==============================================================================
 class MainContentComponent : public juce::Component,
@@ -322,6 +366,77 @@ public:
             triggerAsyncUpdate();
         });
 
+        // --- Out-of-process measurement (block D, D6) ---
+        // Blacklisted plugins (known host-killers, e.g. the Pianoteq family)
+        // are measured in the PluginHostChild subprocess — never loaded in
+        // this process (design Q1 B+ / ADR-D-7). The coordinator owns the
+        // child lifecycle + heartbeat watchdog; the orchestrator owns the D3
+        // crash-recovery sequence (restart + crash gate). The host stays the
+        // blacklist's only writer (design Q3): a child crash is recorded here.
+        const auto childExe = locateChildHostExe();
+        if (! childExe.existsAsFile())
+            CRASH_LOG_WARN ("PluginHostChild exe not found",
+                "child measurement will fail until PluginHostChild.exe is deployed "
+                "next to Plugin Lab.exe (VST3Scanner precedent)");
+        childCoordinator = std::make_unique<PluginHostChildCoordinator> (childExe.getFullPathName());
+        childAlive = std::make_shared<std::atomic<bool>> (true);
+
+        // onCrash fires on the coordinator's internal reader thread: the
+        // blacklist write + CrashLog are thread-safe here (addToBlacklistLocked
+        // is mutex-guarded, saveCache is the same atomic write the scan/load
+        // threads use) and run directly; the status-label hop goes through
+        // callAsync to the message thread, alive-guarded (childAlive, same
+        // pattern as scanAlive/loadAlive) because the reader may outlive the
+        // component. The D3 restart is NOT done here — the orchestrator's
+        // run() performs it from the message thread (the coordinator refuses
+        // restart() from inside onCrash by design).
+        childCoordinator->setOnCrash ([this, alive = childAlive, pm = pluginManager]
+                                      (const juce::String& detail)
+        {
+            // Bundle-key normalization — same template as PluginManager's
+            // load-timeout path (PluginManager.cpp:497-502): the inner-DLL
+            // path never matches scan enumeration, the bundle path does.
+            juce::String key;
+            {
+                std::lock_guard<std::mutex> lock (childPluginPathLock);
+                key = childPluginPath;
+            }
+            const auto contentsIdx = key.indexOf ("\\Contents");
+            if (contentsIdx > 0)
+                key = key.substring (0, contentsIdx);
+
+            if (pm && key.isNotEmpty())
+            {
+                pm->addToBlacklistLocked (key);
+                pm->saveCache();          // 立即持久化——重启后不再重试同一杀手
+            }
+            CRASH_LOG_WARN ("Child process crash", detail);
+
+            juce::MessageManager::callAsync ([alive, this, detail]
+            {
+                if (! alive->load())
+                    return;               // component is tearing down — never touch GUI
+                statusLabel->setText ("Child crash: " + detail + " - blacklisted, retrying",
+                                      juce::dontSendNotification);
+            });
+        });
+
+        // Routing hook (T2): the measure command invokes this for blacklisted
+        // plugins. The orchestrator is re-bound to the currently loaded
+        // plugin's path in loadPluginByDescription — the contract callback
+        // carries no plugin context (ChildMeasureRequest has no path field).
+        commandParser->setChildMeasureCallback ([this] (const ChildMeasureContract::ChildMeasureRequest& req)
+        {
+            if (childMeasureOrchestrator == nullptr)
+            {
+                ChildMeasureContract::ChildMeasureOutcome outcome;
+                outcome.ok = false;
+                outcome.error = "child measurement not configured";
+                return outcome;
+            }
+            return childMeasureOrchestrator->run (req);
+        });
+
         pipeServer = std::make_unique<PipeServer>();
         pipeServer->setCommandHandler ([this] (const juce::String& cmd)
         {
@@ -354,6 +469,15 @@ public:
         // 3. Shut down the pipe server (joins IPC thread).
         if (pipeServer)
             pipeServer->shutdown();
+
+        // 3.5. Stop the child host (block D): joins its reader thread so no
+        //    onCrash can fire during member teardown. The alive flag goes
+        //    false FIRST — a callAsync status hop already queued by the reader
+        //    then bails on the message thread. Deliberate stop, never a crash.
+        if (childAlive)
+            *childAlive = false;
+        if (childCoordinator)
+            childCoordinator->stop();
 
         // 4. Mark the message-thread completion lambdas dead, then abandon the
         //    dedicated scan/load threads WITHOUT joining (P0, plan step 0): a
@@ -1013,6 +1137,38 @@ private:
     {
         if (loadingRunning.exchange (true))
             return;
+
+        // Block D (D6): re-bind the child-measure orchestrator to this
+        // plugin. The routing callback carries no plugin context (the
+        // ChildMeasureRequest has no path field), so the orchestrator — whose
+        // constructor fixes the path forwarded to the child's load command —
+        // is rebuilt per load. Cheap: no process spawn happens here, run()
+        // spawns per measurement. The guarded copy serves the onCrash
+        // blacklist write (reader thread reads it).
+        {
+            std::lock_guard<std::mutex> lock (childPluginPathLock);
+            childPluginPath = desc.fileOrIdentifier;
+        }
+        if (childCoordinator)
+            childMeasureOrchestrator = std::make_unique<ChildMeasureOrchestrator> (
+                childCoordinator.get(), desc.fileOrIdentifier);
+
+        // Block D (D6, Spec-gap fix): a path-blacklisted plugin is NEVER
+        // loaded in the host (B+ decision — it is a host-killer candidate,
+        // loadPlugin only blocks by name at PluginManager.cpp:443). We still
+        // bind the orchestrator above so a subsequent measure command routes
+        // to the child, but skip the in-process load thread entirely. The
+        // command parser learns the target path so measure can route with no
+        // host plugin instance.
+        if (pluginManager->isBlacklistedPath (desc.fileOrIdentifier))
+        {
+            commandParser->setChildMeasurePath (desc.fileOrIdentifier);
+            loadingRunning.store (false);
+            statusLabel->setText ("Blacklisted — child-hosted: " + desc.name,
+                                  juce::dontSendNotification);
+            CRASH_LOG_INFO ("Blacklisted plugin routed to child", desc.name);
+            return;
+        }
 
         juce::String safeName = desc.name;
         CRASH_LOG_INFO ("Loading", safeName);
@@ -1849,6 +2005,20 @@ private:
     std::unique_ptr<MeasurementSession> measurementSession;
     std::unique_ptr<CommandParser> commandParser;
     std::unique_ptr<PipeServer> pipeServer;
+
+    // Block D (out-of-process measurement): the coordinator owns the child
+    // lifecycle, the orchestrator the D3 crash-recovery sequence. Declared
+    // with the IPC block so the coordinator's reader thread is stopped in
+    // ~MainContentComponent (step 3.5) before any of these die; the onCrash
+    // closure additionally holds its own shared_ptr copy of PluginManager and
+    // the GUI hop is alive-guarded via childAlive. childPluginPath is written
+    // on the message thread (loadPluginByDescription) and read on the reader
+    // thread (onCrash) — guarded by childPluginPathLock.
+    std::unique_ptr<PluginHostChildCoordinator> childCoordinator;
+    std::unique_ptr<ChildMeasureOrchestrator> childMeasureOrchestrator;
+    std::shared_ptr<std::atomic<bool>> childAlive;
+    std::mutex childPluginPathLock;
+    juce::String childPluginPath;
 
     // Measurement result held for UI rendering (T6/T8: all three types)
     MeasurementResults measurementResult;

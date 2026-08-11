@@ -26,14 +26,20 @@ target_sources(unit_tests PRIVATE
     ../source/analysis/GainReduction.cpp ../source/analysis/TimeConstants.cpp
     ../source/analysis/CompressionFamily.cpp
     ../source/analysis/WavExporter.cpp
+    ../source/analysis/WavCaptureReader.cpp
+    ../source/analysis/ChildWavAnalyzer.cpp
     ../source/utils/FftHelper.cpp ../source/utils/MathUtils.cpp
     ../source/ipc/CommandParser.cpp
     ../source/ipc/PipeServer.cpp
     ../source/host/PluginManager.cpp
     ../source/host/EditorCrashGuard.cpp
+    ../source/host/ChildProcessCoordinator.cpp
+    ../source/host/ChildMeasureOrchestrator.cpp
     CommandParserStubs.cpp
     TestPlugin.h TestPluginTests.cpp TestCompressorPlugin.h TestCompressorPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp CaptureBufferTests.cpp FreqResponseTests.cpp ExportTests.cpp
     CommandParserTests.cpp PipeServerTests.cpp
+    CommandParserRoutingTests.cpp
+    CommandParserLoadPluginBlacklistTests.cpp
     PluginManagerTests.cpp
     FilePlaybackTests.cpp NoiseGeneratorTests.cpp EnvelopeSignalTests.cpp MultiToneTests.cpp
     GainReductionTests.cpp ScanEngineTests.cpp
@@ -42,7 +48,14 @@ target_sources(unit_tests PRIVATE
     ComponentVisibilityTests.cpp
     EditorCrashGuardTests.cpp
     WavExporterTests.cpp
-    ParameterTimelineTests.cpp)
+    WavCaptureReaderTests.cpp
+    ParameterTimelineTests.cpp
+    ChildProcessCoordinatorTests.cpp
+    PluginHostChildIntegrationTests.cpp
+    ChildHostParityTests.cpp
+    ChildProtocolTests.cpp
+    ChildProcessRestartTests.cpp
+    ChildMeasureOrchestratorTests.cpp)
 target_link_libraries(unit_tests PRIVATE
     juce::juce_audio_basics juce::juce_audio_processors juce::juce_audio_utils juce::juce_dsp
     juce::juce_audio_formats
@@ -68,4 +81,74 @@ set_source_files_properties(../source/capture/SweepRunner.cpp PROPERTIES
 set_source_files_properties(../source/host/EditorCrashGuard.cpp PROPERTIES
     COMPILE_FLAGS "/EHa"
 )
+
+# ChildHostParityTests.cpp loads and processes a REAL VST3 plugin in-process
+# (T3, D2b acceptance); /EHa matches PluginHostChild.cpp's plugin-path
+# protection so an SEH fault in the plugin DLL is intercepted, not a crash.
+set_source_files_properties(ChildHostParityTests.cpp PROPERTIES
+    COMPILE_FLAGS "/EHa"
+)
+
+# ── TestChildProcess: stdin/stdout JSON-line double for the
+#    ChildProcessCoordinator tests (block D1c) ──────────────────────────────
+# Plain exe on purpose: it only uses Win32 console I/O, no JUCE. The exe path
+# is baked into unit_tests as TEST_CHILD_EXE (absolute at generation time);
+# add_dependencies guarantees it is built before unit_tests so the compiled
+# path always exists.
+add_executable(TestChildProcess TestChildProcess.cpp)
+if(MSVC)
+    target_compile_options(TestChildProcess PRIVATE /W4 /permissive- /WX /utf-8)
+endif()
+add_dependencies(unit_tests TestChildProcess)
+target_compile_definitions(unit_tests PRIVATE
+    TEST_CHILD_EXE="$<TARGET_FILE:TestChildProcess>")
+
+# The real out-of-process host child (block D1a+D1b, root CMakeLists.txt)
+# backs the D1d integration tests. The target is defined in the parent scope
+# before add_subdirectory(tests), so $<TARGET_FILE:PluginHostChild> resolves;
+# add_dependencies guarantees the real child is built before unit_tests.
+add_dependencies(unit_tests PluginHostChild)
+target_compile_definitions(unit_tests PRIVATE
+    PLUGIN_HOST_CHILD_EXE="$<TARGET_FILE:PluginHostChild>"
+    CHILD_PARITY_PLUGIN="C:/Program Files/Common Files/VST3/magic.CURVE.vst3"
+    # SuicidePlugin artifact (tests/CMakeLists.txt juce_add_plugin below):
+    #   build/tests/SuicidePlugin_artefacts/<CONFIG>/VST3/SuicidePlugin.vst3
+    # A .vst3 is a DIRECTORY — tests use exists() not existsAsFile().
+    # Forward slashes throughout (CMake normalizes; avoids MSVC C4129).
+    SUICIDE_PLUGIN="${CMAKE_CURRENT_BINARY_DIR}/SuicidePlugin_artefacts/$<CONFIG>/VST3/SuicidePlugin.vst3")
 catch_discover_tests(unit_tests)
+
+# ── SuicidePlugin: crash-injection VST3 fixture (block D3b / ADR-D-2) ───────
+# A real VST3 whose crash_mode parameter (0=passthrough / 1=ExitProcess(1) /
+# 2=abort()) lets the D3b auto-restart tests kill the child process on demand.
+# Built standalone (NOT into unit_tests — a single-process crash would kill the
+# test runner); the child host loads it via VST3PluginFormat and arms the crash
+# through the parameter interface. Artifact layout (JUCE):
+#   build/tests/SuicidePlugin_artefacts/<CONFIG>/VST3/SuicidePlugin.vst3/
+#       Contents/x86_64-win/SuicidePlugin.vst3
+juce_add_plugin(SuicidePlugin
+    PLUGIN_MANUFACTURER_CODE PLab
+    PLUGIN_CODE Scid
+    PRODUCT_NAME "SuicidePlugin"
+    FORMATS VST3)
+
+target_sources(SuicidePlugin PRIVATE
+    SuicidePlugin/SuicidePlugin.cpp
+    SuicidePlugin/SuicidePlugin.h)
+
+target_link_libraries(SuicidePlugin PUBLIC
+    juce::juce_audio_processors
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+
+target_compile_definitions(SuicidePlugin PUBLIC
+    JUCE_VST3_CAN_REPLACE_VST2=0)
+
+if(MSVC)
+    target_compile_options(SuicidePlugin PRIVATE /W4 /permissive- /WX /utf-8)
+endif()
+
+# The restart tests spawn the REAL child which loads the REAL SuicidePlugin
+# VST3 through VST3PluginFormat — guarantee the fixture is built before
+# unit_tests runs (same pattern as TestChildProcess / PluginHostChild).
+add_dependencies(unit_tests SuicidePlugin)
