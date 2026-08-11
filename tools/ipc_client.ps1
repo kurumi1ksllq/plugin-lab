@@ -96,12 +96,17 @@ try {
                     $nl = $pending.IndexOf("`n")
                     $line = $pending.Substring(0, $nl).TrimEnd("`r")
                     $pending = $pending.Substring($nl + 1)
-                    if ($line -match '"samples"|"export_path"|"error"') {
+                    # Intermediate lines: playTimeline progress pushes carry
+                    # "event_index"; after -CancelAfterMs fired, a bare
+                    # {"ok":true} is the stop ack (not the command's final).
+                    # Everything else is the final response.
+                    $intermediate = $line -match '"event_index"' -or
+                                    ($cancelSent -and $line.Trim() -eq '{"ok":true}')
+                    if (-not $intermediate) {
                         $finalResponse = $line
                         break
                     }
-                    # Intermediate line (progress / control ack) — stderr.
-                    if ($line) { [Console]::Error.WriteLine($line) }
+                    [Console]::Error.WriteLine($line)
                 }
                 if ($null -ne $finalResponse) { break }
             }
