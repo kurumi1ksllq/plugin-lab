@@ -478,6 +478,12 @@ public:
         });
 
         pipeServer = std::make_unique<PipeServer>();
+        // Issue #3: control commands are served inline on the pipe thread
+        // while long commands run on the worker — without this, stop during
+        // a hosted measure would queue behind the measure and stay
+        // unreachable. Must be non-blocking, thread-safe paths only.
+        pipeServer->setControlCommands ({ Protocol::Command::stop,
+                                          Protocol::Command::getScanStatus });
         pipeServer->setCommandHandler ([this] (const juce::String& cmd)
         {
             return commandParser->handleCommand (cmd);

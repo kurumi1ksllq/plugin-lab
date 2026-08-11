@@ -527,6 +527,10 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
   `wav_path`，客户端据此区分）。GUI 面板同步显示「事件 N/M」（~50 ms 节流）。
   依赖 PipeServer 并发模型（长命令在 worker 上跑，读循环继续服务控制命令——
   见 `source/ipc/AGENTS.md`）。
+- **事件按墙钟 elapsed 应用**：`applyEventsUpTo` 用 run 内 wall-clock ms 对比事件
+  `time_ms`。run 处理快于实时（纯计算，无音频设备时 5 s sweep 约 1 s 墙钟完成），
+  **墙钟超过 run 时长的晚事件不会应用**——录制时间戳含客户端进程延迟时尤其明显；
+  用 `rate` 预缩放（`effectiveMs = time_ms / rate`）把事件压进 run 墙钟窗口。
 - **回放产物绝不覆盖输入 timeline 文件**：`"tl.json"` → play JSON `"tl_play.json"`
   （sibling 手工拼接，`withFileExtension` 会产出 `tl._play.json`），WAV = `wavPathFor`（
   `.json→.wav` → `"tl_play.wav"`），布局同 §9（3 × 插件声道 `[dry, wet, bypass=dry]`）。
