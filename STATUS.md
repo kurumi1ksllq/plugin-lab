@@ -1,4 +1,4 @@
-# Plugin Lab — 当前状态 (2026-08-10)
+# Plugin Lab — 当前状态 (2026-08-11)
 
 ## 已验证通过 ✅
 
@@ -22,7 +22,7 @@
 1. **递归锁 bug（T1 前）：`loadPlugin()` 持有 listLock 又调 `getPluginDescription()` 内部再锁同一 mutex → std::system_error → 列表点击必失败**。修复：去掉外层锁。
 2. **Pianoteq 9 崩溃（oracle 分析确认）**：插件在 createPluginInstance 内部调用 ExitProcess/TerminateProcess，绕过所有 try/catch + SEH + minidump，宿主进程无征兆退出（无 dmp、无 crash 事件，仅 RADAR_PRE_LEAK_64 副作用）。
    - **对策**：`PluginManager::loadPlugin` 加黑名单拦截（Pianoteq 7/8/9 匹配），返回 nullptr + 警告日志，宿主不再被杀
-   - 长期方案：进程外托管（ChildProcessCoordinator）——**已实施（块 D，2026-08-11，见 docs/plan-block-d-out-of-process.md）**：黑名单插件经 PluginHostChild 子进程托管，D4 实战验收 Pianoteq 9 在子进程加载即杀子进程 → 宿主检测 heartbeat timeout → 自动重启 3 次上限 → 返回明确错误，**宿主永不死亡**
+   - 长期方案：进程外托管（ChildProcessCoordinator）——**已实施（块 D，2026-08-11，见 docs/archive/plan-block-d-out-of-process.md）**：黑名单插件经 PluginHostChild 子进程托管，D4 实战验收 Pianoteq 9 在子进程加载即杀子进程 → 宿主检测 heartbeat timeout → 自动重启 3 次上限 → 返回明确错误，**宿主永不死亡**
 3. **use-after-free 崩溃（Debug 构建 + 点击触发 0xc0000005，minidump 定位 atomic::operator++）**：`scanPlugins()`/`loadPluginByDescription()` 用 `std::thread([this]).detach()` + `callAsync([this])`，组件析构（关主窗口）时后台线程仍访问已析构的 this → 原子引用计数自增崩溃。
    - **对策**：改为 JUCE 标准 **ThreadPool + AsyncUpdater**（`threadPool->addJob(ThreadPoolJob)` + `triggerAsyncUpdate()`/`handleAsyncUpdate()`；析构时 `threadPool = nullptr` join 所有任务 + `cancelPendingUpdate()`）。
    - 已验证：快速点击 + 加载中关主窗口 3 次试验全部干净退出（修复前必崩）；全量 77 插件 76 成功（98.7%）0 崩溃。
@@ -81,7 +81,7 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 > 2026-08-10 更新：下方 T2/T3 历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成；块 B 记录模式于 2026-08-10 完成，见下方完成记录）。当前待办为路线图块 D，见 `docs/roadmap-next.md` §五执行状态：
 
-- **块 4 D 进程外托管**（**下一步**，设计门）：`docs/plan-block-d-out-of-process.md` 6 设计问题各附推荐+理由+备选+决策标准，逐条确认即拆票（D0-D6）
+- **块 4 D 进程外托管**（**下一步**，设计门）：`docs/archive/plan-block-d-out-of-process.md` 6 设计问题各附推荐+理由+备选+决策标准，逐条确认即拆票（D0-D6）
 
 ## 阶段 1 完成记录（2026-08-02）
 
@@ -201,16 +201,21 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 source/
 ├── Main.cpp              # 主窗口 + 专用扫描/加载线程 + 独立窗口管理
 ├── host/PluginManager    # VST3 扫描/加载（/EHa + 黑名单 + 死马踏板 + 看门狗）
+├── host/child*           # 进程外托管（块 D）：ChildProcessCoordinator / ChildMeasureOrchestrator / ChildMeasureContract（黑名单插件测量）
 ├── ui/PluginEditorWindow # 独立插件编辑器窗口（DocumentWindow 子类）
 ├── signal/               # 信号生成器 (SineSweep/MultiTone/ToneBurst/Impulse/FilePlayback/NoiseGenerator/EnvelopeSignal)
 ├── capture/              # 采集引擎 (AudioBuffer::CaptureBuffer/SweepRunner/MeasurementSession/ParameterTimeline)
 ├── analysis/             # 分析引擎 (FreqResponse/Harmonic/CompressionCurve/GainReduction/TimeConstants/CompressionFamily + Export + WavExporter)
-├── ipc/                  # Named Pipe 控制 (PipeServer/CommandParser/Protocol)
+├── ipc/                  # Named Pipe 控制 (PipeServer 双轨并发/CommandParser/Protocol)
+├── child/                # 子进程可执行（块 D）：PluginHostChild（VST3 加载 + 测量，stdin/stdout JSON 协议）
 ├── ui/PlotWidget         # 绘图组件
 └── utils/                # FftHelper/MathUtils/CrashLog
 tools/VST3Scanner         # 独立扫描工具（运行时死代码但仍在构建，主进程内扫描）
+tools/ipc_client.ps1      # NamedPipe 手动客户端（多行读取 + -CancelAfterMs，可配超时）
 tools/monitor.ps1         # 实时监控脚本（2026-08-02 b3e1813 移入 tools/）
-tools/ipc_client.ps1      # NamedPipe 手动客户端（可配超时）
+tools/pipe_client.py      # Python NamedPipe 客户端（stdlib + ctypes，batch_collect 依赖）
+tools/batch_collect.py    # 批量采集 CLI 驱动（dataset 流程编排）
+tools/compare_freq.py     # 频响对比（MLS vs sweep 验收，|Δ|<0.5dB）
 tools/reverse_derive.py   # 导出 JSON 反推验证（stdlib-only）
 tools/verify_export.py    # 导出 JSON 峰值/Q 验证（stdlib-only）
 DESIGN.md                 # 设计文档
@@ -310,7 +315,7 @@ DESIGN.md                 # 设计文档
 - **UADx 系列不可测**：processBlock 抛未知异常（块 C 保护兜底，测量返回失败不崩宿主）；magic.CURVE 编辑器消息重入致静默退出——真机验收统一用 Pro-Q 4（UADx 1176/LA-2A 等加载 OK 但测量不可用）
 - **回放进度为 spinner**（spec 原提"显示当前事件序号"未实现——playTimeline 协议无进度流，需扩展协议面，留待后续）
 
-## D 块完成记录（2026-08-11，块 4 D 进程外托管；计划 v2 见 docs/plan-block-d-out-of-process.md）
+## D 块完成记录（2026-08-11，块 4 D 进程外托管；计划 v2 见 docs/archive/plan-block-d-out-of-process.md）
 
 **commit 范围**：`d68b094`（D1+D3）→ `9771131`（D2）→ `7fbea02`（D6）→ `7370613`（ipc 客户端修复）→ `18079ef`（构建登记）→ `26fb746`（D 收尾文档，已 push origin/main）。
 
