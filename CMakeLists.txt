@@ -30,6 +30,8 @@ target_sources(PluginLab PRIVATE
     source/Main.cpp
     source/host/PluginManager.cpp
     source/host/EditorCrashGuard.cpp
+    source/host/ChildProcessCoordinator.cpp
+    source/host/ChildMeasureOrchestrator.cpp
     source/signal/SignalGenerator.cpp
     source/signal/SineSweep.cpp
     source/signal/MultiTone.cpp
@@ -54,6 +56,8 @@ target_sources(PluginLab PRIVATE
     source/analysis/TimeConstants.cpp
     source/analysis/CompressionFamily.cpp
     source/analysis/WavExporter.cpp
+    source/analysis/WavCaptureReader.cpp
+    source/analysis/ChildWavAnalyzer.cpp
     source/ipc/PipeServer.cpp
     source/ipc/CommandParser.cpp
     source/ui/PlotWidget.cpp
@@ -98,6 +102,85 @@ endif()
 if(MSVC)
     target_compile_definitions(PluginLab PRIVATE JUCE_DISABLE_ASSERTIONS=1)
 endif()
+
+# ── Out-of-process VST3 host child (Block D) ────────────────────────────────
+# Runs in a separate process so plugin crashes (e.g. Pianoteq calling
+# ExitProcess) only kill the child; the parent Plugin Lab survives. Template:
+# tools/CMakeLists.txt VST3Scanner console app. Protocol contract:
+# docs/plan-block-d-out-of-process.md §子进程 IPC 协议契约.
+juce_add_console_app(PluginHostChild
+    PRODUCT_NAME "PluginHostChild"
+)
+
+juce_generate_juce_header(PluginHostChild)
+
+target_sources(PluginHostChild PRIVATE
+    source/child/PluginHostChild.cpp
+    source/utils/CrashLog.cpp
+    # D2a: measurement pipeline (frozen SweepRunner generate→process→capture
+    # + the two freq excitations it needs: SineSweep / MLS Impulse). Dependency
+    # closure checked against the headers: SweepRunner.h pulls SignalGenerator.h
+    # + AudioBuffer.h; SweepRunner.cpp needs utils/CrashLog.h (already above);
+    # SineSweep/Impulse only need their own headers + <cmath> — no MathUtils /
+    # FftHelper in this closure.
+    source/capture/SweepRunner.cpp
+    source/capture/AudioBuffer.cpp
+    source/signal/SignalGenerator.cpp
+    source/signal/SineSweep.cpp
+    source/signal/Impulse.cpp
+)
+
+target_link_libraries(PluginHostChild PRIVATE
+    juce::juce_audio_basics
+    juce::juce_audio_processors
+    juce::juce_audio_utils
+    juce::juce_core
+    juce::juce_events
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags
+)
+
+target_compile_definitions(PluginHostChild PRIVATE
+    JUCE_PLUGINHOST_VST3=1
+)
+
+# runDispatchLoopUntil (pumped while waiting for createPluginInstanceAsync to
+# finish on the message thread) is only declared when this is 1.
+if(WIN32)
+    target_compile_definitions(PluginHostChild PRIVATE
+        JUCE_MODAL_LOOPS_PERMITTED=1
+    )
+endif()
+
+if(MSVC)
+    target_compile_options(PluginHostChild PRIVATE /W4 /permissive- /WX /utf-8)
+endif()
+
+# Copy PluginHostChild.exe next to Plugin Lab.exe after build (D6 release
+# layout: the parent's locateChildHostExe() finds it as a sibling first —
+# same POST_BUILD pattern as tools/CMakeLists.txt VST3Scanner:35-40).
+add_custom_command(TARGET PluginHostChild POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:PluginHostChild>"
+        "${CMAKE_CURRENT_BINARY_DIR}/PluginLab_artefacts/$<CONFIG>/PluginHostChild.exe"
+    COMMENT "Copying PluginHostChild to Plugin Lab directory"
+)
+
+# PluginHostChild.cpp touches plugin-DLL code paths (VST3 scan/create) and
+# needs /EHa so catch (...) also intercepts SEH faults (same mechanism as
+# PluginManager.cpp:106-108).
+set_source_files_properties(source/child/PluginHostChild.cpp PROPERTIES
+    COMPILE_FLAGS "/EHa"
+)
+
+# SweepRunner.cpp runs plugin processBlock/prepareToPlay inside the child too
+# (D2a measure): /EHa so catch (...) also intercepts SEH faults from a
+# misbehaving plugin. The set_source_files_properties call below the PluginLab
+# block (line ~169) is directory-scoped and does NOT propagate to this target —
+# it must be repeated for PluginHostChild explicitly.
+set_source_files_properties(source/capture/SweepRunner.cpp PROPERTIES
+    COMPILE_FLAGS "/EHa"
+)
 
 # ── Tools ───────────────────────────────────────────────────────────────────
 add_subdirectory(tools)
