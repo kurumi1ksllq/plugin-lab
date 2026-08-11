@@ -1351,7 +1351,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     // --- stopTimeline ---
     // Detaches the recorder, writes the recorded events to a timeline JSON
     // file and reports the event count. Shape documented in
-    // docs/data-schema.md §10.
+    // SPEC.md §10.
     if (cmd == Protocol::Command::stopTimeline)
     {
         if (! timeline.isRecording())
