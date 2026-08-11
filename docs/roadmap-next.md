@@ -2,6 +2,8 @@
 
 > 阶段 2-5 + 扫描优化全部完成后，剩余工作按五个方向排期。2026-08-08 用户选定：**五个方向全做**，执行顺序 `C → E → A∥B → D`，**从 A（批量采集管线）先开始**（C 顺延，不改顺序本身）。
 > 每块遵循项目铁律：TDD + 真机验收 + push + 代码审查；每块开工前单独规划（brainstorming → spec/tickets）。
+>
+> **2026-08-11 更新：五块（C/E/A/B/D）全部完成**，本路线图执行完毕。下一轮方向见「六、下一轮方向」。
 
 ---
 
@@ -93,3 +95,11 @@ C（稳定加固+残余小项）→ E（测量质量改进）→ A（批量采�
    - 复现实验：IPC 加载+测量 LA-2A（无编辑器窗口）**成功**（4s/240000 samples）；GUI 点击（编辑器窗口打开）闪退 → 差异为编辑器窗口，指向重入路径
    - 处置：加固工作并入块 C 任务 1（无论本次根因细节如何，测量路径异常保护缺失是确定缺陷）
 2. **2026-08-08（工作文档 v2 细化）**：E/B/D 三块工作文档升级到"可直接照做"粒度——`plan-block-e-measurement-quality.md` v2 含完整测试代码与实现代码（E1 analyzeMLS 频域除法实现 + FreqResponse 重构抽取 applySmoothing/applyPhasePost + 四件套；E2 MultiToneTests 4 用例 + xorshift32 实现；E3 验证清单）；`plan-block-b-recording.md` v2 含接口签名/测试骨架/4 条 brainstorming 草案决策（单文件 6 声道、bypass=dry 副本、rate 可配置、timeline 专用命令）；`plan-block-d-out-of-process.md` v2 6 设计问题各附推荐+理由+备选+决策标准（B+ 边界 / 编辑器 c 降级 / 宿主黑名单唯一写者 / 崩溃恢复 3 次上限 / stdin-stdout 协议 / 子进程内录制），实施顺序 D0-D6 带验收。执行顺序不变：E（已完成）→ **B（下一步）** → D。
+
+## 七、下一轮方向（2026-08-11 用户选定）
+
+五块（C/E/A/B/D）全部完成后，下一轮开发方向：
+
+- **A. 子进程测量扩展（issue #7，ADR-D-7 自然解锁）**：ChildWavAnalyzer 扩展 harmonic/compression/gr_timeline 分析，黑名单插件（Pianoteq 等）可测完整测量套件。继承 D 块架构，TDD 流程。
+- 后续候选：AI 反推闭环（最终目标，DESIGN.md「开发目标」，需先行规划）；UADx 兼容（B 块已知限制）；D5 编辑器 SetParent（已后置）。
+- 流程：issue → 分支 → PR → CI 绿 → squash 合并；已知限制与已完成记录见 STATUS.md。
