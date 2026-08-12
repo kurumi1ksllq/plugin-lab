@@ -218,6 +218,7 @@ tools/compare_all.py      # 四类型导出对比 CLI（freq/compression/gr_time
 tools/reverse_derive.py   # 导出 JSON 反推验证（stdlib-only）
 tools/verify_export.py    # 导出 JSON 峰值/Q 验证（stdlib-only）
 tools/aggregate_report.py # 批量聚合报告 CLI（--out-dir 扫描 → markdown+json；默认态标 degenerate）
+tools/describe_chain.py  # 处理链路描述生成器：aggregate_report.json → chain_description.md/json（EQ/动态/非线性/顺序推断，honest uncertainty）
 DESIGN.md                 # 设计文档
 ```
 
