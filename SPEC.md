@@ -1,5 +1,7 @@
-# PluginLab 导出 JSON Schema 文档
+# PluginLab — 工程文档（SPEC）
 
+> **定位**（2026-08-11 定）：本地三文档体系之一——`SPEC.md`（工程：8 类导出 JSON schema + IPC 协议契约，原 `docs/data-schema.md`）、`DESIGN.md`（设计）、`STATUS.md`（状态）；`AGENTS.md` 为开发约束。需求与待开发走 GitHub issue。
+>
 > 2026-08-02（T5.2）编写。定义 `source/analysis/Export.h` 导出的全部 JSON 文档结构。
 > 消费者：AI 建模（DESIGN.md §9——用测量数据复刻插件行为）。所有导出都必须能被
 > `juce::JSON::parse` 与 python `json.load` 解析，且携带完整测量上下文以便复现。

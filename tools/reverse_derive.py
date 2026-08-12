@@ -2,7 +2,7 @@
 reverse_derive.py — Reverse-derive plugin parameters from PluginLab export JSON.
 
 Consumes the JSON documents produced by PluginLab's Export layer
-(docs/data-schema.md) and reverses them back into the plugin parameters
+(SPEC.md) and reverses them back into the plugin parameters
 that most plausibly produced the measurement:
 
   - frequency_response / scan(frequency_response) / dataset.scan

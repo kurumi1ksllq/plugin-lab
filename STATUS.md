@@ -22,7 +22,7 @@
 1. **递归锁 bug（T1 前）：`loadPlugin()` 持有 listLock 又调 `getPluginDescription()` 内部再锁同一 mutex → std::system_error → 列表点击必失败**。修复：去掉外层锁。
 2. **Pianoteq 9 崩溃（oracle 分析确认）**：插件在 createPluginInstance 内部调用 ExitProcess/TerminateProcess，绕过所有 try/catch + SEH + minidump，宿主进程无征兆退出（无 dmp、无 crash 事件，仅 RADAR_PRE_LEAK_64 副作用）。
    - **对策**：`PluginManager::loadPlugin` 加黑名单拦截（Pianoteq 7/8/9 匹配），返回 nullptr + 警告日志，宿主不再被杀
-   - 长期方案：进程外托管（ChildProcessCoordinator）——**已实施（块 D，2026-08-11，见 docs/archive/plan-block-d-out-of-process.md）**：黑名单插件经 PluginHostChild 子进程托管，D4 实战验收 Pianoteq 9 在子进程加载即杀子进程 → 宿主检测 heartbeat timeout → 自动重启 3 次上限 → 返回明确错误，**宿主永不死亡**
+   - 长期方案：进程外托管（ChildProcessCoordinator）——**已实施（块 D，2026-08-11，见 git 历史 docs/archive/plan-block-d-out-of-process.md）**：黑名单插件经 PluginHostChild 子进程托管，D4 实战验收 Pianoteq 9 在子进程加载即杀子进程 → 宿主检测 heartbeat timeout → 自动重启 3 次上限 → 返回明确错误，**宿主永不死亡**
 3. **use-after-free 崩溃（Debug 构建 + 点击触发 0xc0000005，minidump 定位 atomic::operator++）**：`scanPlugins()`/`loadPluginByDescription()` 用 `std::thread([this]).detach()` + `callAsync([this])`，组件析构（关主窗口）时后台线程仍访问已析构的 this → 原子引用计数自增崩溃。
    - **对策**：改为 JUCE 标准 **ThreadPool + AsyncUpdater**（`threadPool->addJob(ThreadPoolJob)` + `triggerAsyncUpdate()`/`handleAsyncUpdate()`；析构时 `threadPool = nullptr` join 所有任务 + `cancelPendingUpdate()`）。
    - 已验证：快速点击 + 加载中关主窗口 3 次试验全部干净退出（修复前必崩）；全量 77 插件 76 成功（98.7%）0 崩溃。
@@ -69,7 +69,7 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 ## 阶段 2-5 计划（2026-08-03，Momus 审查定稿）
 
-- **详细计划**：`docs/archive/plan-phase2-5.md`（含 P0/P1/P2 问题清单 + 修正后阶段计划 + 依赖图）
+- **详细计划**：`git 历史 docs/archive/plan-phase2-5.md`（含 P0/P1/P2 问题清单 + 修正后阶段计划 + 依赖图）
 - 阶段 2：输入与信号增强（FilePlayback 重采样 / 噪声固定种子 / EnvelopeSignal / source 选择）
 - 阶段 3：参数连续扫描（ScanEngine + 连续性 JSON + GUI 多曲线）— 与阶段 4 可并行
 - 阶段 4：动态压缩行为（TestCompressorPlugin + GR 时间线 + τ 曲线族 + GR 表头）
@@ -77,11 +77,11 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 - 关键路径：`2 → max(3,4) → 5`
 - vocal 素材：`samples/take01.wav`（48k/16bit/stereo/17.0s，阶段 2 已入库）
 
-## 待办（下一步）—— 以 docs/roadmap-next.md 为准
+## 待办（下一步）—— 以 GitHub issue 为准
 
-> 2026-08-10 更新：下方 T2/T3 历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成；块 B 记录模式于 2026-08-10 完成，见下方完成记录）。当前待办为路线图块 D，见 `docs/roadmap-next.md` §五执行状态：
+> 2026-08-11 更新：原路线图（docs/roadmap-next.md）五块（C/E/A/B/D）已全部完成并删除（内容在 git 历史与 PR 记录中）。**需求与待开发全部走 GitHub issue**（当前：issue #7 子进程测量扩展）；历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成；块 B 记录模式于 2026-08-10 完成，见下方完成记录）。
 
-- **块 4 D 进程外托管**（**下一步**，设计门）：`docs/archive/plan-block-d-out-of-process.md` 6 设计问题各附推荐+理由+备选+决策标准，逐条确认即拆票（D0-D6）
+- **块 4 D 进程外托管**（**下一步**，设计门）：`git 历史 docs/archive/plan-block-d-out-of-process.md` 6 设计问题各附推荐+理由+备选+决策标准，逐条确认即拆票（D0-D6）
 
 ## 阶段 1 完成记录（2026-08-02）
 
@@ -223,7 +223,7 @@ DESIGN.md                 # 设计文档
 
 > 注：`RecorderEngine`/`AnalysisStrategy` 为 §8.2 设计组件，依 plan-phase2-5 P2-13 **显式延后未实现**（实际落地见阶段 3-5 记录）；`ParameterTimeline`/`WavExporter` 同列 §8.2 组件，**已于 2026-08-10 块 B 落地**（见下方 B 块完成记录）。
 
-## 扫描优化专项（2026-08-03/04，计划见 docs/archive/plan-scan-optimization.md）
+## 扫描优化专项（2026-08-03/04，计划见 git 历史 docs/archive/plan-scan-optimization.md）
 
 > 覆盖 P0 关窗死锁 + P0 慢启动 + P1 增量 UI/加载超时/扫描看门狗 + P2 进度 IPC。
 > 提交：e2d45c0（步骤0）→ 9c2ca4f（步骤1）→ 8f68234（步骤6 性能）→ fa74d45（步骤2）→ 4fb74b1（步骤3）→ cb83c79（步骤4）→ c7f7f9f（步骤5）。155/155 测试绿。
@@ -246,7 +246,7 @@ DESIGN.md                 # 设计文档
 - ~~**CGII.vst3**：0 类型插件，每轮热启动重扫 ~0.5s（未入缓存）~~ → ✅ 已修（块 C 任务 5，见下）：`blacklistUnregistered` 扫描后预防性黑名单（0 类型文件存在但无已知条目）→ `scanDirectory` 跳过检查加 `isBlacklistedPath`（路径黑名单，0 类型无 desc.name 名字拦截够不到）→ 二次热启不再重扫。真机验证：CGII 黑名单持久化 + 重启日志无 "Discovered CGII"
 - **扫描挂起黑名单误伤**（R7）：一次挂起即入黑名单，需 "Clear BL" 入口（已有）解除。
 
-### 块 C 稳定加固进度（2026-08-08，计划见 docs/archive/plan-block-c-stability.md）
+### 块 C 稳定加固进度（2026-08-08，计划见 git 历史 docs/archive/plan-block-c-stability.md）
 
 - [x] **任务 1 测量路径异常保护**（ea1ebe2）：SweepRunner.cpp 开 /EHa + run() 全 plugin 调用 try/catch（prepare/process/teardown 三段），异常 → CRASH_LOG + 测量失败响应，宿主存活；5 个测试锁定（SweepRunner + CommandParser 级），真机 Pro-Q 4 回归通过
 - [x] **任务 2 EditorCrashGuard 入测试目标**（6a77fb5）：真实 EditorCrashGuard.cpp 编入 unit_tests（/EHa），移除空桩；5 个测试含 **SEH 硬件故障保护**（析构访问违规被 catch(...) 拦截）与 C++ 异常路径
@@ -278,10 +278,10 @@ DESIGN.md                 # 设计文档
   - 取消：cancel() 线程安全，round 边界生效 ✅
   - 参数快照/恢复：RAII ParamGuard（entry 快照全部参数，exit 恢复含取消/异常）✅
   - 进度：progress(round+1, totalRounds) 每轮后回调 ✅
-  - 块 A 复用：dataset 命令基于 ScanEngine（docs/archive/plan-batch-pipeline.md S1/S4 真机通过）✅
+  - 块 A 复用：dataset 命令基于 ScanEngine（git 历史 docs/archive/plan-batch-pipeline.md S1/S4 真机通过）✅
 - 结论：E3 无缺口，标记完成。
 
-## E 块完成记录（2026-08-08，块 1 E 测量质量改进；计划 v2 见 docs/archive/plan-block-e-measurement-quality.md）
+## E 块完成记录（2026-08-08，块 1 E 测量质量改进；计划 v2 见 git 历史 docs/archive/plan-block-e-measurement-quality.md）
 
 **commit 范围**：`7c83631`（E3 文档）→ `850ecc3`（E2）→ `4ed51e4`（E1）→ `7480612`（E 收尾审查修复，HEAD 已 push origin/main）。
 
@@ -295,7 +295,7 @@ DESIGN.md                 # 设计文档
 
 **审查修复要点**（7480612）：scan/dataset/measure 三路径激励泄漏收敛（`scan` 结束复位 freq excitation 防残留、dataset scan 块透传 excitation、非 freq 类型忽略 excitation）+ analyzeMLS 短录制（< MLS 周期）DFT clamp 防越界。
 
-## B 块完成记录（2026-08-10，块 3 B 记录模式；计划 v2 见 docs/archive/plan-block-b-recording.md）
+## B 块完成记录（2026-08-10，块 3 B 记录模式；计划 v2 见 git 历史 docs/archive/plan-block-b-recording.md）
 
 **commit 范围**：`5c128da`（B1）→ `b6d90b9`（B2）→ `531c9eb`（B3）→ `50cb115`（B 收尾文档，HEAD 已 push origin/main）。
 
@@ -313,9 +313,9 @@ DESIGN.md                 # 设计文档
 
 - **GUI 点击路径未自动化验证**（2026-08-10 真机时前台有全屏游戏遮挡窗口，置顶失败；按钮为 IPC 已验证命令的薄包装 + 构建 clean + 审查通过；产物 `cwd/pluginlab_timeline.json`）
 - **UADx 系列不可测**：processBlock 抛未知异常（块 C 保护兜底，测量返回失败不崩宿主）；magic.CURVE 编辑器消息重入致静默退出——真机验收统一用 Pro-Q 4（UADx 1176/LA-2A 等加载 OK 但测量不可用）
-- **回放进度为 spinner**（spec 原提"显示当前事件序号"未实现——playTimeline 协议无进度流，需扩展协议面，留待后续）
+- ~~回放进度为 spinner~~（已解决：2026-08-11 issue #2，GUI「事件 N/M」+ IPC 进度行）
 
-## D 块完成记录（2026-08-11，块 4 D 进程外托管；计划 v2 见 docs/archive/plan-block-d-out-of-process.md）
+## D 块完成记录（2026-08-11，块 4 D 进程外托管；计划 v2 见 git 历史 docs/archive/plan-block-d-out-of-process.md）
 
 **commit 范围**：`d68b094`（D1+D3）→ `9771131`（D2）→ `7fbea02`（D6）→ `7370613`（ipc 客户端修复）→ `18079ef`（构建登记）→ `26fb746`（D 收尾文档，已 push origin/main）。
 
@@ -369,4 +369,4 @@ DESIGN.md                 # 设计文档
 - **#2 回放进度**：`ParameterTimeline::getPlaybackCursor/getPlaybackEventCount` + `MeasurementSession::setPlaybackProgressCallback`（block callback 中 cursor 前进即发，消息线程）→ GUI「事件 N/M」（~50ms 节流）+ IPC 推送 `{"ok":true,"progress":...,"event_index":N,"event_total":M,"time_ms":T}` 进度行（`Protocol::makeProgress` 复用，子进程先例）。
 - **客户端**：`tools/ipc_client.ps1` 改 PeekNamedPipe 轮询多行读取（进度行/控制 ack 走 stderr，最终响应带 `samples`/`export_path`/`error` 走 stdout）+ `-CancelAfterMs` 连接内发 stop。
 
-**验证**：270/270 测试双跑绿（新增 5：paramtimeline 游标 1 + orchestrator 取消 1 + pipeserver 并发 3）。新增测试曾抓出 PipeServer 读循环被并发写打断的实测 bug（err=233）。协议契约见 `source/ipc/AGENTS.md` + `docs/data-schema.md` §10.1。
+**验证**：270/270 测试双跑绿（新增 5：paramtimeline 游标 1 + orchestrator 取消 1 + pipeserver 并发 3）。新增测试曾抓出 PipeServer 读循环被并发写打断的实测 bug（err=233）。协议契约见 `source/ipc/AGENTS.md` + `SPEC.md` §10.1。

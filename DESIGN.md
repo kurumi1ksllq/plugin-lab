@@ -7,7 +7,7 @@
 
 ## 开发目标（最终目标）
 
-> 2026-08-10 与用户确认对齐。本设计文档各章节、路线图（docs/roadmap-next.md）各块均服务于本目标。
+> 2026-08-10 与用户确认对齐。本设计文档各章节、各开发阶段（历史路线图五块 C/E/A/B/D 已全部完成，记录在 git 历史与 GitHub PR/issue 中）均服务于本目标。
 
 **一句话**：让 AI 用本工具当"逆向工程仪器"，搞懂任意 VST 插件在信号层面到底做了什么处理，把测量结果变成可用的开发规格，供 AI 进行后续 VST 插件开发参考。
 
@@ -363,7 +363,7 @@ RecorderEngine (新增, source/capture/RecorderEngine.h/cpp)   ← 顶层协调:
 - `RecorderEngine` 感知"为什么测"（批量扫描/多轮对比），管理 session 生命周期 → 新增
 - 新组件就这三个（RecorderEngine / ParameterTimeline / AnalysisStrategy）+ 两个输入/导出扩展，**不做过度设计**
 
-> **2026-08-08 实现状态注记**：上述 §8.2 为 2026-08-02 定稿设计。实际执行中按 `docs/archive/plan-phase2-5.md` P2-13 决定，**RecorderEngine / ParameterTimeline / WavExporter 显式延后未实现**；AnalysisStrategy 亦未以独立类出现（分析分流由 `MeasurementSession` 的 type+source 二维 + CommandParser 显式 source 指定承担）。阶段 2-5 实际落地为：FilePlayback/NoiseGenerator/EnvelopeSignal（signal 层）、ScanEngine（scan 层）、CompressionFamily 网格 + GR 时间线 + τ 估计（analysis 层）、datasetToJSON 数据包（见 STATUS.md 阶段 2-5 记录）。
+> **2026-08-08 实现状态注记**：上述 §8.2 为 2026-08-02 定稿设计。实际执行中按阶段 2-5 计划（git 历史：`docs/archive/plan-phase2-5.md`）P2-13 决定，**RecorderEngine / ParameterTimeline / WavExporter 显式延后未实现**；AnalysisStrategy 亦未以独立类出现（分析分流由 `MeasurementSession` 的 type+source 二维 + CommandParser 显式 source 指定承担）。阶段 2-5 实际落地为：FilePlayback/NoiseGenerator/EnvelopeSignal（signal 层）、ScanEngine（scan 层）、CompressionFamily 网格 + GR 时间线 + τ 估计（analysis 层）、datasetToJSON 数据包（见 STATUS.md 阶段 2-5 记录）。
 
 ### 8.3 FilePlayback 复用 SignalGenerator 接口
 
@@ -442,7 +442,7 @@ class FilePlayback : public SignalGenerator {
 - [x] 阶段 5：数据整合建模 + 反推验证
 - [x] 各阶段 GitHub push 存档
 
-## 扫描架构（2026-08-04 更新，计划见 docs/archive/plan-scan-optimization.md）
+## 扫描架构（2026-08-04 更新，计划见 git 历史 `docs/archive/plan-scan-optimization.md`）
 
 > 覆盖 VST3 插件扫描/加载两条路径的 P0 死锁/慢启动修复与 P1/P2 增强。
 

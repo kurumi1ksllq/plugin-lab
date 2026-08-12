@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-VST3 插件黑盒测量实验室（Windows 桌面 GUI，C++20 + JUCE 9 + CMake + Catch2）。AI 通过 Named Pipe IPC（`\\.\pipe\PluginLab`）驱动 GUI：加载插件 → 测量（扫频/谐波/压缩/GR 时间线）→ JSON 导出 → 反推插件参数。纯黑盒原则——不依赖插件内部先验知识。**开发目标（最终目标）：让 AI 用测量数据反推插件"处理方式"作为后续 VST 开发规格——见 `DESIGN.md` 开头「开发目标」章节**。设计/状态文档：`DESIGN.md`（方法论+协议）、`STATUS.md`（决策史+阶段记录）、`docs/data-schema.md`（8 类导出 JSON schema）。
+VST3 插件黑盒测量实验室（Windows 桌面 GUI，C++20 + JUCE 9 + CMake + Catch2）。AI 通过 Named Pipe IPC（`\\.\pipe\PluginLab`）驱动 GUI：加载插件 → 测量（扫频/谐波/压缩/GR 时间线）→ JSON 导出 → 反推插件参数。纯黑盒原则——不依赖插件内部先验知识。**开发目标（最终目标）：让 AI 用测量数据反推插件"处理方式"作为后续 VST 开发规格——见 `DESIGN.md` 开头「开发目标」章节**。设计/状态文档：`DESIGN.md`（方法论+协议）、`STATUS.md`（决策史+阶段记录）、`SPEC.md`（8 类导出 JSON schema）。
 
 ## STRUCTURE
 
@@ -20,11 +20,15 @@ PluginLab/
 │   ├── ipc/           # Named Pipe 服务器 + 命令解析
 │   ├── ui/            # PlotWidget + PluginEditorWindow
 │   └── utils/         # FftHelper / MathUtils / CrashLog
-├── tests/             # Catch2 单元测试(208/208 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
+├── tests/             # Catch2 单元测试(270/270 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
 ├── tools/             # VST3Scanner(死代码但仍在构建) + CMakeLists + PS/Python 工具脚本
-├── docs/              # data-schema.md（协议契约）/ roadmap-next.md（全块已完成）/ 历史计划归档在 archive/
-└── samples/take01.wav # vocal 测试素材（已入库）
+├── samples/take01.wav # vocal 测试素材（已入库）
+├── SPEC.md            # 工程文档：8 类导出 JSON schema + IPC 协议契约（原 docs/data-schema.md）
+├── DESIGN.md          # 设计文档（方法论 + 开发目标）
+└── STATUS.md          # 状态文档（决策史 + 阶段记录 + 已知限制）
 ```
+
+> 文档体系（2026-08-11 定）：本地仅 `SPEC.md`（工程）/ `DESIGN.md`（设计）/ `STATUS.md`（状态）+ `AGENTS.md`（开发约束）；**需求与待开发全部走 GitHub issue**（已完成计划/路线图内容在 git 历史与 PR 记录中，本地不另存）。
 
 ## WHERE TO LOOK
 
@@ -37,7 +41,7 @@ PluginLab/
 | JSON 导出/格式化          | `source/analysis/Export.cpp`                         | 手写转义，非 juce::JSON                     |
 | 录制 WAV 导出（6 声道多轨）| `source/analysis/WavExporter.*`                      | `exportTracks` 24-bit `[dry,wet,bypass=dry]` |
 | 参数自动化录制/回放        | `source/capture/ParameterTimeline.*`                 | AudioProcessorListener + rate 可配置回放    |
-| IPC 命令                  | `source/ipc/` + `docs/data-schema.md`                | 协议契约（含 `getScanStatus` 扫描状态快照） |
+| IPC 命令                  | `source/ipc/` + `SPEC.md`                | 协议契约（含 `getScanStatus` 扫描状态快照） |
 | 实时曲线渲染              | `source/ui/PlotWidget.cpp`                           | 增量绘制 + 50ms 节流                        |
 | 崩溃日志/minidump         | `source/utils/CrashLog.cpp`                          | `%TEMP%\pluginlab_crashlog.txt`             |
 | 导出 JSON 反推验证        | `tools/reverse_derive.py`、`tools/verify_export.py` | stdlib-only Python                         |
@@ -111,3 +115,17 @@ ctest --test-dir build -C Release --timeout 180
 - 知识库分层：本文件（根）+ `source/AGENTS.md` + 各模块子文件 + `tests/AGENTS.md`
 - **插件缓存**：`%APPDATA%/PluginLab/pluginlist.xml`（根 `version=1`；`loadCache/saveCache` 见 PluginManager；原子写 temp+replaceFileIn）；**黑名单随缓存往返**（`<BLACKLISTED>` 子元素）；**死马踏板** `%APPDATA%/PluginLab/deadMansPedal`（挂起/崩溃插件下次自动黑名单）
 - 扫描/加载线程模型：专用一次性 `std::thread`（**析构不 join**，放弃用 `release()`）；worker 不触碰宿主成员（shared_ptr 状态 + callAsync alive-guard）；扫描看门狗（无进展 60s→黑名单+abandon，上限 3 次）；热扫增量靠 `cacheIsCurrent()`（内层 DLL mtime 基准）
+
+## Agent skills
+
+### Issue tracker
+
+GitHub issues (gh CLI)。需求与待开发全部走 GitHub issue。See \docs/agents/issue-tracker.md\。
+
+### Triage labels
+
+needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix。See \docs/agents/triage-labels.md\。
+
+### Domain docs
+
+single-context: \CONTEXT.md\(领域词汇表)+ \docs/adr/\(决策记录),与三文档(DESIGN/SPEC/STATUS)+ AGENTS.md 并存。See \docs/agents/domain.md\。
