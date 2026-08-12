@@ -47,7 +47,7 @@ namespace ChildMeasureContract
      *  export_path / wav_path). */
     struct ChildMeasureRequest
     {
-        juce::String type;        // "frequency_response" (others → ADR-D-7)
+        juce::String type;        // "frequency_response" | "harmonic" (T1) | "compression" (T2; others → ADR-D-7)
         juce::String excitation;  // "sweep" | "mls"
         double sampleRate = 48000.0;
         int blockSize = 512;
