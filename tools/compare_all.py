@@ -13,14 +13,29 @@ dataset.json block, both accepted) and returns a delta summary:
 {"points": [{"x", "delta"}...], "mean_abs", "mean", "worst"} plus a
 "params" field where the export carries fitted parameters.
 
-The CLI wrapper is a later wave; this module exposes only pure functions.
+CLI (exit 0 = PASS, 1 = FAIL, 2 = file missing / invalid input):
 
-Usage:
+    python tools/compare_all.py freq        a.json b.json [--limit-db 0.5] [--fmin 100.0] [--fmax 10000.0] [--points 200]
+    python tools/compare_all.py compression a.json b.json [--limit-output-db 0.5] [--tol-threshold 1.0] [--tol-ratio-pct 20.0]
+    python tools/compare_all.py gr_timeline a.json b.json [--limit-gr-db 0.5] [--tol-tau-pct 20.0]
+    python tools/compare_all.py harmonic    a.json b.json [--limit-thd-pct 20.0]
+
+A run passes when the curve mean |delta| is below its limit AND all fitted
+param tolerance checks pass.  Missing fitted params (compression), invalid
+tau (gr_timeline) and unmatched harmonic tones are reported as SKIP or
+warnings and never fail a run.  When the harmonic comparison matches no
+tones the thd mean |delta| is 0.0 (vacuous) and counts as PASS — unmatched
+tones are warnings, not failures.
+
+Library usage:
     from compare_all import load_points, compare_freq, verdict
     points_a, doc_a = load_points("a.json", "freq")
 """
 
+import argparse
 import json
+import sys
+from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -295,3 +310,210 @@ def verdict(mean_abs, limit):
     """
     ok = mean_abs < limit
     return ok, f"{'PASS' if ok else 'FAIL'} (limit {limit} dB)"
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def _print_stats(res, unit):
+    """Print mean |delta| / mean / worst-point lines for a compare result."""
+    print(f"  mean |delta| : {res['mean_abs']:.4f} {unit}")
+    print(f"  mean delta   : {res['mean']:+.4f} {unit}")
+    x = res["worst"]["x"]
+    x_str = f"{x:.3f}" if x is not None else "n/a"
+    print(f"  worst point  : x={x_str}, delta {res['worst']['delta']:+.4f} {unit}")
+
+
+def _curve_verdict(res, limit, unit, label="curve"):
+    """Print the curve mean |delta| verdict; returns (ok, failure_line).
+
+    failure_line is None on pass, else a one-line description of the check
+    that failed (collected as the run's summary).
+    """
+    ok, text = verdict(res["mean_abs"], limit)
+    print(f"  {label:<8s}: {text}")
+    if not ok:
+        return False, (f"{label} mean |delta| {res['mean_abs']:.4f} {unit} "
+                       f">= limit {limit} {unit}")
+    return True, None
+
+
+def _run_freq(doc_a, doc_b, args):
+    """freq run: log-grid curve comparison only."""
+    res = compare_freq(doc_a, doc_b, fmin=args.fmin, fmax=args.fmax, n=args.points)
+    print(f"comparison {args.fmin:.0f} Hz - {args.fmax:.0f} Hz, "
+          f"{args.points} log-spaced points:")
+    _print_stats(res, "dB")
+    ok, fail = _curve_verdict(res, args.limit_db, "dB")
+    failures = [] if fail is None else [fail]
+    text = f"{'PASS' if ok else 'FAIL'} (limit {args.limit_db} dB)"
+    return ok, text, failures
+
+
+def _run_compression(doc_a, doc_b, args):
+    """compression run: curve verdict + fitted {threshold, ratio} checks."""
+    res = compare_compression(doc_a, doc_b)
+    print(f"comparison on the sorted union of input_db values "
+          f"({len(res['points'])} points):")
+    _print_stats(res, "dB")
+    curve_ok, curve_fail = _curve_verdict(res, args.limit_output_db, "dB")
+    failures = [] if curve_fail is None else [curve_fail]
+
+    params = res["params"]
+    if params is None:
+        print("  params  : SKIP (fitted missing in one or both docs)")
+        ok = curve_ok
+    else:
+        for name, value, tol, unit in (
+                ("threshold", params["threshold_delta_db"],
+                 args.tol_threshold, "dB"),
+                ("ratio", params["ratio_delta_pct"],
+                 args.tol_ratio_pct, "%")):
+            if value is None:
+                print(f"  params  : {name} SKIP (a-side value 0)")
+                continue
+            ok_check = value <= tol
+            print(f"  params  : {name} {'ok' if ok_check else 'FAIL'} "
+                  f"(delta {value:.3f} {unit} vs tol {tol:.3f} {unit})")
+            if not ok_check:
+                failures.append(f"params {name} delta {value:.3f} {unit} "
+                                f"> tol {tol:.3f} {unit}")
+        ok = curve_ok and not any(f.startswith("params") for f in failures)
+
+    text = f"{'PASS' if ok else 'FAIL'} (limit {args.limit_output_db} dB)"
+    return ok, text, failures
+
+
+def _run_gr(doc_a, doc_b, args):
+    """gr_timeline run: curve verdict + fitted {attack, release} tau checks.
+
+    Tau deltas are compared against --tol-tau-pct as a percent of the a-side
+    tau value (pct = delta_ms / a_tau_ms * 100); a zero a-side tau is a SKIP.
+    """
+    res = compare_gr(doc_a, doc_b)
+    print(f"comparison on the sorted union of t values "
+          f"({len(res['points'])} points):")
+    _print_stats(res, "dB")
+    curve_ok, curve_fail = _curve_verdict(res, args.limit_gr_db, "dB")
+    failures = [] if curve_fail is None else [curve_fail]
+
+    params = res["params"]
+    if params is None:
+        print("  tau     : SKIP (invalid tau in one or both docs)")
+        ok = curve_ok
+    else:
+        ta = (doc_a.get("gr_timeline") or doc_a).get("tau") or {}
+        for name, delta_ms, a_key in (
+                ("attack", params["attack_delta_ms"], "attack_sec"),
+                ("release", params["release_delta_ms"], "release_sec")):
+            a_ms = (ta.get(a_key) or 0.0) * 1000.0
+            if a_ms == 0.0:
+                print(f"  tau     : {name} SKIP (a-side {a_key} == 0)")
+                continue
+            pct = delta_ms / a_ms * 100.0
+            ok_check = pct <= args.tol_tau_pct
+            print(f"  tau     : {name} {'ok' if ok_check else 'FAIL'} "
+                  f"(delta {delta_ms:.3f} ms = {pct:.2f} % of a-side "
+                  f"{a_ms:.3f} ms, tol {args.tol_tau_pct:.2f} %)")
+            if not ok_check:
+                failures.append(f"tau {name} delta {pct:.2f} % of a-side "
+                                f"> tol {args.tol_tau_pct:.2f} %")
+        ok = curve_ok and not any(f.startswith("tau") for f in failures)
+
+    text = f"{'PASS' if ok else 'FAIL'} (limit {args.limit_gr_db} dB)"
+    return ok, text, failures
+
+
+def _run_harmonic(doc_a, doc_b, args):
+    """harmonic run: thd mean |delta| verdict; unmatched tones are warnings.
+
+    With zero matched tones the thd mean |delta| is 0.0 (vacuous) and counts
+    as PASS — unmatched tones are warnings, never failures (see docstring).
+    """
+    res = compare_harmonic(doc_a, doc_b)
+    matched = len(res["points"])
+    print(f"comparison of {matched} matched tone(s) by nearest fundamental:")
+    _print_stats(res, "%")
+    for f0 in res["unmatched_tones"]:
+        print(f"  warning : unmatched tone at {f0:.1f} Hz "
+              f"(warning, not a failure)")
+    if matched == 0:
+        print("  warning : no matched tones — thd mean |delta| is vacuous "
+              "(0.0) and counts as PASS; unmatched tones are warnings, "
+              "not failures")
+    ok, _ = verdict(res["mean_abs"], args.limit_thd_pct)
+    text = f"{'PASS' if ok else 'FAIL'} (limit {args.limit_thd_pct:g} %)"
+    print(f"  thd     : {text}")
+    if ok:
+        return True, text, []
+    return False, text, [f"thd mean |delta| {res['mean_abs']:.4f} % "
+                         f">= limit {args.limit_thd_pct:g} %"]
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("type",
+                        choices=("freq", "compression", "gr_timeline", "harmonic"),
+                        help="measurement type to compare")
+    parser.add_argument("a_json", help="first export JSON (the 'a' document)")
+    parser.add_argument("b_json", help="second export JSON (the 'b' document)")
+    parser.add_argument("--limit-db", type=float, default=0.5,
+                        help="freq: curve mean |delta| limit in dB (default 0.5)")
+    parser.add_argument("--limit-output-db", type=float, default=0.5,
+                        help="compression: curve mean |delta| limit in dB (default 0.5)")
+    parser.add_argument("--limit-gr-db", type=float, default=0.5,
+                        help="gr_timeline: curve mean |delta| limit in dB (default 0.5)")
+    parser.add_argument("--limit-thd-pct", type=float, default=20.0,
+                        help="harmonic: thd mean |delta| limit in %% (default 20.0)")
+    parser.add_argument("--tol-threshold", type=float, default=1.0,
+                        help="compression: fitted threshold delta limit in dB (default 1.0)")
+    parser.add_argument("--tol-ratio-pct", type=float, default=20.0,
+                        help="compression: fitted ratio delta limit in %% (default 20.0)")
+    parser.add_argument("--tol-tau-pct", type=float, default=20.0,
+                        help="gr_timeline: fitted tau delta limit in %% (default 20.0)")
+    parser.add_argument("--fmin", type=float, default=100.0,
+                        help="freq: grid lower bound in Hz (default 100.0)")
+    parser.add_argument("--fmax", type=float, default=10000.0,
+                        help="freq: grid upper bound in Hz (default 10000.0)")
+    parser.add_argument("--points", type=int, default=200,
+                        help="freq: number of log-spaced grid points (default 200)")
+    args = parser.parse_args()
+
+    for path in (args.a_json, args.b_json):
+        if not Path(path).is_file():
+            print(f"error: {path} not found", file=sys.stderr)
+            sys.exit(2)
+
+    # json.JSONDecodeError subclasses ValueError, so this catches both
+    # unreadable JSON and a missing point array for the requested type.
+    try:
+        points_a, doc_a = load_points(args.a_json, args.type)
+        points_b, doc_b = load_points(args.b_json, args.type)
+    except ValueError as err:
+        print(f"error: {err}", file=sys.stderr)
+        sys.exit(2)
+
+    print(f"a export   : {args.a_json} ({len(points_a)} points)")
+    print(f"b export   : {args.b_json} ({len(points_b)} points)")
+    print(f"type       : {args.type}")
+
+    if args.type == "freq":
+        ok, text, failures = _run_freq(doc_a, doc_b, args)
+    elif args.type == "compression":
+        ok, text, failures = _run_compression(doc_a, doc_b, args)
+    elif args.type == "gr_timeline":
+        ok, text, failures = _run_gr(doc_a, doc_b, args)
+    else:
+        ok, text, failures = _run_harmonic(doc_a, doc_b, args)
+
+    for line in failures:
+        print(f"  failed   : {line}")
+    print(f"\nVERDICT: {text}")
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    main()
