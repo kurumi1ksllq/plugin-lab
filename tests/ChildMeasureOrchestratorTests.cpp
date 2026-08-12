@@ -152,13 +152,55 @@ TEST_CASE ("ChildMeasureOrchestrator: recovery sequence drives child and maps re
 }
 
 //==============================================================================
-// R2 — ADR-D-7: gr_timeline (deferred to a separate issue) fails with the
-//      not-implemented error and NEVER touches the child (no restart, no
-//      spawn, no measure). harmonic (T1) and compression (T2) are allowed
-//      through the gate.
+// R2 — ADR-D-7: gr_timeline (issue #15) now passes the gate and reaches the
+//      child end-to-end, like harmonic (T1) and compression (T2). An unknown
+//      type (bogus) still fails with the not-implemented error and NEVER
+//      touches the child (no restart, no spawn, no measure).
 //==============================================================================
 
-TEST_CASE ("ChildMeasureOrchestrator: gr_timeline fails without touching the child",
+TEST_CASE ("ChildMeasureOrchestrator: gr_timeline passes the ADR-D-7 gate and reaches the child",
+           "[childorchestrator][gr]")
+{
+    // Arrange — same end-to-end double as the R1 recovery-sequence test
+    // (TestChildProcess replies to every sequence command; its measure
+    // response is type-agnostic, so gr_timeline maps like the rest).
+    REQUIRE (testChildExe().existsAsFile());
+    PluginHostChildCoordinator coord (testChildExe().getFullPathName());
+    ChildMeasureOrchestrator orchestrator (&coord, "C:\\fake\\plugin.vst3");
+
+    const auto exportPath = tempFile ("pluginlab_orch_gr_", ".json");
+    const auto wavPath = tempFile ("pluginlab_orch_gr_", ".wav");
+
+    ChildMeasureContract::ChildMeasureRequest request;
+    request.type = "gr_timeline";
+    request.excitation = "sweep";
+    request.sampleRate = 48000.0;
+    request.blockSize = 512;
+    request.exportPath = exportPath.getFullPathName();
+    request.wavPath = wavPath.getFullPathName();
+
+    // Act
+    const auto outcome = orchestrator.run (request);
+
+    // Assert — no not-implemented rejection: the full sequence ran through
+    // the child (spawned + measured) and the result line mapped.
+    INFO ("outcome.error: " << outcome.error);
+    REQUIRE (outcome.ok);
+    REQUIRE (outcome.error.isEmpty());
+    REQUIRE (outcome.result.samples == 240000);
+    REQUIRE (outcome.result.rate == Catch::Approx (48000.0));
+    REQUIRE (outcome.result.exportPath == exportPath.getFullPathName());
+    REQUIRE (outcome.result.wavPath == wavPath.getFullPathName());
+    REQUIRE (outcome.result.name == "FakeChildPlugin");
+    REQUIRE (coord.isRunning());   // child was spawned
+    REQUIRE (coord.crashCount() == 0);
+
+    coord.stop();
+    exportPath.deleteFile();
+    wavPath.deleteFile();
+}
+
+TEST_CASE ("ChildMeasureOrchestrator: bogus type fails without touching the child",
            "[childorchestrator][notimplemented]")
 {
     // Arrange
@@ -167,14 +209,14 @@ TEST_CASE ("ChildMeasureOrchestrator: gr_timeline fails without touching the chi
     ChildMeasureOrchestrator orchestrator (&coord, "C:\\fake\\plugin.vst3");
 
     ChildMeasureContract::ChildMeasureRequest request;
-    request.type = "gr_timeline";
+    request.type = "bogus";
 
     // Act
     const auto outcome = orchestrator.run (request);
 
     // Assert — ADR-D-7 error vocabulary; no child interaction of any kind.
     REQUIRE_FALSE (outcome.ok);
-    REQUIRE (outcome.error == "child measurement not implemented for type 'gr_timeline'");
+    REQUIRE (outcome.error == "child measurement not implemented for type 'bogus'");
     REQUIRE (outcome.result.samples == 0);
     REQUIRE_FALSE (coord.isRunning());   // never spawned a child
     REQUIRE (coord.crashCount() == 0);
