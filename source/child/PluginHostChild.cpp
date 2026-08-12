@@ -4,6 +4,7 @@
 #include "../signal/SineSweep.h"
 #include "../signal/MultiTone.h"
 #include "../signal/ToneBurst.h"
+#include "../signal/EnvelopeSignal.h"
 #include "../utils/CrashLog.h"
 
 #include <iostream>
@@ -201,14 +202,15 @@ private:
         export_path, wav_path?} → {"ok", samples, rate, export_path, wav_path,
         name, class_id, latency_samples}. D2 scope: frequency_response (sweep
         or MLS excitation) + harmonic (MultiTone, T1) + compression (ToneBurst,
-        T2). The child stays a pure collector: it only generates the
-        excitation and captures dry/wet — the host analyzes the WAV
-        (ChildWavAnalyzer). */
+        T2) + gr_timeline (EnvelopeSignal-wrapped SineSweep). The child stays
+        a pure collector: it only generates the excitation and captures
+        dry/wet — the host analyzes the WAV (ChildWavAnalyzer). */
     juce::String handleMeasure (const juce::DynamicObject& obj)
     {
         auto type = obj.getProperty ("type").toString();
 
-        if (type != "frequency_response" && type != "harmonic" && type != "compression")
+        if (type != "frequency_response" && type != "harmonic" && type != "compression"
+            && type != "gr_timeline")
             return ChildProtocol::makeResponse (false, R"("error":"unknown measure type")");
         const bool useMultiTone = (type == "harmonic");
         const bool useToneBurst = (type == "compression");
@@ -251,8 +253,9 @@ private:
             // harmonic → MultiTone, 8 octave fundamentals 100..12800 Hz,
             // 3 s, amplitude 0.4; compression → ToneBurst, 1000 Hz, default
             // 9 levels {0.01..0.9}, 50 ms burst + 150 ms gap (prepare()
-            // defaults), master amplitude 1.0. The host's analysis must match
-            // exactly what is generated here — keep the harmonic and
+            // defaults), master amplitude 1.0; gr_timeline → enveloped
+            // SineSweep 2 s (branch comment below). The host's analysis must
+            // match exactly what is generated here — keep the harmonic and
             // compression constants in lockstep with MeasurementSession.cpp
             // AND ChildWavAnalyzer::analyzeChildHarmonic /
             // analyzeChildCompression (each site carries a cross-referencing
@@ -272,6 +275,24 @@ private:
                 auto bursts = std::make_unique<ToneBurst>();
                 bursts->setFrequency (1000.0);
                 gen = std::move (bursts);
+            }
+            else if (type == "gr_timeline")
+            {
+                // Mirrors MeasurementSession.cpp run() Source::dynamic branch with the
+                // CommandParser gr_timeline default carrier start (10000 Hz): SineSweep
+                // [10000,20000] Hz, 2 s, amp 0.5, wrapped in EnvelopeSignal ADSR
+                // {0.02,0.1,0.8,0.2} s, speed 1.0. Keep in lockstep with the host's
+                // analysis side (CommandParser runAndAnalyze gr_timeline branch).
+                auto sweep = std::make_unique<SineSweep>();
+                sweep->setFrequencyRange (10000.0, 20000.0);
+                sweep->setDuration (2.0);
+                sweep->setAmplitude (0.5);
+
+                auto env = std::make_unique<EnvelopeSignal> (std::move (sweep));
+                env->setEnvelope (EnvelopeSignal::Envelope::adsr);
+                env->setADSR (0.02, 0.1, 0.8, 0.2);
+                env->setSpeed (1.0);
+                gen = std::move (env);
             }
             else if (useMLS)
             {
