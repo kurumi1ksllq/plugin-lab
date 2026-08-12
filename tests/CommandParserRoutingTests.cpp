@@ -26,6 +26,7 @@
 #include "../source/host/ChildMeasureContract.h"
 #include "../source/signal/SineSweep.h"
 #include "../source/signal/Impulse.h"
+#include "../source/signal/MultiTone.h"
 
 #include <atomic>
 #include <functional>
@@ -181,6 +182,26 @@ juce::AudioBuffer<float> delayCopy (const juce::AudioBuffer<float>& src, int del
         dstData[i] = srcData[i - delaySamples];
 
     return dst;
+}
+
+/** MultiTone fixture mirroring the host harmonic generator config
+ *  (MeasurementSession.cpp Type::harmonicAnalysis branch): 8 octave
+ *  fundamentals 100..12800 Hz, `durationSec`, `amplitude` — must stay in
+ *  lockstep with ChildWavAnalyzer::analyzeChildHarmonic and the child's
+ *  handleMeasure branch. */
+juce::AudioBuffer<float> generateMultiTone (double sr, double durationSec, double amplitude)
+{
+    MultiTone mt;
+    mt.setDuration (durationSec);
+    mt.setAmplitude (amplitude);
+    mt.setFrequencies ({ 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0, 12800.0 });
+    mt.prepare (sr, 512);
+
+    const int totalSamples = static_cast<int> (sr * durationSec);
+    juce::AudioBuffer<float> buf (1, totalSamples);
+    buf.clear();
+    mt.generate (buf, 0, totalSamples);
+    return buf;
 }
 
 juce::File tempWav (const juce::String& prefix)
@@ -438,7 +459,8 @@ TEST_CASE ("CommandParser: blacklisted plugin without child callback fails expli
 }
 
 //==============================================================================
-// R4 — callback !ok → error passthrough (ADR-D-7)
+// R4 — callback !ok → error passthrough (ADR-D-7; gr_timeline is still a
+//      rejected child type, deferred to a separate issue)
 //==============================================================================
 
 TEST_CASE ("CommandParser: child callback failure passes error through (ADR-D-7 passthrough)",
@@ -452,23 +474,26 @@ TEST_CASE ("CommandParser: child callback failure passes error through (ADR-D-7 
 
     RoutingFixture f ("TestPlugin", true);
     // Default outcomeOverride has ok=false; the orchestrator (ADR-D-7) rejects
-    // non-frequency_response types — CommandParser must pass the error through
-    // and never fall back to host-direct measurement.
-    f.outcomeOverride.error = "child measurement not implemented for type 'harmonic'";
+    // gr_timeline — CommandParser must pass the error through and never fall
+    // back to host-direct measurement.
+    f.outcomeOverride.error = "child measurement not implemented for type 'gr_timeline'";
 
     juce::File (exportPath).deleteFile();
     juce::File (exportPath).withFileExtension (".wav").deleteFile();
 
     // ---- Act ----
+    // gr_timeline requires a non-signal source to pass CommandParser's
+    // pre-validation (CommandParser.cpp:635-638) — dynamic reaches the child
+    // path, where the orchestrator still rejects it (ADR-D-7).
     const auto response = f.parser.handleCommand (
-        RoutingFixture::measureCommand ("harmonic", {}, exportPath));
+        RoutingFixture::measureCommand ("gr_timeline", R"("source":"dynamic")", exportPath));
     flushMessageManager (200);
 
     // ---- Assert: error passthrough, request still delivered once ----
     REQUIRE (response.contains ("\"ok\":false"));
-    REQUIRE (response.contains ("child measurement not implemented for type 'harmonic'"));
+    REQUIRE (response.contains ("child measurement not implemented for type 'gr_timeline'"));
     REQUIRE (f.childCalls.load() == 1);
-    REQUIRE (f.lastRequest.type == "harmonic");
+    REQUIRE (f.lastRequest.type == "gr_timeline");
     REQUIRE_FALSE (f.hostCompleteFired.load());
     REQUIRE_FALSE (juce::File (exportPath).existsAsFile());
 
@@ -740,4 +765,61 @@ TEST_CASE ("CommandParser: child measurement with an unreadable WAV fails explic
 
     // ---- Cleanup ----
     juce::File (childJson).deleteFile();
+}
+
+//==============================================================================
+// R9 — T1: measure {type: harmonic} on a blacklisted plugin routes to the
+//      child AND the host analyzes the child's WAV into a harmonic_analysis
+//      export (dispatch to ChildWavAnalyzer::analyzeChildHarmonic).
+//==============================================================================
+
+TEST_CASE ("CommandParser: harmonic measure routes to child and writes the harmonic analysis export (T1)",
+           "[commandparser][routing][d6][childharmonic]")
+{
+    // ---- Arrange ----
+    // MultiTone fixture (identity dry/wet — the octave collisions alone
+    // produce harmonics, so the harmonic analysis yields 7 tones): mirrors
+    // the host harmonic generator config.
+    const auto wavPath = tempWav ("pluginlab_route_har_").getFullPathName();
+    const auto childJson = juce::File (wavPath).withFileExtension (".json").getFullPathName();
+    {
+        const auto dry = generateMultiTone (44100.0, 2.0, 0.4);
+        juce::AudioBuffer<float> wet (dry);
+        REQUIRE (writeTestWav (juce::File (wavPath), dry, wet, 44100.0, 24));
+    }
+
+    RoutingFixture f ("TestPlugin", true);
+    f.outcomeOverride = RoutingFixture::okOutcome (wavPath, childJson);
+
+    juce::File (childJson).deleteFile();
+
+    // ---- Act ----
+    const auto response = f.parser.handleCommand (
+        RoutingFixture::measureCommand ("harmonic", {}, childJson));
+    flushMessageManager (200);
+
+    // ---- Assert: routed to child, request type forwarded ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (f.childCalls.load() == 1);
+    REQUIRE_FALSE (f.hostCompleteFired.load());
+    REQUIRE (f.lastRequest.type == "harmonic");
+    // Non-freq types force sweep excitation (CommandParser.cpp:662-665).
+    REQUIRE (f.lastRequest.excitation == "sweep");
+
+    // ---- Assert: the harmonic analysis entry ran end to end ----
+    REQUIRE (juce::File (childJson).existsAsFile());
+    REQUIRE (juce::File (childJson).getSize() > 0);
+
+    const auto doc = juce::JSON::parse (juce::File (childJson).loadFileAsString());
+    REQUIRE (doc.isObject());
+    REQUIRE (doc["type"].toString() == "harmonic_analysis");
+    REQUIRE (doc["plugin"].toString() == "ChildPlugin");
+    REQUIRE (doc["class_id"].toString() == "child.class.id");
+    const auto tones = doc["tones"].getArray();
+    REQUIRE (tones != nullptr);
+    REQUIRE (tones->size() == 7);   // 8-fundamental config, 12800 Hz dropped
+
+    // ---- Cleanup ----
+    juce::File (childJson).deleteFile();
+    juce::File (wavPath).deleteFile();
 }

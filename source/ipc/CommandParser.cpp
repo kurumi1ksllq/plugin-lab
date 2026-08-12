@@ -725,9 +725,11 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             ChildMeasureContract::ChildMeasureRequest req;
 
             // Protocol vocabulary == child vocabulary ("frequency_response"
-            // etc., contract table); `t` is already validated above. Non-freq
-            // types are rejected by the orchestrator (ADR-D-7) — CommandParser
-            // passes the error through, never routing back to the host.
+            // etc., contract table); `t` is already validated above.
+            // gr_timeline (and unknown types) are rejected by the orchestrator
+            // (ADR-D-7) — CommandParser passes the error through, never
+            // routing back to the host. harmonic (T1) is dispatched to the
+            // harmonic analysis entry below.
             req.type = t;
 
             // Excitation mirrors buildExportContext: only frequency_response
@@ -751,14 +753,21 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             // has no plugin instance for a blacklisted plugin, so
             // ChildWavAnalyzer builds the export Context from that metadata
             // and the measure-request parameters, producing the same
-            // frequency_response JSON the in-process path writes. An
-            // unreadable WAV (empty return) fails the measurement instead of
-            // answering ok with an export file that was never written.
+            // frequency_response (or, for type harmonic, harmonic_analysis
+            // — T1) JSON the in-process path writes. An unreadable WAV
+            // (empty return) fails the measurement instead of answering ok
+            // with an export file that was never written.
             const auto& r = outcome.result;
-            const auto exportJson = ChildWavAnalyzer::analyzeChildFrequencyResponse (
-                juce::File (r.wavPath), r.channels, r.rate,
-                session->getBlockSize(), req.excitation, session->getFreqMLSLength(),
-                r.name, r.classId, r.latencySamples);
+            juce::String exportJson;
+            if (req.type == Protocol::MeasureType::harmonic)
+                exportJson = ChildWavAnalyzer::analyzeChildHarmonic (
+                    juce::File (r.wavPath), r.channels, r.rate,
+                    session->getBlockSize(), r.name, r.classId, r.latencySamples);
+            else
+                exportJson = ChildWavAnalyzer::analyzeChildFrequencyResponse (
+                    juce::File (r.wavPath), r.channels, r.rate,
+                    session->getBlockSize(), req.excitation, session->getFreqMLSLength(),
+                    r.name, r.classId, r.latencySamples);
 
             if (exportJson.isEmpty())
                 return Protocol::makeResponse (false, R"("error":"child measurement failed")");

@@ -37,10 +37,11 @@ ChildMeasureContract::ChildMeasureOutcome ChildMeasureOrchestrator::run (
     // landed between runs (nothing in flight) must not cancel this run.
     coordinator->resetCancel();
 
-    // a. ADR-D-7: the child only implements frequency_response. Everything
-    //    else fails WITHOUT touching the child — and never falls back to
-    //    loading the (blacklisted) plugin in this process.
-    if (request.type != "frequency_response")
+    // a. ADR-D-7: the child implements frequency_response and harmonic (T1).
+    //    Everything else (gr_timeline — deferred to a separate issue — and
+    //    unknown types) fails WITHOUT touching the child — and never falls
+    //    back to loading the (blacklisted) plugin in this process.
+    if (request.type != "frequency_response" && request.type != "harmonic")
     {
         outcome.ok = false;
         outcome.error = "child measurement not implemented for type '" + request.type + "'";

@@ -7,6 +7,7 @@
 #include "../source/analysis/FreqResponse.h"
 #include "../source/signal/SineSweep.h"
 #include "../source/signal/Impulse.h"
+#include "../source/signal/MultiTone.h"
 
 #include <cstring>
 #include <cmath>
@@ -170,6 +171,53 @@ juce::File tempWav (const juce::String& prefix)
 {
     return juce::File::getSpecialLocation (juce::File::SpecialLocationType::tempDirectory)
                .getNonexistentChildFile (prefix, ".wav");
+}
+
+/** MultiTone fixture mirroring the host harmonic generator config
+ *  (MeasurementSession.cpp Type::harmonicAnalysis branch): 8 octave
+ *  fundamentals 100..12800 Hz, `durationSec`, `amplitude`. The child
+ *  (PluginHostChild.cpp handleMeasure) and ChildWavAnalyzer::analyzeChildHarmonic
+ *  hardcode the same list — keep the three in lockstep. */
+juce::AudioBuffer<float> generateMultiTone (double sr, double durationSec, double amplitude)
+{
+    MultiTone mt;
+    mt.setDuration (durationSec);
+    mt.setAmplitude (amplitude);
+    mt.setFrequencies ({ 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0, 12800.0 });
+    mt.prepare (sr, 512);
+
+    const int totalSamples = static_cast<int> (sr * durationSec);
+    juce::AudioBuffer<float> buf (1, totalSamples);
+    buf.clear();
+    mt.generate (buf, 0, totalSamples);
+    return buf;
+}
+
+/** Find a tone entry in a parsed harmonic_analysis "tones" array by
+ *  fundamental frequency (±10 Hz — the export reports the FFT-bin
+ *  frequency, not the nominal one). */
+const juce::var* findTone (const juce::Array<juce::var>& tones, double fundamentalHz)
+{
+    for (const auto& t : tones)
+    {
+        if (std::abs (static_cast<double> (t["fundamental_hz"]) - fundamentalHz) < 10.0)
+            return &t;
+    }
+    return nullptr;
+}
+
+/** Find a harmonic entry within a tone by its measured frequency (±10 Hz). */
+const juce::var* findHarmonic (const juce::var& tone, double freqHz)
+{
+    const auto harmonics = tone["harmonics"].getArray();
+    if (harmonics == nullptr)
+        return nullptr;
+    for (const auto& h : *harmonics)
+    {
+        if (std::abs (static_cast<double> (h["freq"]) - freqHz) < 10.0)
+            return &h;
+    }
+    return nullptr;
 }
 } // namespace
 
@@ -444,4 +492,129 @@ TEST_CASE ("WavCaptureReader: error paths return false without crashing",
     badMagic.deleteFile();
     fourCh.deleteFile();
     sixteenBit.deleteFile();
+}
+
+//==============================================================================
+// Child harmonic analysis entry (T1): deterministic WAV → harmonic_analysis
+// JSON. The dry excitation mirrors the host harmonic config (MultiTone, 8
+// octave fundamentals 100..12800 Hz, 3 s, amplitude 0.4); wet applies a
+// KNOWN injection (wet = dry + 0.1·dry², second-order distortion). The
+// octave spacing means every fundamental's H2/H4 IS another fundamental
+// (known tradeoff, analysis/AGENTS.md) — those percents read ~100%+ even
+// with zero distortion. Note also that for octave fundamentals the H3 of
+// every f except the top two cancels in dry² (pairs f+2f and 4f−f both
+// exist and cancel), so the distortion assertions target H5 of 1600 Hz
+// (8000 Hz) and H3 of 6400 Hz (19200 Hz) — both non-colliding, non-cancelling.
+//==============================================================================
+
+TEST_CASE ("ChildWavAnalyzer: harmonic identity WAV exports 7 clean tones",
+           "[childharmonic][wavcapturereader]")
+{
+    // Arrange — clean multi-tone excitation, wet identical to dry (no
+    // distortion): the only harmonics present are the octave collisions.
+    constexpr double kSr = 48000.0;
+    const auto dry = generateMultiTone (kSr, 3.0, 0.4);
+    juce::AudioBuffer<float> wet (dry);
+
+    const auto wav = tempWav ("pluginlab_childharmonic_id_");
+    REQUIRE (writeTestWav (wav, dry, wet, kSr, 24));
+
+    // Act — the child-WAV analysis entry (read WAV → analyze → export).
+    const auto jsonText = ChildWavAnalyzer::analyzeChildHarmonic (
+        wav, 1, kSr, 512, "TestPlugin", "CLSID", 0);
+    REQUIRE_FALSE (jsonText.isEmpty());
+
+    // Assert — structural: 7 tones (the 12800 Hz fundamental is dropped —
+    // its H2 25600 Hz exceeds Nyquist, so its harmonics list is empty and
+    // the tone is omitted); fundamentals land on the expected frequencies.
+    const auto doc = juce::JSON::parse (jsonText);
+    REQUIRE (doc.isObject());
+    REQUIRE (doc["type"].toString() == "harmonic_analysis");
+
+    const auto tones = doc["tones"].getArray();
+    REQUIRE (tones != nullptr);
+    REQUIRE (tones->size() == 7);
+
+    const std::vector<double> expectedFundamentals =
+        { 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0 };
+    for (int i = 0; i < tones->size(); ++i)
+    {
+        const double f = static_cast<double> ((*tones)[i]["fundamental_hz"]);
+        REQUIRE (std::abs (f - expectedFundamentals[static_cast<size_t> (i)]) < 10.0);
+    }
+
+    // Assert — no distortion: the non-colliding harmonics (H5 of 1600 Hz at
+    // 8000 Hz, H3 of 6400 Hz at 19200 Hz) sit at the noise floor.
+    auto* tone1600 = findTone (*tones, 1600.0);
+    REQUIRE (tone1600 != nullptr);
+    auto* h5 = findHarmonic (*tone1600, 8000.0);
+    REQUIRE (h5 != nullptr);
+    REQUIRE (static_cast<double> ((*h5)["percent"]) < 0.2);
+
+    auto* tone6400 = findTone (*tones, 6400.0);
+    REQUIRE (tone6400 != nullptr);
+    auto* h36400 = findHarmonic (*tone6400, 19200.0);
+    REQUIRE (h36400 != nullptr);
+    REQUIRE (static_cast<double> ((*h36400)["percent"]) < 0.2);
+
+    wav.deleteFile();
+}
+
+TEST_CASE ("ChildWavAnalyzer: harmonic distortion WAV shows the injected harmonics",
+           "[childharmonic][wavcapturereader]")
+{
+    // Arrange — same excitation, wet = dry + 0.1·dry²: a known second-order
+    // distortion. Its H5 of 1600 Hz lands at 8000 Hz and H3 of 6400 Hz at
+    // 19200 Hz — neither collides with a fundamental (H3 of the lower
+    // fundamentals cancels by pair symmetry, see the header comment).
+    constexpr double kSr = 48000.0;
+    const auto dry = generateMultiTone (kSr, 3.0, 0.4);
+
+    juce::AudioBuffer<float> wet (1, dry.getNumSamples());
+    for (int i = 0; i < dry.getNumSamples(); ++i)
+    {
+        const float d = dry.getSample (0, i);
+        wet.setSample (0, i, d + 0.1f * d * d);
+    }
+
+    const auto wav = tempWav ("pluginlab_childharmonic_dist_");
+    REQUIRE (writeTestWav (wav, dry, wet, kSr, 24));
+
+    // Act
+    const auto jsonText = ChildWavAnalyzer::analyzeChildHarmonic (
+        wav, 1, kSr, 512, "TestPlugin", "CLSID", 0);
+    REQUIRE_FALSE (jsonText.isEmpty());
+
+    // Assert — the injected distortion is measured: percents are clearly
+    // above the identity-case noise floor (1600 Hz H5 ~0.56%, 6400 Hz H3
+    // ~0.45% for 0.1·dry² — thresholds stay far below to absorb FFT-bin /
+    // window scalloping differences).
+    const auto doc = juce::JSON::parse (jsonText);
+    REQUIRE (doc.isObject());
+    const auto tones = doc["tones"].getArray();
+    REQUIRE (tones != nullptr);
+    REQUIRE (tones->size() == 7);
+
+    auto* tone1600 = findTone (*tones, 1600.0);
+    REQUIRE (tone1600 != nullptr);
+    auto* h5 = findHarmonic (*tone1600, 8000.0);
+    REQUIRE (h5 != nullptr);
+    REQUIRE (static_cast<double> ((*h5)["percent"]) > 0.3);
+
+    auto* tone6400 = findTone (*tones, 6400.0);
+    REQUIRE (tone6400 != nullptr);
+    auto* h36400 = findHarmonic (*tone6400, 19200.0);
+    REQUIRE (h36400 != nullptr);
+    REQUIRE (static_cast<double> ((*h36400)["percent"]) > 0.25);
+
+    wav.deleteFile();
+}
+
+TEST_CASE ("ChildWavAnalyzer: harmonic missing WAV returns empty JSON",
+           "[childharmonic][wavcapturereader]")
+{
+    const auto missing = tempWav ("pluginlab_childharmonic_missing_");
+    REQUIRE (ChildWavAnalyzer::analyzeChildHarmonic (
+                 missing, 2, 48000.0, 512, "TestPlugin", "CLSID", 0).isEmpty());
+    missing.deleteFile();
 }

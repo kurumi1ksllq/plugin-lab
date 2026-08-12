@@ -2,6 +2,7 @@
 #include "../capture/SweepRunner.h"
 #include "../signal/Impulse.h"
 #include "../signal/SineSweep.h"
+#include "../signal/MultiTone.h"
 #include "../utils/CrashLog.h"
 
 #include <iostream>
@@ -197,17 +198,18 @@ private:
     //==============================================================================
     /** Measure: {type, source, excitation?, sample_rate?, block_size?,
         export_path, wav_path?} → {"ok", samples, rate, export_path, wav_path,
-        name, class_id, latency_samples}. D2 scope: only frequency_response is
-        implemented (sweep or MLS excitation); harmonic/compression return
-        "not implemented" per the contract. */
+        name, class_id, latency_samples}. D2 scope: frequency_response (sweep
+        or MLS excitation) + harmonic (MultiTone, T1); compression returns
+        "not implemented" per the contract (deferred). */
     juce::String handleMeasure (const juce::DynamicObject& obj)
     {
         auto type = obj.getProperty ("type").toString();
 
-        if (type == "harmonic" || type == "compression")
+        if (type == "compression")
             return ChildProtocol::makeResponse (false, R"("error":"not implemented")");
-        if (type != "frequency_response")
+        if (type != "frequency_response" && type != "harmonic")
             return ChildProtocol::makeResponse (false, R"("error":"unknown measure type")");
+        const bool useMultiTone = (type == "harmonic");
 
         auto exportPath = obj.getProperty ("export_path").toString();
         if (exportPath.isEmpty())
@@ -242,10 +244,25 @@ private:
             const auto wavPath = obj.getProperty ("wav_path").toString();
 
             // Generator selection mirrors MeasurementSession::run
-            // (MeasurementSession.cpp:135-153): sweep → 20 Hz-20 kHz log sweep
-            // 5 s, MLS → 16383-sample MLS impulse; both at amplitude 0.5.
+            // (MeasurementSession.cpp:135-186): sweep → 20 Hz-20 kHz log sweep
+            // 5 s, MLS → 16383-sample MLS impulse (both amplitude 0.5);
+            // harmonic → MultiTone, 8 octave fundamentals 100..12800 Hz,
+            // 3 s, amplitude 0.4. The host's analysis must look for exactly
+            // the fundamentals generated here — keep the harmonic constants
+            // in lockstep with MeasurementSession.cpp AND
+            // ChildWavAnalyzer::analyzeChildHarmonic (each site carries a
+            // cross-referencing comment).
             std::unique_ptr<SignalGenerator> gen;
-            if (useMLS)
+            if (useMultiTone)
+            {
+                auto multi = std::make_unique<MultiTone>();
+                multi->setDuration (3.0);
+                multi->setAmplitude (0.4);
+                multi->setFrequencies (
+                    { 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0, 12800.0 });
+                gen = std::move (multi);
+            }
+            else if (useMLS)
             {
                 auto mls = std::make_unique<Impulse>();
                 mls->useMLS (true);
