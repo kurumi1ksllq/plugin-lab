@@ -217,6 +217,7 @@ tools/compare_freq.py     # 频响对比（MLS vs sweep 验收，|Δ|<0.5dB）
 tools/compare_all.py      # 四类型导出对比 CLI（freq/compression/gr_timeline/harmonic，stdlib-only）
 tools/reverse_derive.py   # 导出 JSON 反推验证（stdlib-only）
 tools/verify_export.py    # 导出 JSON 峰值/Q 验证（stdlib-only）
+tools/aggregate_report.py # 批量聚合报告 CLI（--out-dir 扫描 → markdown+json；默认态标 degenerate）
 DESIGN.md                 # 设计文档
 ```
 
@@ -369,3 +370,12 @@ DESIGN.md                 # 设计文档
 - **客户端**：`tools/ipc_client.ps1` 改 PeekNamedPipe 轮询多行读取（进度行/控制 ack 走 stderr，最终响应带 `samples`/`export_path`/`error` 走 stdout）+ `-CancelAfterMs` 连接内发 stop。
 
 **验证**：270/270 测试双跑绿（新增 5：paramtimeline 游标 1 + orchestrator 取消 1 + pipeserver 并发 3）。新增测试曾抓出 PipeServer 读循环被并发写打断的实测 bug（err=233）。协议契约见 `source/ipc/AGENTS.md` + `SPEC.md` §10.1。
+
+## 批量反推聚合报告（ticket #24 T1，2026-08-12，分支 feat/batch-reverse-aggregate）
+
+**交付**：`tools/aggregate_report.py`（T1-A..E：反推聚合纯函数 + 聚合引擎 + markdown/json 写入器 + CLI，`--out-dir`/`--report-dir`/`--json`/`--markdown`；测试 50/50 绿）。真机离线验证（`--out-dir D:\Documents\PluginLab\out`）：5 插件报告 exit 0；重复运行幂等（JSON 仅 generated_at 不同）；缺失 out-dir → exit 2。
+
+**已知限制**：
+
+- **out/ 历史数据多为默认态 → 报告以 degenerate 标注**（freq/compression/gr 全退化，仅 harmonic 有内容 tones=7；标准库正确行为，非 bug）——**例外：pro-c-3 为真实测量**（freq 28.6dB 峰、压缩 5.2dB GR、tau.valid=true），四段全部 ok
+- **空插件目录不进报告**：无 dataset.json 的目录（auto-tune-pro、uadx-1176-fet-compressor）has_dataset=false 跳过；根级陈旧 summary.json 非插件
