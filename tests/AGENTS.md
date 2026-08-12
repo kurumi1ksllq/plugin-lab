@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；270 个 TEST_CASE（2026-08-11 实测 270/270 绿：基线 208 + 块 D 新增 57 + issue #2/#3 并发改造新增 5——[paramtimeline] 播放游标可观测 1 + [childorchestrator][cancel] 测量中取消 1 + [pipeserver][concurrency] 3（控制命令并发/快命令排队/emitLine 进度推送））。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
+Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；280 个 TEST_CASE（2026-08-12 实测 280/280 绿：基线 208 + 块 D 新增 57 + issue #2/#3 并发改造新增 5 + 子进程测量扩展 T1/T2 新增 10——[childorchestrator] 类型门放行 2(harmonic/compression) + [commandparser][routing] 子进程路由 2(harmonic/compression) + [wavcapturereader] child 分析 seam 6(identity/distortion/missing × 2 类型)）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
 
 ## RUN
 
