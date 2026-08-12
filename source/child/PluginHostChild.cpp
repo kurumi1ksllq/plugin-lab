@@ -3,6 +3,7 @@
 #include "../signal/Impulse.h"
 #include "../signal/SineSweep.h"
 #include "../signal/MultiTone.h"
+#include "../signal/ToneBurst.h"
 #include "../utils/CrashLog.h"
 
 #include <iostream>
@@ -199,17 +200,18 @@ private:
     /** Measure: {type, source, excitation?, sample_rate?, block_size?,
         export_path, wav_path?} → {"ok", samples, rate, export_path, wav_path,
         name, class_id, latency_samples}. D2 scope: frequency_response (sweep
-        or MLS excitation) + harmonic (MultiTone, T1); compression returns
-        "not implemented" per the contract (deferred). */
+        or MLS excitation) + harmonic (MultiTone, T1) + compression (ToneBurst,
+        T2). The child stays a pure collector: it only generates the
+        excitation and captures dry/wet — the host analyzes the WAV
+        (ChildWavAnalyzer). */
     juce::String handleMeasure (const juce::DynamicObject& obj)
     {
         auto type = obj.getProperty ("type").toString();
 
-        if (type == "compression")
-            return ChildProtocol::makeResponse (false, R"("error":"not implemented")");
-        if (type != "frequency_response" && type != "harmonic")
+        if (type != "frequency_response" && type != "harmonic" && type != "compression")
             return ChildProtocol::makeResponse (false, R"("error":"unknown measure type")");
         const bool useMultiTone = (type == "harmonic");
+        const bool useToneBurst = (type == "compression");
 
         auto exportPath = obj.getProperty ("export_path").toString();
         if (exportPath.isEmpty())
@@ -247,11 +249,14 @@ private:
             // (MeasurementSession.cpp:135-186): sweep → 20 Hz-20 kHz log sweep
             // 5 s, MLS → 16383-sample MLS impulse (both amplitude 0.5);
             // harmonic → MultiTone, 8 octave fundamentals 100..12800 Hz,
-            // 3 s, amplitude 0.4. The host's analysis must look for exactly
-            // the fundamentals generated here — keep the harmonic constants
-            // in lockstep with MeasurementSession.cpp AND
-            // ChildWavAnalyzer::analyzeChildHarmonic (each site carries a
-            // cross-referencing comment).
+            // 3 s, amplitude 0.4; compression → ToneBurst, 1000 Hz, default
+            // 9 levels {0.01..0.9}, 50 ms burst + 150 ms gap (prepare()
+            // defaults), master amplitude 1.0. The host's analysis must match
+            // exactly what is generated here — keep the harmonic and
+            // compression constants in lockstep with MeasurementSession.cpp
+            // AND ChildWavAnalyzer::analyzeChildHarmonic /
+            // analyzeChildCompression (each site carries a cross-referencing
+            // comment).
             std::unique_ptr<SignalGenerator> gen;
             if (useMultiTone)
             {
@@ -261,6 +266,12 @@ private:
                 multi->setFrequencies (
                     { 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0, 12800.0 });
                 gen = std::move (multi);
+            }
+            else if (useToneBurst)
+            {
+                auto bursts = std::make_unique<ToneBurst>();
+                bursts->setFrequency (1000.0);
+                gen = std::move (bursts);
             }
             else if (useMLS)
             {

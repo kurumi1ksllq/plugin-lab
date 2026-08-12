@@ -50,4 +50,22 @@ namespace ChildWavAnalyzer
                                        const juce::String& pluginName,
                                        const juce::String& classId,
                                        int latencySamples);
+
+    /** Analyze a child-measured ToneBurst WAV and return the export JSON
+     *  (T2 — same ADR-D-6/D2b pattern as analyzeChildHarmonic).
+     *  @param wavPath      2*numChannels-channel 24-bit WAV ([dry, wet] layout)
+     *  @param numChannels  plugin channel count (dry and wet share it)
+     *  @param sampleRate   measurement sample rate (from the measure request)
+     *  @param blockSize    measurement block size (from the measure request)
+     *  @param pluginName / classId / latencySamples — plugin metadata reported
+     *                      by the child in its measure result (ADR-D-6)
+     *  @return the compression_curve export JSON, or an empty string when the
+     *          WAV cannot be read (WavCaptureReader logged the failure). */
+    juce::String analyzeChildCompression (const juce::File& wavPath,
+                                          int numChannels,
+                                          double sampleRate,
+                                          int blockSize,
+                                          const juce::String& pluginName,
+                                          const juce::String& classId,
+                                          int latencySamples);
 }

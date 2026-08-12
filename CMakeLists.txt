@@ -122,17 +122,19 @@ target_sources(PluginHostChild PRIVATE
     source/utils/CrashLog.cpp
     # D2a: measurement pipeline (frozen SweepRunner generate→process→capture
     # + the excitations it needs: SineSweep / MLS Impulse for frequency
-    # response, MultiTone for harmonic (T1)). Dependency closure checked
-    # against the headers: SweepRunner.h pulls SignalGenerator.h
-    # + AudioBuffer.h; SweepRunner.cpp needs utils/CrashLog.h (already above);
-    # SineSweep/Impulse/MultiTone only need their own headers + <cmath> — no
-    # MathUtils / FftHelper in this closure.
+    # response, MultiTone for harmonic (T1), ToneBurst for compression (T2)).
+    # Dependency closure checked against the headers: SweepRunner.h pulls
+    # SignalGenerator.h + AudioBuffer.h; SweepRunner.cpp needs
+    # utils/CrashLog.h (already above); SineSweep/Impulse/MultiTone/ToneBurst
+    # only need their own headers + <cmath> — no MathUtils / FftHelper in
+    # this closure.
     source/capture/SweepRunner.cpp
     source/capture/AudioBuffer.cpp
     source/signal/SignalGenerator.cpp
     source/signal/SineSweep.cpp
     source/signal/Impulse.cpp
     source/signal/MultiTone.cpp
+    source/signal/ToneBurst.cpp
 )
 
 target_link_libraries(PluginHostChild PRIVATE

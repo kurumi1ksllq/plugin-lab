@@ -154,7 +154,8 @@ TEST_CASE ("ChildMeasureOrchestrator: recovery sequence drives child and maps re
 //==============================================================================
 // R2 — ADR-D-7: gr_timeline (deferred to a separate issue) fails with the
 //      not-implemented error and NEVER touches the child (no restart, no
-//      spawn, no measure). harmonic (T1) is allowed through the gate.
+//      spawn, no measure). harmonic (T1) and compression (T2) are allowed
+//      through the gate.
 //==============================================================================
 
 TEST_CASE ("ChildMeasureOrchestrator: gr_timeline fails without touching the child",
@@ -193,6 +194,46 @@ TEST_CASE ("ChildMeasureOrchestrator: harmonic passes the ADR-D-7 gate and reach
 
     ChildMeasureContract::ChildMeasureRequest request;
     request.type = "harmonic";
+    request.excitation = "sweep";
+    request.sampleRate = 48000.0;
+    request.blockSize = 512;
+    request.exportPath = exportPath.getFullPathName();
+    request.wavPath = wavPath.getFullPathName();
+
+    // Act
+    const auto outcome = orchestrator.run (request);
+
+    // Assert — no not-implemented rejection: the full sequence ran through
+    // the child (spawned + measured) and the result line mapped.
+    INFO ("outcome.error: " << outcome.error);
+    REQUIRE (outcome.ok);
+    REQUIRE (outcome.error.isEmpty());
+    REQUIRE (outcome.result.samples == 240000);
+    REQUIRE (outcome.result.rate == Catch::Approx (48000.0));
+    REQUIRE (outcome.result.exportPath == exportPath.getFullPathName());
+    REQUIRE (outcome.result.wavPath == wavPath.getFullPathName());
+    REQUIRE (coord.isRunning());   // child was spawned
+    REQUIRE (coord.crashCount() == 0);
+
+    coord.stop();
+    exportPath.deleteFile();
+    wavPath.deleteFile();
+}
+
+TEST_CASE ("ChildMeasureOrchestrator: compression passes the ADR-D-7 gate and reaches the child",
+           "[childorchestrator][compression]")
+{
+    // Arrange — same end-to-end double as the R1 recovery-sequence test
+    // (TestChildProcess replies to every sequence command).
+    REQUIRE (testChildExe().existsAsFile());
+    PluginHostChildCoordinator coord (testChildExe().getFullPathName());
+    ChildMeasureOrchestrator orchestrator (&coord, "C:\\fake\\plugin.vst3");
+
+    const auto exportPath = tempFile ("pluginlab_orch_com_", ".json");
+    const auto wavPath = tempFile ("pluginlab_orch_com_", ".wav");
+
+    ChildMeasureContract::ChildMeasureRequest request;
+    request.type = "compression";
     request.excitation = "sweep";
     request.sampleRate = 48000.0;
     request.blockSize = 512;

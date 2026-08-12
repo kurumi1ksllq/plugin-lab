@@ -728,8 +728,8 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             // etc., contract table); `t` is already validated above.
             // gr_timeline (and unknown types) are rejected by the orchestrator
             // (ADR-D-7) — CommandParser passes the error through, never
-            // routing back to the host. harmonic (T1) is dispatched to the
-            // harmonic analysis entry below.
+            // routing back to the host. harmonic (T1) and compression (T2)
+            // are dispatched to their analysis entries below.
             req.type = t;
 
             // Excitation mirrors buildExportContext: only frequency_response
@@ -754,13 +754,18 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             // ChildWavAnalyzer builds the export Context from that metadata
             // and the measure-request parameters, producing the same
             // frequency_response (or, for type harmonic, harmonic_analysis
-            // — T1) JSON the in-process path writes. An unreadable WAV
-            // (empty return) fails the measurement instead of answering ok
-            // with an export file that was never written.
+            // — T1; for type compression, compression_curve — T2) JSON the
+            // in-process path writes. An unreadable WAV (empty return) fails
+            // the measurement instead of answering ok with an export file
+            // that was never written.
             const auto& r = outcome.result;
             juce::String exportJson;
             if (req.type == Protocol::MeasureType::harmonic)
                 exportJson = ChildWavAnalyzer::analyzeChildHarmonic (
+                    juce::File (r.wavPath), r.channels, r.rate,
+                    session->getBlockSize(), r.name, r.classId, r.latencySamples);
+            else if (req.type == Protocol::MeasureType::compression)
+                exportJson = ChildWavAnalyzer::analyzeChildCompression (
                     juce::File (r.wavPath), r.channels, r.rate,
                     session->getBlockSize(), r.name, r.classId, r.latencySamples);
             else

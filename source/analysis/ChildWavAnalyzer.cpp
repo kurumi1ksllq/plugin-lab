@@ -2,7 +2,9 @@
 #include "WavCaptureReader.h"
 #include "FreqResponse.h"
 #include "HarmonicAnalysis.h"
+#include "CompressionCurve.h"
 #include "Export.h"
+#include "../utils/MathUtils.h"
 
 namespace ChildWavAnalyzer
 {
@@ -90,6 +92,58 @@ juce::String analyzeChildHarmonic (const juce::File& wavPath,
     ctx.paramSnapshot  = "{}";   // no host plugin instance → empty snapshot
 
     return Export::harmonicAnalysisToJSON (result, ctx);
+}
+
+juce::String analyzeChildCompression (const juce::File& wavPath,
+                                      int numChannels,
+                                      double sampleRate,
+                                      int blockSize,
+                                      const juce::String& pluginName,
+                                      const juce::String& classId,
+                                      int latencySamples)
+{
+    juce::AudioBuffer<float> dry;
+    juce::AudioBuffer<float> wet;
+    if (! WavCaptureReader::readDryWet (wavPath, numChannels, dry, wet))
+        return {};
+
+    // The child's generator config mirrors the host's compression branch
+    // (MeasurementSession.cpp Type::compressionCurve, :172-179): ToneBurst,
+    // 1000 Hz, the constructor-default 9 amplitude levels {0.01..0.9}, 50 ms
+    // burst + 150 ms gap (prepare() defaults), master amplitude 1.0. The
+    // analysis needs exactly these levels (the dB list's size drives
+    // CompressionCurve's burst segmentation; the values mirror
+    // MeasurementSession::getInputLevelsDB, :307-316, which derives them
+    // from the same amplitudes via MathUtils::amplitudeToDB) — keep the
+    // list in lockstep with MeasurementSession.cpp AND PluginHostChild.cpp
+    // handleMeasure (each site carries a cross-referencing comment so the
+    // two cannot silently drift).
+    static const std::vector<double> kLevels =
+        { 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9 };
+    std::vector<double> inputLevelsDB;
+    inputLevelsDB.reserve (kLevels.size());
+    for (double level : kLevels)
+        inputLevelsDB.push_back (MathUtils::amplitudeToDB (level));
+
+    CompressionCurve analyzer;
+    const auto result = analyzer.analyze (dry, wet, sampleRate, inputLevelsDB);
+
+    // Context built from child-reported metadata + measure-request params
+    // (ADR-D-6) — same shape as analyzeChildHarmonic. Non-freq types force
+    // the sweep excitation on the host side (CommandParser.cpp:662-665), so
+    // the context records "sweep" and the default suppresses it from the
+    // export.
+    Export::Context ctx;
+    ctx.pluginName     = pluginName;
+    ctx.classId        = classId;
+    ctx.latencySamples = latencySamples;
+    ctx.sampleRate     = sampleRate;
+    ctx.blockSize      = blockSize;
+    ctx.excitation     = "sweep";
+    ctx.source.type    = "signal";
+    ctx.paramSnapshot  = "{}";   // no host plugin instance → empty snapshot
+
+    return Export::compressionCurveToJSON (result, ctx);
 }
 
 } // namespace ChildWavAnalyzer

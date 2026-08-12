@@ -38,10 +38,11 @@ class PluginHostChildCoordinator;
  * vocabulary ("child measurement failed" / the child's own error, e.g.
  * "no plugin loaded").
  *
- * ADR-D-7: frequency_response and harmonic (T1) pass the gate; any other
- * type (gr_timeline — deferred to a separate issue — and unknown types) is
- * rejected WITHOUT touching the child — the blacklisted plugin is never
- * loaded in this process, and there is no fallback to host-direct loading.
+ * ADR-D-7: frequency_response, harmonic (T1) and compression (T2) pass the
+ * gate; any other type (gr_timeline — deferred to a separate issue — and
+ * unknown types) is rejected WITHOUT touching the child — the blacklisted
+ * plugin is never loaded in this process, and there is no fallback to
+ * host-direct loading.
  *
  * THREADING: run() blocks synchronously on the calling thread (the
  * CommandParser-dispatched message thread). restart() refuses to join the
@@ -66,9 +67,9 @@ public:
                               juce::String pluginPath,
                               int resultTimeoutMs = 60000);
 
-    /** One frequency_response or harmonic measurement through the child (see
-        class docs for the sequence, the crash gate and the error
-        vocabulary). */
+    /** One frequency_response, harmonic or compression measurement through
+        the child (see class docs for the sequence, the crash gate and the
+        error vocabulary). */
     ChildMeasureContract::ChildMeasureOutcome run (const ChildMeasureContract::ChildMeasureRequest& request);
 
     /** Request cancellation of an in-flight run (issue #3): forwards to the

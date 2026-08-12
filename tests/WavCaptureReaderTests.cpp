@@ -8,6 +8,7 @@
 #include "../source/signal/SineSweep.h"
 #include "../source/signal/Impulse.h"
 #include "../source/signal/MultiTone.h"
+#include "../source/signal/ToneBurst.h"
 
 #include <cstring>
 #include <cmath>
@@ -218,6 +219,35 @@ const juce::var* findHarmonic (const juce::var& tone, double freqHz)
             return &h;
     }
     return nullptr;
+}
+
+/** ToneBurst fixture mirroring the host compression generator config
+ *  (MeasurementSession.cpp Type::compressionCurve branch): 1000 Hz, the
+ *  constructor-default 9 amplitude levels {0.01..0.9}, 50 ms burst + 150 ms
+ *  gap (prepare() defaults), master amplitude 1.0. The child
+ *  (PluginHostChild.cpp handleMeasure) and
+ *  ChildWavAnalyzer::analyzeChildCompression hardcode the same levels — keep
+ *  the three in lockstep. */
+juce::AudioBuffer<float> generateToneBurst (double sr)
+{
+    ToneBurst tb;
+    tb.setFrequency (1000.0);
+    tb.prepare (sr, 512);
+
+    const int totalSamples = static_cast<int> (tb.getTotalLength());
+    juce::AudioBuffer<float> buf (1, totalSamples);
+    buf.clear();
+    tb.generate (buf, 0, totalSamples);
+    return buf;
+}
+
+/** Expected measured input dB for a ToneBurst level: the analyzer measures
+ *  the RMS of the burst sine, so input_db = 20·log10(level/√2) — an
+ *  independent first-principles expression of the same quantity (the
+ *  production path hunts the burst window in the recording). */
+double expectedInputDB (double level)
+{
+    return 20.0 * std::log10 (level / std::sqrt (2.0));
 }
 } // namespace
 
@@ -615,6 +645,153 @@ TEST_CASE ("ChildWavAnalyzer: harmonic missing WAV returns empty JSON",
 {
     const auto missing = tempWav ("pluginlab_childharmonic_missing_");
     REQUIRE (ChildWavAnalyzer::analyzeChildHarmonic (
+                 missing, 2, 48000.0, 512, "TestPlugin", "CLSID", 0).isEmpty());
+    missing.deleteFile();
+}
+
+//==============================================================================
+// Child compression analysis entry (T2): deterministic WAV → compression_curve
+// JSON. The dry excitation mirrors the host compression config (ToneBurst,
+// 1000 Hz, default 9 levels {0.01..0.9}, 50 ms burst + 150 ms gap); wet
+// applies a KNOWN compressor simulation per burst: gain 0 dB below a
+// threshold T, then output = T + (input − T)/ratio above it (hard knee,
+// measured-input-dB frame). The analyzer measures dry/wet RMS of each burst
+// window, so the expected curve points are computable in the test from the
+// level list alone (expectedInputDB). Tolerances stay loose (0.5 dB) to
+// absorb window/quantization effects — RMS-based, no FFT precision needed.
+//==============================================================================
+
+TEST_CASE ("ChildWavAnalyzer: compression identity WAV exports the 9-level curve with 0 dB GR",
+           "[childcompression][wavcapturereader]")
+{
+    // Arrange — clean ToneBurst excitation, wet identical to dry: every
+    // burst passes through at unity gain, so the curve is the identity line.
+    constexpr double kSr = 48000.0;
+    const auto dry = generateToneBurst (kSr);
+    juce::AudioBuffer<float> wet (dry);
+
+    const auto wav = tempWav ("pluginlab_childcompression_id_");
+    REQUIRE (writeTestWav (wav, dry, wet, kSr, 24));
+
+    // Act — the child-WAV analysis entry (read WAV → analyze → export).
+    const auto jsonText = ChildWavAnalyzer::analyzeChildCompression (
+        wav, 1, kSr, 512, "TestPlugin", "CLSID", 0);
+    REQUIRE_FALSE (jsonText.isEmpty());
+
+    // Assert — structural: one point per level, ordered by input dB, on the
+    // identity line (output == input, GR == 0).
+    const auto doc = juce::JSON::parse (jsonText);
+    REQUIRE (doc.isObject());
+    REQUIRE (doc["type"].toString() == "compression_curve");
+
+    const auto curve = doc["curve"].getArray();
+    REQUIRE (curve != nullptr);
+    REQUIRE (curve->size() == 9);
+
+    const std::vector<double> kLevels = { 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9 };
+    for (int i = 0; i < curve->size(); ++i)
+    {
+        const double inputDB  = static_cast<double> ((*curve)[i]["input_db"]);
+        const double outputDB = static_cast<double> ((*curve)[i]["output_db"]);
+        const double grDB     = static_cast<double> ((*curve)[i]["gr_db"]);
+
+        REQUIRE (inputDB == Catch::Approx (expectedInputDB (kLevels[static_cast<size_t> (i)])).margin (0.5));
+        REQUIRE (outputDB == Catch::Approx (inputDB).margin (0.5));
+        REQUIRE (grDB == Catch::Approx (0.0).margin (0.5));
+    }
+
+    // Assert — fit of an uncompressed line: unity ratio, no detected
+    // threshold, the fixed default knee.
+    const auto fitted = doc["fitted"];
+    REQUIRE (fitted.isObject());
+    REQUIRE (static_cast<double> (fitted["ratio"]) == Catch::Approx (1.0).margin (0.05));
+    REQUIRE (static_cast<double> (fitted["threshold_db"]) == Catch::Approx (0.0).margin (0.5));
+    REQUIRE (static_cast<double> (fitted["knee_db"]) == Catch::Approx (3.0));
+
+    wav.deleteFile();
+}
+
+TEST_CASE ("ChildWavAnalyzer: compression WAV with known knee (T=-23 dB, 2:1) exports the expected curve and fit",
+           "[childcompression][wavcapturereader]")
+{
+    // Arrange — same excitation; wet applies a KNOWN hard-knee compressor in
+    // the analyzer's measured-input-dB frame: gain 0 dB at/under −23 dB,
+    // 2:1 above (output = T + (input − T)/2). 4 of the 9 levels sit below
+    // the knee (untouched), the other 5 are attenuated.
+    constexpr double kSr     = 48000.0;
+    constexpr double kKneeDB = -23.0;
+    constexpr double kRatio  = 2.0;
+    const std::vector<double> kLevels = { 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9 };
+
+    const auto dry = generateToneBurst (kSr);
+    juce::AudioBuffer<float> wet (1, dry.getNumSamples());
+    wet.clear();
+
+    // Burst layout mirrors ToneBurst::prepare: 50 ms burst + 150 ms gap per
+    // level at kSr — the same cycle the fixture generated.
+    const int burstSamples = static_cast<int> (kSr * 50.0 / 1000.0);
+    const int gapSamples   = static_cast<int> (kSr * 150.0 / 1000.0);
+    const int cycleSamples = burstSamples + gapSamples;
+
+    for (size_t b = 0; b < kLevels.size(); ++b)
+    {
+        const double inputDB = expectedInputDB (kLevels[b]);
+        const double gainDB = (inputDB <= kKneeDB)
+            ? 0.0
+            : -(inputDB - kKneeDB) * (1.0 - 1.0 / kRatio);
+        const float gain = static_cast<float> (std::pow (10.0, gainDB / 20.0));
+
+        for (int i = 0; i < burstSamples; ++i)
+            wet.setSample (0, static_cast<int> (b) * cycleSamples + i,
+                           dry.getSample (0, static_cast<int> (b) * cycleSamples + i) * gain);
+    }
+
+    const auto wav = tempWav ("pluginlab_childcompression_knee_");
+    REQUIRE (writeTestWav (wav, dry, wet, kSr, 24));
+
+    // Act
+    const auto jsonText = ChildWavAnalyzer::analyzeChildCompression (
+        wav, 1, kSr, 512, "TestPlugin", "CLSID", 0);
+    REQUIRE_FALSE (jsonText.isEmpty());
+
+    // Assert — the curve points match the simulation: input_db from the
+    // level list, output_db = input + gain(input), gr_db = gain.
+    const auto doc = juce::JSON::parse (jsonText);
+    REQUIRE (doc.isObject());
+    const auto curve = doc["curve"].getArray();
+    REQUIRE (curve != nullptr);
+    REQUIRE (curve->size() == 9);
+
+    for (size_t b = 0; b < kLevels.size(); ++b)
+    {
+        const double inputDB = expectedInputDB (kLevels[b]);
+        const double expectedGainDB = (inputDB <= kKneeDB)
+            ? 0.0
+            : -(inputDB - kKneeDB) * (1.0 - 1.0 / kRatio);
+
+        const auto& p = (*curve)[static_cast<int> (b)];
+        REQUIRE (static_cast<double> (p["input_db"]) == Catch::Approx (inputDB).margin (0.5));
+        REQUIRE (static_cast<double> (p["output_db"]) == Catch::Approx (inputDB + expectedGainDB).margin (0.5));
+        REQUIRE (static_cast<double> (p["gr_db"]) == Catch::Approx (expectedGainDB).margin (0.5));
+    }
+
+    // Assert — the fit recovers the simulation: the first point below the
+    // knee (GR < −0.5 dB) is the 0.2 level (~−17 dB measured input), and
+    // the least-squares slope over the compressed points is 1/2:1 → ratio 2.
+    const auto fitted = doc["fitted"];
+    REQUIRE (fitted.isObject());
+    REQUIRE (static_cast<double> (fitted["ratio"]) == Catch::Approx (kRatio).margin (0.3));
+    REQUIRE (static_cast<double> (fitted["threshold_db"]) == Catch::Approx (-17.0).margin (1.0));
+    REQUIRE (static_cast<double> (fitted["knee_db"]) == Catch::Approx (3.0));
+
+    wav.deleteFile();
+}
+
+TEST_CASE ("ChildWavAnalyzer: compression missing WAV returns empty JSON",
+           "[childcompression][wavcapturereader]")
+{
+    const auto missing = tempWav ("pluginlab_childcompression_missing_");
+    REQUIRE (ChildWavAnalyzer::analyzeChildCompression (
                  missing, 2, 48000.0, 512, "TestPlugin", "CLSID", 0).isEmpty());
     missing.deleteFile();
 }
