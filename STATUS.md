@@ -214,6 +214,7 @@ tools/monitor.ps1         # 实时监控脚本（2026-08-02 b3e1813 移入 tools
 tools/pipe_client.py      # Python NamedPipe 客户端（stdlib + ctypes，batch_collect 依赖）
 tools/batch_collect.py    # 批量采集 CLI 驱动（dataset 流程编排）
 tools/compare_freq.py     # 频响对比（MLS vs sweep 验收，|Δ|<0.5dB）
+tools/compare_all.py      # 四类型导出对比 CLI（freq/compression/gr_timeline/harmonic，stdlib-only）
 tools/reverse_derive.py   # 导出 JSON 反推验证（stdlib-only）
 tools/verify_export.py    # 导出 JSON 峰值/Q 验证（stdlib-only）
 DESIGN.md                 # 设计文档
