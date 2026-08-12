@@ -79,9 +79,7 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 ## 待办（下一步）—— 以 GitHub issue 为准
 
-> 2026-08-11 更新：原路线图（docs/roadmap-next.md）五块（C/E/A/B/D）已全部完成并删除（内容在 git 历史与 PR 记录中）。**需求与待开发全部走 GitHub issue**（当前：issue #7 子进程测量扩展）；历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成；块 B 记录模式于 2026-08-10 完成，见下方完成记录）。
-
-- **块 4 D 进程外托管**（**下一步**，设计门）：`git 历史 docs/archive/plan-block-d-out-of-process.md` 6 设计问题各附推荐+理由+备选+决策标准，逐条确认即拆票（D0-D6）
+> 2026-08-12 更新：原路线图（docs/roadmap-next.md）五块（C/E/A/B/D）已全部完成并删除（内容在 git 历史与 PR 记录中；块 D 进程外托管已完成：harmonic/compression 子进程测量于 #14 交付，gr_timeline 后置为 #15）。**需求与待开发全部走 GitHub issue**（当前 open：#9 AI 反推闭环冲刺、#15 gr_timeline 子进程测量、#16 hosted 子进程测量 stop 可达、#17 RecorderEngine 上层）；历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成；块 B 记录模式于 2026-08-10 完成，见下方完成记录）。
 
 ## 阶段 1 完成记录（2026-08-02）
 
