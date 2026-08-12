@@ -2,14 +2,18 @@
 
 Wave-1 T1-B of ticket #24: pure-function layer. Wave-2 T1-C adds the
 aggregation engine (discover_plugins / analyze_plugin) and ground-truth
-tolerance calibration (verify_against). Wave-1 fixtures are inline literals
-matching the PluginLab export shapes (SPEC.md); Wave-2 fixtures come from
-tools/test_data/synthetic_dataset.py (deterministic known-parameter docs).
+tolerance calibration (verify_against). Wave-3 T1-D adds the report
+writers (write_markdown / write_json) — deterministic, idempotent
+(only generated_at differs between runs). Wave-1 fixtures are inline
+literals matching the PluginLab export shapes (SPEC.md); Wave-2 fixtures
+come from tools/test_data/synthetic_dataset.py (deterministic
+known-parameter docs).
 
 Usage:
     python -m pytest tools/test_aggregate_report.py -q
 """
 import json
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +27,8 @@ from aggregate_report import (
     is_harmonic_empty,
     load_harmonic,
     verify_against,
+    write_json,
+    write_markdown,
 )
 
 # test_data/ is a package-less dir. pytest puts tools/ on sys.path, so
@@ -454,3 +460,204 @@ def test_verify_against_skips_invalid_tau(tmp_path):
     assert set(result["checks"]) == {
         "freq_hz", "gain_db", "q", "threshold_db", "ratio"}
     assert result["all_ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# Report writers (T1-D): write_markdown / write_json
+# ---------------------------------------------------------------------------
+
+_META = {"generated_at": "2026-08-12T10:00:00+00:00", "out_dir": "out"}
+
+
+def _hand_built_rows():
+    """Two rows built by hand: one degenerate (data present but flat/unity),
+    one no-data (every section derivation-failed, e.g. unreadable file)."""
+    return [
+        {"slug": "flat", "plugin": "FlatBoi",
+         "has_freq": True, "has_compression": True,
+         "has_gr": True, "has_harmonic": False,
+         "freq": {"freq_hz": None, "gain_db": None, "q": None,
+                  "status": "degenerate"},
+         "compression": {"threshold_db": None, "ratio": None,
+                         "status": "degenerate", "json_fitted": {}},
+         "gr": {"attack_ms": None, "release_ms": None, "valid": False,
+                "status": "degenerate"},
+         "harmonic": {"tones_count": 0, "summary": [],
+                      "status": "no-data"},
+         "status": "degenerate"},
+        {"slug": "ghost", "plugin": "?",
+         "has_freq": False, "has_compression": False,
+         "has_gr": False, "has_harmonic": False,
+         "freq": {"freq_hz": None, "gain_db": None, "q": None,
+                  "status": "derivation-failed"},
+         "compression": {"threshold_db": None, "ratio": None,
+                         "status": "derivation-failed", "json_fitted": {}},
+         "gr": {"attack_ms": None, "release_ms": None, "valid": False,
+                "status": "derivation-failed"},
+         "harmonic": {"tones_count": 0, "summary": [],
+                      "status": "derivation-failed"},
+         "status": "no-data"},
+    ]
+
+
+def _analyzed_rows(tmp_path):
+    """Real analyze_plugin rows: one synthetic ok dataset + one empty dir
+    (missing dataset.json -> derivation-failed row, overall no-data)."""
+    data_dir = tmp_path / "datasets"
+    data_dir.mkdir()
+    data = make_dataset(
+        "synth", "Synthetic",
+        peak_hz=1000.0, gain_db=6.0, q=1.0,
+        threshold_db=-30.0, ratio=4.0,
+        attack_sec=0.001, release_sec=0.05,
+        tones=[{"fundamental_hz": 440.0, "fundamental_db": -12.0,
+                "thd_percent": 1.0}])
+    _write_doc(data_dir, "synth", data)
+    (data_dir / "empty").mkdir()
+    return [analyze_plugin(Path(p["path"]) / "dataset.json")
+            for p in discover_plugins(data_dir)]
+
+
+def test_write_json_real_rows(tmp_path):
+    """Real analyzed rows: JSON mirrors generated_at/out_dir/tolerances/
+    counts/plugins, plugins sorted by slug, trailing newline."""
+    rows = _analyzed_rows(tmp_path)
+    path = write_json(rows, _META, tmp_path / "report.json")
+
+    assert path == tmp_path / "report.json"
+    assert path.is_file()
+    text = path.read_text(encoding="utf-8")
+    assert text.endswith("\n")
+    doc = json.loads(text)
+    assert set(doc) == {"generated_at", "out_dir", "tolerances", "counts",
+                        "plugins"}
+    assert doc["generated_at"] == _META["generated_at"]
+    assert doc["out_dir"] == _META["out_dir"]
+    assert doc["tolerances"] == LOCKED_TOLERANCES
+    assert doc["counts"] == {"total": 2, "with_data": 1, "no_data": 1,
+                             "degenerate": 0, "derivation_failed": 1}
+    assert [p["slug"] for p in doc["plugins"]] == ["empty", "synth"]
+    assert doc["plugins"][0]["status"] == "no-data"
+    assert doc["plugins"][1]["plugin"] == "Synthetic"
+    assert doc["plugins"][1]["freq"]["freq_hz"] == pytest.approx(
+        1000.0, rel=0.01)
+
+
+def test_write_markdown_real_rows(tmp_path):
+    """Real analyzed rows: markdown has per-plugin sections with slug, plugin
+    name, derived values and a summary table."""
+    rows = _analyzed_rows(tmp_path)
+    path = write_markdown(rows, _META, tmp_path / "report.md")
+
+    assert path == tmp_path / "report.md"
+    assert path.is_file()
+    text = path.read_text(encoding="utf-8")
+    assert "## synth" in text
+    assert "Synthetic" in text
+    assert "## empty" in text
+    assert "threshold_db=-30" in text
+    assert "ratio=4" in text
+    assert "attack_ms=1" in text
+    assert "release_ms=50" in text
+    assert "tones=1" in text
+    assert "| Total plugins | 2 |" in text
+    assert "| With data | 1 |" in text
+    assert "| No data | 1 |" in text
+    assert "| Derivation failed | 1 |" in text
+    assert f"| Generated at | {_META['generated_at']} |" in text
+
+
+def test_write_json_hand_built_rows(tmp_path):
+    """Hand-built degenerate + no-data rows: counts break down correctly and
+    per-section statuses survive the round-trip."""
+    rows = _hand_built_rows()
+    path = write_json(rows, _META, tmp_path / "report.json")
+
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["counts"] == {"total": 2, "with_data": 1, "no_data": 1,
+                             "degenerate": 1, "derivation_failed": 1}
+    assert [p["slug"] for p in doc["plugins"]] == ["flat", "ghost"]
+    assert doc["plugins"][0]["status"] == "degenerate"
+    assert doc["plugins"][1]["freq"]["status"] == "derivation-failed"
+    assert doc["plugins"][1]["gr"]["valid"] is False
+
+
+def test_write_markdown_hand_built_rows(tmp_path):
+    """Hand-built rows: degenerate/no-data statuses and tolerance list are
+    rendered in the summary table."""
+    rows = _hand_built_rows()
+    path = write_markdown(rows, _META, tmp_path / "report.md")
+
+    text = path.read_text(encoding="utf-8")
+    assert "## flat" in text
+    assert "FlatBoi" in text
+    assert "Status: degenerate" in text
+    assert "## ghost" in text
+    assert "derivation-failed" in text
+    assert "| Degenerate | 1 |" in text
+    assert "| Derivation failed | 1 |" in text
+    assert "| Locked tolerances |" in text
+    assert "freq_pct=5.0%" in text
+    assert "gain_db=0.5 dB" in text
+
+
+def test_write_json_escaping_special_chars(tmp_path):
+    """A plugin name with quotes/backslashes renders as valid JSON and
+    round-trips exactly."""
+    name = 'Sneaky "quotes" \\ backslash'
+    row = dict(_hand_built_rows()[1], plugin=name)
+    path = write_json([row], _META, tmp_path / "report.json")
+
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["plugins"][0]["plugin"] == name
+
+
+def test_writers_idempotent_except_generated_at(tmp_path):
+    """Re-running both writers with a different generated_at produces output
+    differing ONLY in the generated_at value — the rest is byte-identical."""
+    rows = _hand_built_rows()
+    meta_a = {"generated_at": "2026-08-12T10:00:00+00:00", "out_dir": "out"}
+    meta_b = {"generated_at": "2026-08-12T11:00:00+00:00", "out_dir": "out"}
+
+    md_a = write_markdown(rows, meta_a, tmp_path / "a.md")
+    md_b = write_markdown(rows, meta_b, tmp_path / "b.md")
+    text_a = md_a.read_text(encoding="utf-8")
+    text_b = md_b.read_text(encoding="utf-8")
+    assert text_a != text_b
+    diff = [i for i, (x, y) in enumerate(zip(text_a.splitlines(),
+                                             text_b.splitlines())) if x != y]
+    assert len(diff) == 1
+    assert "Generated at" in text_a.splitlines()[diff[0]]
+
+    json_a = write_json(rows, meta_a, tmp_path / "a.json")
+    json_b = write_json(rows, meta_b, tmp_path / "b.json")
+    doc_a = json.loads(json_a.read_text(encoding="utf-8"))
+    doc_b = json.loads(json_b.read_text(encoding="utf-8"))
+    assert doc_a["generated_at"] != doc_b["generated_at"]
+    doc_a.pop("generated_at")
+    doc_b.pop("generated_at")
+    assert doc_a == doc_b
+
+
+def test_write_json_deterministic_order(tmp_path):
+    """Rows in any input order produce identical output: plugins are sorted
+    by slug inside the writer."""
+    rows = _hand_built_rows()
+    shuffled = [rows[1], rows[0]]  # ghost before flat
+    path_a = write_json(shuffled, _META, tmp_path / "a.json")
+    path_b = write_json(rows, _META, tmp_path / "b.json")
+
+    assert path_a.read_text(encoding="utf-8") == \
+        path_b.read_text(encoding="utf-8")
+    doc = json.loads(path_a.read_text(encoding="utf-8"))
+    assert [p["slug"] for p in doc["plugins"]] == ["flat", "ghost"]
+
+
+def test_writers_propagate_oserror(tmp_path):
+    """An unwritable path raises OSError — writers never swallow IO errors."""
+    bad = tmp_path / "no" / "such" / "dir" / "report.json"
+    rows = _hand_built_rows()
+    with pytest.raises(OSError):
+        write_json(rows, _META, bad)
+    with pytest.raises(OSError):
+        write_markdown(rows, _META, bad)

@@ -7,7 +7,12 @@ engine.
 Wave-2 T1-C (ticket #24): aggregation engine — plugin discovery
 (discover_plugins), per-plugin analysis rows (analyze_plugin) and
 ground-truth tolerance calibration (LOCKED_TOLERANCES, verify_against).
-CLI / report writers belong to later waves; none here.
+
+Wave-3 T1-D (ticket #24): report writers — write_markdown (human-readable
+per-plugin report) and write_json (machine-readable mirror). Both are
+deterministic (plugins sorted by slug) and idempotent: re-running with the
+same rows/meta reproduces byte-identical output except the generated_at
+timestamp. CLI wiring belongs to Wave 4 T1-E; none here.
 
 Stdlib only, no third-party dependencies.
 
@@ -362,3 +367,131 @@ def verify_against(derived_row, known_params):
                         "unit": unit, "ok": err <= LOCKED_TOLERANCES[tol_key]}
     return {"checks": checks,
             "all_ok": bool(checks) and all(c["ok"] for c in checks.values())}
+
+
+# ---------------------------------------------------------------------------
+# Report writers (T1-D)
+# ---------------------------------------------------------------------------
+
+# Locked tolerance key -> unit suffix rendered in the markdown summary.
+_TOLERANCE_UNITS = {"freq_pct": "%", "gain_db": " dB", "q_pct": "%",
+                    "threshold_db": " dB", "ratio_pct": "%", "tau_pct": "%"}
+
+
+def _count_rows(rows):
+    """Aggregate counts for the report summary.
+
+    with_data = at least one section carried data (even degenerate);
+    no_data = no section carried data; degenerate = overall verdict
+    degenerate; derivation_failed = any section status derivation-failed
+    (e.g. an unreadable dataset file). with_data + no_data == total.
+    """
+    with_data = 0
+    degenerate = 0
+    derivation_failed = 0
+    for row in rows:
+        if any((row["has_freq"], row["has_compression"],
+                row["has_gr"], row["has_harmonic"])):
+            with_data += 1
+        if row["status"] == "degenerate":
+            degenerate += 1
+        statuses = (row["freq"]["status"], row["compression"]["status"],
+                    row["gr"]["status"], row["harmonic"]["status"])
+        if "derivation-failed" in statuses:
+            derivation_failed += 1
+    return {"total": len(rows), "with_data": with_data,
+            "no_data": len(rows) - with_data, "degenerate": degenerate,
+            "derivation_failed": derivation_failed}
+
+
+def _fmt_value(value):
+    """Compact deterministic value rendering for markdown: floats via :g
+    (no trailing zeros), None as n/a."""
+    if value is None:
+        return "n/a"
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
+def _row_markdown(row):
+    """One plugin's markdown section: header, identity, status and a
+    per-type table (derived values + validity + status)."""
+    freq = row["freq"]
+    compression = row["compression"]
+    gr = row["gr"]
+    harmonic = row["harmonic"]
+    validity = "valid" if gr["valid"] else "invalid"
+    return ["## " + row["slug"], "",
+            "Plugin: " + row["plugin"],
+            "Status: " + row["status"], "",
+            "| Section | Details | Status |",
+            "| --- | --- | --- |",
+            "| freq | freq_hz={}, gain_db={}, q={} | {} |".format(
+                _fmt_value(freq["freq_hz"]), _fmt_value(freq["gain_db"]),
+                _fmt_value(freq["q"]), freq["status"]),
+            "| compression | threshold_db={}, ratio={} | {} |".format(
+                _fmt_value(compression["threshold_db"]),
+                _fmt_value(compression["ratio"]), compression["status"]),
+            "| gr | attack_ms={}, release_ms={} ({}) | {} |".format(
+                _fmt_value(gr["attack_ms"]), _fmt_value(gr["release_ms"]),
+                validity, gr["status"]),
+            "| harmonic | tones={} | {} |".format(harmonic["tones_count"],
+                                                  harmonic["status"]), ""]
+
+
+def _summary_markdown(counts, generated_at):
+    """Trailing summary table: counts, locked tolerances, generated_at."""
+    tolerances = ", ".join(f"{key}={value}{_TOLERANCE_UNITS[key]}"
+                           for key, value in LOCKED_TOLERANCES.items())
+    return ["## Summary", "",
+            "| Metric | Value |",
+            "| --- | --- |",
+            f"| Total plugins | {counts['total']} |",
+            f"| With data | {counts['with_data']} |",
+            f"| No data | {counts['no_data']} |",
+            f"| Degenerate | {counts['degenerate']} |",
+            f"| Derivation failed | {counts['derivation_failed']} |",
+            f"| Locked tolerances | {tolerances} |",
+            f"| Generated at | {generated_at} |"]
+
+
+def write_markdown(rows, meta, path):
+    """Write a human-readable per-plugin aggregation report.
+
+    Plugins are sorted by slug (defensive; discover_plugins already yields
+    them sorted). The output is deterministic and idempotent: re-running
+    with the same rows reproduces byte-identical output except the
+    generated_at value from meta. Returns the path written; OSError from
+    the filesystem is propagated to the caller (never swallowed).
+    """
+    sorted_rows = sorted(rows, key=lambda r: r["slug"])
+    lines = ["# Plugin aggregation report", ""]
+    for row in sorted_rows:
+        lines.extend(_row_markdown(row))
+    lines.extend(_summary_markdown(_count_rows(sorted_rows),
+                                   meta["generated_at"]))
+    out_path = Path(path)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out_path
+
+
+def write_json(rows, meta, path):
+    """Write a machine-readable mirror of the aggregation report.
+
+    Top-level keys: generated_at, out_dir, tolerances (LOCKED_TOLERANCES),
+    counts and plugins (sorted by slug). Well-formed JSON via json.dumps
+    (indent=2, ensure_ascii=False) plus a trailing newline, mirroring the
+    batch_collect summary convention. Returns the path written; OSError
+    from the filesystem is propagated to the caller (never swallowed).
+    """
+    sorted_rows = sorted(rows, key=lambda r: r["slug"])
+    doc = {"generated_at": meta["generated_at"],
+           "out_dir": meta["out_dir"],
+           "tolerances": LOCKED_TOLERANCES,
+           "counts": _count_rows(sorted_rows),
+           "plugins": sorted_rows}
+    out_path = Path(path)
+    out_path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n",
+                        encoding="utf-8")
+    return out_path
