@@ -366,7 +366,10 @@ def build_nonlinearity(harmonic_row, all_fingerprints):
     Verdict from describe_quality.classify_harmonic (clean / artifact /
     not-measured); additionally an artifact when the plugin's raw harmonic
     block shares a fingerprint with other plugins (identical raw tones
-    across plugins = same processing chain suspected). harmonic_row may
+    across plugins = same processing chain suspected) - the shared-
+    fingerprint reason is appended for clean AND artifact rows alike, so
+    rig-level duplicates (which typically carry impossible THD) still
+    surface the shared-chain evidence. harmonic_row may
     carry "harmonic_raw" (the dataset.json harmonic.tones list, merged in
     by build_chain_doc) so the membership check can hash it; all_fingerprints
     is the set of sha1 fingerprints shared by >= 2 enriched plugins
@@ -381,7 +384,7 @@ def build_nonlinearity(harmonic_row, all_fingerprints):
     reasons = list(verdict["reasons"])
 
     raw = row.get("harmonic_raw")
-    if (verdict["verdict"] == "clean" and isinstance(raw, list)
+    if (verdict["verdict"] in ("clean", "artifact") and isinstance(raw, list)
             and all_fingerprints):
         canonical = json.dumps(raw, sort_keys=True, default=str).encode()
         fingerprint = hashlib.sha1(canonical).hexdigest()

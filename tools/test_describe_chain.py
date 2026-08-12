@@ -306,6 +306,22 @@ def test_build_nonlinearity_shared_fingerprint():
     assert "fingerprint" in result["reason"]
 
 
+def test_build_nonlinearity_artifact_shared_fingerprint():
+    """Artifact THD + harmonic_raw in the shared-fingerprint set keeps the
+    artifact verdict but ALSO names the shared fingerprint in the reason."""
+    raw = [{"fundamental_hz": 100.3, "thd_percent": 195.8,
+            "dominant_order": 2, "dominant_mag_db": 61.4}]
+    groups = dq.detect_duplicate_fingerprints(
+        [{"slug": "a", "harmonic_raw": raw},
+         {"slug": "b", "harmonic_raw": raw}])
+    assert groups  # the fingerprint is genuinely shared
+    row = dict(make_harmonic_artifact())
+    row["harmonic_raw"] = raw
+    result = dc.build_nonlinearity(row, set(groups))
+    assert result["verdict"] == "artifact"
+    assert "fingerprint" in result["reason"]
+
+
 # ---------------------------------------------------------------------------
 # infer_order
 # ---------------------------------------------------------------------------
