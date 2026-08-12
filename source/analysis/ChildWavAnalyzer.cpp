@@ -3,6 +3,9 @@
 #include "FreqResponse.h"
 #include "HarmonicAnalysis.h"
 #include "CompressionCurve.h"
+#include "CompressionFamily.h"
+#include "GainReduction.h"
+#include "TimeConstants.h"
 #include "Export.h"
 #include "../utils/MathUtils.h"
 
@@ -144,6 +147,54 @@ juce::String analyzeChildCompression (const juce::File& wavPath,
     ctx.paramSnapshot  = "{}";   // no host plugin instance → empty snapshot
 
     return Export::compressionCurveToJSON (result, ctx);
+}
+
+juce::String analyzeChildGrTimeline (const juce::File& wavPath,
+                                     int numChannels,
+                                     double sampleRate,
+                                     int blockSize,
+                                     const juce::String& pluginName,
+                                     const juce::String& classId,
+                                     int latencySamples)
+{
+    juce::AudioBuffer<float> dry;
+    juce::AudioBuffer<float> wet;
+    if (! WavCaptureReader::readDryWet (wavPath, numChannels, dry, wet))
+        return {};
+
+    // Analysis chain mirrors CommandParser.cpp runAndAnalyze gr_timeline
+    // branch (dynamic source): GainReduction with a 1 ms RMS window
+    // (kGRWindowSec — a few-ms attack edge needs the fine resolution),
+    // then edge detection + tau estimation on a POSITIVE-dB copy
+    // (detectMarkers and TimeConstants expect positive dB = reduction;
+    // GainReduction reports the wet/dry ratio, negative for a compressor).
+    // The exported timeline keeps the NON-negated GainReduction convention
+    // (negative dB = reduction).
+    const auto gr = GainReduction::analyze (dry, wet, sampleRate,
+                                            latencySamples, 0.001);
+
+    auto grPositive = gr;
+    for (auto& p : grPositive.timeline)
+        p.grDB = -p.grDB;
+    const auto markers = CompressionFamily::detectMarkers (grPositive);
+    const auto tau = TimeConstants::estimate (grPositive, markers, sampleRate);
+
+    // Context built from child-reported metadata + measure-request params
+    // (ADR-D-6) — same shape as analyzeChildCompression. Non-freq types
+    // force the sweep excitation on the host side (CommandParser.cpp:662-665),
+    // so the context records "sweep" and the default suppresses it from the
+    // export.
+    Export::Context ctx;
+    ctx.pluginName     = pluginName;
+    ctx.classId        = classId;
+    ctx.latencySamples = latencySamples;
+    ctx.sampleRate     = sampleRate;
+    ctx.blockSize      = blockSize;
+    ctx.excitation     = "sweep";
+    ctx.source.type    = "signal";
+    ctx.paramSnapshot  = "{}";   // no host plugin instance → empty snapshot
+
+    return Export::grTimelineToJSON (gr, tau, ctx);
 }
 
 } // namespace ChildWavAnalyzer

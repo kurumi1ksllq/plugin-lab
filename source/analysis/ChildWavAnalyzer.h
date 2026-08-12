@@ -62,10 +62,29 @@ namespace ChildWavAnalyzer
      *  @return the compression_curve export JSON, or an empty string when the
      *          WAV cannot be read (WavCaptureReader logged the failure). */
     juce::String analyzeChildCompression (const juce::File& wavPath,
-                                          int numChannels,
-                                          double sampleRate,
-                                          int blockSize,
-                                          const juce::String& pluginName,
-                                          const juce::String& classId,
-                                          int latencySamples);
+                                           int numChannels,
+                                           double sampleRate,
+                                           int blockSize,
+                                           const juce::String& pluginName,
+                                           const juce::String& classId,
+                                           int latencySamples);
+
+    /** Analyze a child-measured dynamic-source dry/wet WAV and return the
+     *  gr_timeline export JSON (T4.4 — same ADR-D-6/D2b pattern as
+     *  analyzeChildCompression).
+     *  @param wavPath      2*numChannels-channel 24-bit WAV ([dry, wet] layout)
+     *  @param numChannels  plugin channel count (dry and wet share it)
+     *  @param sampleRate   measurement sample rate (from the measure request)
+     *  @param blockSize    measurement block size (from the measure request)
+     *  @param pluginName / classId / latencySamples — plugin metadata reported
+     *                      by the child in its measure result (ADR-D-6)
+     *  @return the gr_timeline export JSON, or an empty string when the
+     *          WAV cannot be read (WavCaptureReader logged the failure). */
+    juce::String analyzeChildGrTimeline (const juce::File& wavPath,
+                                         int numChannels,
+                                         double sampleRate,
+                                         int blockSize,
+                                         const juce::String& pluginName,
+                                         const juce::String& classId,
+                                         int latencySamples);
 }

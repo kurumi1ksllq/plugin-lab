@@ -6,12 +6,16 @@
 #include "../source/analysis/ChildWavAnalyzer.h"
 #include "../source/analysis/FreqResponse.h"
 #include "../source/signal/SineSweep.h"
+#include "../source/signal/EnvelopeSignal.h"
 #include "../source/signal/Impulse.h"
 #include "../source/signal/MultiTone.h"
 #include "../source/signal/ToneBurst.h"
+#include "../source/capture/SweepRunner.h"
+#include "TestCompressorPlugin.h"
 
 #include <cstring>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 namespace
@@ -794,4 +798,152 @@ TEST_CASE ("ChildWavAnalyzer: compression missing WAV returns empty JSON",
     REQUIRE (ChildWavAnalyzer::analyzeChildCompression (
                  missing, 2, 48000.0, 512, "TestPlugin", "CLSID", 0).isEmpty());
     missing.deleteFile();
+}
+
+//==============================================================================
+// Child GR-timeline analysis entry (T4.4): deterministic WAV → gr_timeline
+// JSON. Identity: a clean sine with wet == dry must come back as a flat
+// 0 dB timeline with an invalid tau (no controlled edges). Compressor: the
+// host's dynamic-source excitation (ADSR-enveloped sweep carrier — mirrors
+// MeasurementSession dynamic defaults, 0.02/0.1/0.8/0.2 s ADSR on a 10-20 kHz
+// sweep) run through the deterministic TestCompressorPlugin ground truth
+// (threshold -30 dB, ratio 4, attack/release single poles 5 ms / 50 ms). The
+// exported timeline keeps the GainReduction convention (negative dB =
+// reduction); detectMarkers/TimeConstants run on the negated copy inside the
+// entry (CommandParser.cpp runAndAnalyze gr_timeline branch, same shape).
+//==============================================================================
+
+TEST_CASE ("ChildWavAnalyzer: gr_timeline identity WAV exports flat 0 dB timeline with invalid tau",
+           "[childgr][wavcapturereader]")
+{
+    // Arrange — clean 10 kHz sine (2 s, amplitude 0.5), wet identical to
+    // dry: every GR window measures the wet/dry RMS ratio 1.0 → exactly
+    // 0 dB (both tracks go through the same 24-bit quantization).
+    constexpr double kSr = 48000.0;
+    constexpr int kNumSamples = static_cast<int> (kSr * 2.0);
+
+    juce::AudioBuffer<float> dry (1, kNumSamples);
+    for (int i = 0; i < kNumSamples; ++i)
+        dry.setSample (0, i, static_cast<float> (
+            0.5 * std::sin (2.0 * juce::MathConstants<double>::pi * 10000.0 * i / kSr)));
+    juce::AudioBuffer<float> wet (dry);
+
+    const auto wav = tempWav ("pluginlab_childgr_id_");
+    REQUIRE (writeTestWav (wav, dry, wet, kSr, 24));
+
+    // Act — the child-WAV analysis entry (read WAV → GainReduction →
+    // detectMarkers/TimeConstants → export).
+    const auto jsonText = ChildWavAnalyzer::analyzeChildGrTimeline (
+        wav, 1, kSr, 512, "TestPlugin", "CLSID", 0);
+    REQUIRE_FALSE (jsonText.isEmpty());
+
+    // Assert — structural: gr_timeline with a populated, flat 0 dB timeline;
+    // a flat timeline has no controlled envelope edges, so the tau estimate
+    // is invalid by design (TimeConstants: GR_ss near zero → no estimate).
+    const auto doc = juce::JSON::parse (jsonText);
+    REQUIRE (doc.isObject());
+    REQUIRE (doc["type"].toString() == "gr_timeline");
+
+    const auto timeline = doc["gr"]["timeline"].getArray();
+    REQUIRE (timeline != nullptr);
+    REQUIRE_FALSE (timeline->isEmpty());
+    for (const auto& p : *timeline)
+        REQUIRE (static_cast<double> (p["gr_db"]) == Catch::Approx (0.0).margin (0.01));
+
+    REQUIRE (doc["tau"]["valid"] == juce::var (false));
+
+    wav.deleteFile();
+}
+
+TEST_CASE ("ChildWavAnalyzer: gr_timeline compressor WAV yields valid tau near the injected pole",
+           "[childgr][wavcapturereader]")
+{
+    // Arrange — dynamic-source excitation mirroring the host/child grTimeline
+    // config (MeasurementSession dynamic defaults): ADSR envelope over a
+    // 10-20 kHz 2 s sweep at amplitude 0.5. Wet is the deterministic
+    // TestCompressorPlugin output (single-pole attack 5 ms / release 50 ms)
+    // captured through the real SweepRunner pipeline.
+    //
+    // Envelope release is 1.2 s — NOT the child's 0.2 s default. With the
+    // 0.2 s default the release edge is structurally unmeasurable: threshold
+    // -30 dB + amp 0.5 drive ~16.5 dB of steady reduction, the level crosses
+    // the threshold at 92% of the release phase, and the measured GR is still
+    // ~3.8 dB when the signal ends (empirically verified) — so detectMarkers'
+    // 1 dB floor is only crossed in the silent tail-pad's forced-zero windows,
+    // where GR_ss ≈ 0 and TimeConstants can produce no release estimate
+    // (tau_release stays 0). The 1.2 s release matches the production
+    // dynamic-source config under which release estimation is defined to work
+    // (CompressionFamily kEnvReleaseSec) and leaves ~95 ms of pure-pole decay
+    // inside the signal for the fit.
+    constexpr double kSr = 48000.0;
+    constexpr double kAttackSec = 0.005;
+    constexpr double kReleaseSec = 0.05;
+
+    auto carrier = std::make_unique<SineSweep>();
+    carrier->setFrequencyRange (10000.0, 20000.0);
+    carrier->setDuration (2.0);
+    carrier->setAmplitude (0.5);
+
+    EnvelopeSignal env (std::move (carrier));
+    env.setEnvelope (EnvelopeSignal::Envelope::adsr);
+    env.setSpeed (1.0);
+    env.setADSR (0.02, 0.1, 0.8, 1.2);
+
+    TestCompressorPlugin plugin;
+    plugin.setThresholdDB (-30.0);
+    plugin.setRatio (4.0);
+    plugin.setAttackSec (kAttackSec);
+    plugin.setReleaseSec (kReleaseSec);
+
+    SweepRunner runner;
+    runner.prepare (kSr, 512);
+    runner.setGenerator (&env);
+    runner.setPlugin (&plugin);
+    runner.setTailPadSamples (static_cast<int> (0.2 * kSr));
+    REQUIRE (runner.run());
+
+    const auto& dry = runner.getResult().getDryBuffer();
+    const auto& wet = runner.getResult().getWetBuffer();
+
+    const auto wav = tempWav ("pluginlab_childgr_comp_");
+    REQUIRE (writeTestWav (wav, dry, wet, kSr, 24));
+
+    // Act
+    const auto jsonText = ChildWavAnalyzer::analyzeChildGrTimeline (
+        wav, 2, kSr, 512, "TestPlugin", "CLSID", 0);
+    REQUIRE_FALSE (jsonText.isEmpty());
+
+    // Assert — the timeline shows real reduction in the driven region
+    // (negative dB = reduction; the dry silence tail reads 0 dB) and the tau
+    // estimates land near the injected single-pole constants. Factor-2.5
+    // bounds absorb the AC-carrier effective-attack averaging (the detector
+    // smooths with tau_release on falling half-cycles, see
+    // CompressionFamilyTests tau-match), the 1 ms RMS windowing and the
+    // 24-bit transit.
+    const auto doc = juce::JSON::parse (jsonText);
+    REQUIRE (doc.isObject());
+    REQUIRE (doc["type"].toString() == "gr_timeline");
+
+    const auto timeline = doc["gr"]["timeline"].getArray();
+    REQUIRE (timeline != nullptr);
+    REQUIRE_FALSE (timeline->isEmpty());
+
+    double minGR = 0.0;
+    for (const auto& p : *timeline)
+        minGR = juce::jmin (minGR, static_cast<double> (p["gr_db"]));
+    REQUIRE (minGR < -1.0);
+
+    const auto tau = doc["tau"];
+    REQUIRE (tau["valid"] == juce::var (true));
+    const double attackSec  = static_cast<double> (tau["attack_sec"]);
+    const double releaseSec = static_cast<double> (tau["release_sec"]);
+    INFO ("tau_attack=" << attackSec << " s, tau_release=" << releaseSec << " s");
+    // Catch2 v3 forbids chained comparisons (a >= x && a <= y) inside one
+    // assertion — decompose into separate REQUIREs.
+    REQUIRE (attackSec >= 0.5 * kAttackSec);
+    REQUIRE (attackSec <= 2.5 * kAttackSec);
+    REQUIRE (releaseSec >= 0.5 * kReleaseSec);
+    REQUIRE (releaseSec <= 2.5 * kReleaseSec);
+
+    wav.deleteFile();
 }

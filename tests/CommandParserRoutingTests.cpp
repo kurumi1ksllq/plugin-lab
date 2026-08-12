@@ -28,11 +28,13 @@
 #include "../source/signal/Impulse.h"
 #include "../source/signal/MultiTone.h"
 #include "../source/signal/ToneBurst.h"
+#include "../source/signal/EnvelopeSignal.h"
 
 #include <atomic>
 #include <functional>
 #include <cstring>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 //==============================================================================
@@ -227,6 +229,32 @@ juce::AudioBuffer<float> generateToneBurst (double sr)
     juce::AudioBuffer<float> buf (1, totalSamples);
     buf.clear();
     tb.generate (buf, 0, totalSamples);
+    return buf;
+}
+
+/** Dynamic-carrier fixture mirroring the child gr_timeline generator config
+ *  (PluginHostChild.cpp handleMeasure gr_timeline branch): SineSweep
+ *  [10000,20000] Hz, 2 s, amp 0.5, wrapped in EnvelopeSignal ADSR
+ *  {0.02,0.1,0.8,0.2} s, speed 1.0 — must stay in lockstep with
+ *  ChildWavAnalyzer::analyzeChildGrTimeline and the child's handleMeasure
+ *  branch. */
+juce::AudioBuffer<float> generateDynamicCarrier (double sr)
+{
+    auto sweep = std::make_unique<SineSweep>();
+    sweep->setFrequencyRange (10000.0, 20000.0);
+    sweep->setDuration (2.0);
+    sweep->setAmplitude (0.5);
+
+    EnvelopeSignal env (std::move (sweep));
+    env.setEnvelope (EnvelopeSignal::Envelope::adsr);
+    env.setADSR (0.02, 0.1, 0.8, 0.2);
+    env.setSpeed (1.0);
+    env.prepare (sr, 512);
+
+    const int totalSamples = static_cast<int> (sr * 2.0);
+    juce::AudioBuffer<float> buf (1, totalSamples);
+    buf.clear();
+    env.generate (buf, 0, totalSamples);
     return buf;
 }
 
@@ -479,8 +507,10 @@ TEST_CASE ("CommandParser: blacklisted plugin without child callback fails expli
 }
 
 //==============================================================================
-// R4 — callback !ok → error passthrough (ADR-D-7; gr_timeline is still a
-//      rejected child type, deferred to a separate issue)
+// R4 — callback !ok → error passthrough (ADR-D-7; gr_timeline has been an
+//      admitted child type since issue #15, so the fixture's !ok override is
+//      what exercises the passthrough — the parser must never fall back to
+//      host-direct measurement)
 //==============================================================================
 
 TEST_CASE ("CommandParser: child callback failure passes error through (ADR-D-7 passthrough)",
@@ -504,7 +534,9 @@ TEST_CASE ("CommandParser: child callback failure passes error through (ADR-D-7 
     // ---- Act ----
     // gr_timeline requires a non-signal source to pass CommandParser's
     // pre-validation (CommandParser.cpp:635-638) — dynamic reaches the child
-    // path, where the orchestrator still rejects it (ADR-D-7).
+    // path, where the fixture's !ok outcome exercises the ADR-D-7 error
+    // passthrough (gr_timeline itself is an admitted child type since issue
+    // #15).
     const auto response = f.parser.handleCommand (
         RoutingFixture::measureCommand ("gr_timeline", R"("source":"dynamic")", exportPath));
     flushMessageManager (200);
@@ -931,4 +963,97 @@ TEST_CASE ("CommandParser: compression measure routes to child and writes the co
     // ---- Cleanup ----
     juce::File (childJson).deleteFile();
     juce::File (wavPath).deleteFile();
+}
+
+//==============================================================================
+// R10 — issue #15: measure {type: gr_timeline} on a blacklisted plugin
+//      routes to the child AND the host analyzes the child's WAV into a
+//      gr_timeline export (dispatch to
+//      ChildWavAnalyzer::analyzeChildGrTimeline).
+//==============================================================================
+
+TEST_CASE ("CommandParser: gr_timeline measure routes to child and writes the gr_timeline analysis export (issue 15)",
+           "[commandparser][routing][d6]")
+{
+    // ---- Arrange ----
+    // Dynamic-carrier fixture (identity dry/wet — the timeline is non-empty
+    // regardless; this is a routing test, not an analysis-quality test):
+    // mirrors the child gr_timeline generator config.
+    const auto wavPath = tempWav ("pluginlab_route_gr_").getFullPathName();
+    const auto childJson = juce::File (wavPath).withFileExtension (".json").getFullPathName();
+    {
+        const auto dry = generateDynamicCarrier (44100.0);
+        juce::AudioBuffer<float> wet (dry);
+        REQUIRE (writeTestWav (juce::File (wavPath), dry, wet, 44100.0, 24));
+    }
+
+    RoutingFixture f ("TestPlugin", true);
+    f.outcomeOverride = RoutingFixture::okOutcome (wavPath, childJson);
+
+    juce::File (childJson).deleteFile();
+
+    // ---- Act: dynamic reaches the child path (CommandParser.cpp:635-638) ----
+    const auto response = f.parser.handleCommand (
+        RoutingFixture::measureCommand ("gr_timeline", R"("source":"dynamic")", childJson));
+    flushMessageManager (200);
+
+    // ---- Assert: routed to child, request type forwarded ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (f.childCalls.load() == 1);
+    REQUIRE_FALSE (f.hostCompleteFired.load());
+    REQUIRE (f.lastRequest.type == "gr_timeline");
+
+    // ---- Assert: the gr_timeline analysis entry ran end to end ----
+    REQUIRE (juce::File (childJson).existsAsFile());
+    REQUIRE (juce::File (childJson).getSize() > 0);
+
+    const auto doc = juce::JSON::parse (juce::File (childJson).loadFileAsString());
+    REQUIRE (doc.isObject());
+    REQUIRE (doc["type"].toString() == "gr_timeline");
+    // gr_timeline nests the context block (mirrors scanToJSON / the
+    // grTimelineToJSON schema test — ExportTests.cpp).
+    REQUIRE (doc["context"]["plugin"].toString() == "ChildPlugin");
+    REQUIRE (doc["context"]["class_id"].toString() == "child.class.id");
+    const auto gr = doc["gr"];
+    REQUIRE (gr.isObject());
+    const auto timeline = gr["timeline"].getArray();
+    REQUIRE (timeline != nullptr);
+    REQUIRE (timeline->size() > 0);
+
+    // ---- Cleanup ----
+    juce::File (childJson).deleteFile();
+    juce::File (wavPath).deleteFile();
+}
+
+//==============================================================================
+// R11 — guard: the in-process rejection of gr_timeline + signal source is
+//      unchanged for whitelisted plugins (only the child path is exempt)
+//==============================================================================
+
+TEST_CASE ("CommandParser: whitelisted plugin gr_timeline with signal source is still rejected in-process",
+           "[commandparser][routing][d6]")
+{
+    // ---- Arrange ----
+    // Whitelisted (no blacklist entry) — the child path is not applicable.
+    RoutingFixture f ("", true);
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_gr_guard.json")
+            .getFullPathName();
+
+    juce::File (exportPath).deleteFile();
+
+    // ---- Act: no source → defaults to signal ----
+    const auto response = f.parser.handleCommand (
+        RoutingFixture::measureCommand ("gr_timeline", {}, exportPath));
+
+    // ---- Assert: exact original rejection, child never reached ----
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("gr_timeline requires a non-signal source"));
+    REQUIRE (f.childCalls.load() == 0);
+    REQUIRE_FALSE (f.hostCompleteFired.load());
+    REQUIRE_FALSE (juce::File (exportPath).existsAsFile());
+
+    // ---- Cleanup ----
+    juce::File (exportPath).deleteFile();
 }

@@ -631,9 +631,12 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (false, R"("error":"unknown measure type")");
 
         // The GR timeline needs a recorded dry/wet pair with dynamics:
-        // built-in signal sources have no GR timeline generator.
+        // built-in signal sources have no GR timeline generator. The child
+        // path is exempt — the child measures gr_timeline with its built-in
+        // dynamic excitation (issue #15 / D3).
         if (t == Protocol::MeasureType::grTimeline
-            && source == MeasurementSession::Source::signal)
+            && source == MeasurementSession::Source::signal
+            && ! routeToChild)
             return Protocol::makeResponse (false,
                 R"("error":"gr_timeline requires a non-signal source")");
 
@@ -725,11 +728,11 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             ChildMeasureContract::ChildMeasureRequest req;
 
             // Protocol vocabulary == child vocabulary ("frequency_response"
-            // etc., contract table); `t` is already validated above.
-            // gr_timeline (and unknown types) are rejected by the orchestrator
-            // (ADR-D-7) — CommandParser passes the error through, never
-            // routing back to the host. harmonic (T1) and compression (T2)
-            // are dispatched to their analysis entries below.
+            // etc., contract table); `t` is already validated above. Unknown
+            // types are rejected by the orchestrator (ADR-D-7) — CommandParser
+            // passes the error through, never routing back to the host.
+            // harmonic (T1), compression (T2) and gr_timeline (issue #15) are
+            // dispatched to their analysis entries below.
             req.type = t;
 
             // Excitation mirrors buildExportContext: only frequency_response
@@ -754,10 +757,11 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             // ChildWavAnalyzer builds the export Context from that metadata
             // and the measure-request parameters, producing the same
             // frequency_response (or, for type harmonic, harmonic_analysis
-            // — T1; for type compression, compression_curve — T2) JSON the
-            // in-process path writes. An unreadable WAV (empty return) fails
-            // the measurement instead of answering ok with an export file
-            // that was never written.
+            // — T1; for type compression, compression_curve — T2; for type
+            // gr_timeline, gr_timeline — issue #15) JSON the in-process path
+            // writes. An unreadable WAV (empty return) fails the measurement
+            // instead of answering ok with an export file that was never
+            // written.
             const auto& r = outcome.result;
             juce::String exportJson;
             if (req.type == Protocol::MeasureType::harmonic)
@@ -766,6 +770,10 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                     session->getBlockSize(), r.name, r.classId, r.latencySamples);
             else if (req.type == Protocol::MeasureType::compression)
                 exportJson = ChildWavAnalyzer::analyzeChildCompression (
+                    juce::File (r.wavPath), r.channels, r.rate,
+                    session->getBlockSize(), r.name, r.classId, r.latencySamples);
+            else if (req.type == Protocol::MeasureType::grTimeline)
+                exportJson = ChildWavAnalyzer::analyzeChildGrTimeline (
                     juce::File (r.wavPath), r.channels, r.rate,
                     session->getBlockSize(), r.name, r.classId, r.latencySamples);
             else
