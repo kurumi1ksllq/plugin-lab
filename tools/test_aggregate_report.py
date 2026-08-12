@@ -661,3 +661,83 @@ def test_writers_propagate_oserror(tmp_path):
         write_json(rows, _META, bad)
     with pytest.raises(OSError):
         write_markdown(rows, _META, bad)
+
+
+# ---------------------------------------------------------------------------
+# CLI (T1-E): subprocess-level end-to-end runs
+# ---------------------------------------------------------------------------
+
+import subprocess
+import sys
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _cli(*args):
+    """Run tools/aggregate_report.py in a subprocess; return CompletedProcess."""
+    cmd = [sys.executable, str(_REPO_ROOT / "tools" / "aggregate_report.py"),
+           *args]
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", cwd=str(_REPO_ROOT), timeout=120)
+
+
+def _synthetic_out_dir(tmp_path):
+    """A tmp out dir containing one synthetic (fully-derived) dataset.json."""
+    out_dir = tmp_path / "out"
+    (out_dir / "synth").mkdir(parents=True)
+    data = make_dataset(
+        "synth", "Synthetic",
+        peak_hz=1000.0, gain_db=6.0, q=1.0,
+        threshold_db=-30.0, ratio=4.0,
+        attack_sec=0.001, release_sec=0.05,
+        tones=[{"fundamental_hz": 440.0, "fundamental_db": -12.0,
+                "thd_percent": 1.0}])
+    (out_dir / "synth" / "dataset.json").write_text(json.dumps(data),
+                                                    encoding="utf-8")
+    return out_dir
+
+
+def test_cli_synthetic_dataset_writes_both_reports(tmp_path):
+    """CLI run against one synthetic dataset: exit 0, both default-named
+    reports exist under --report-dir, the JSON parses and carries the row."""
+    out_dir = _synthetic_out_dir(tmp_path)
+    report_dir = tmp_path / "reports"
+
+    result = _cli("--out-dir", str(out_dir), "--report-dir", str(report_dir))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    md = report_dir / "aggregate_report.md"
+    js = report_dir / "aggregate_report.json"
+    assert md.is_file() and js.is_file()
+    doc = json.loads(js.read_text(encoding="utf-8"))
+    assert doc["counts"]["total"] == 1
+    assert doc["plugins"][0]["slug"] == "synth"
+    assert doc["plugins"][0]["status"] == "ok"
+    assert "## synth" in md.read_text(encoding="utf-8")
+    assert "synth" in result.stdout
+
+
+def test_cli_explicit_output_paths_override_defaults(tmp_path):
+    """--json/--markdown override the default report file locations."""
+    out_dir = _synthetic_out_dir(tmp_path)
+    custom_json = tmp_path / "custom.json"
+    custom_md = tmp_path / "custom.md"
+
+    result = _cli("--out-dir", str(out_dir),
+                  "--json", str(custom_json), "--markdown", str(custom_md))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert custom_json.is_file()
+    assert custom_md.is_file()
+    assert json.loads(custom_json.read_text(encoding="utf-8"))["out_dir"] == \
+        str(out_dir.resolve())
+
+
+def test_cli_missing_out_dir_exits_2(tmp_path):
+    """A nonexistent --out-dir prints an error to stderr and exits 2
+    (mirrors compare_freq's missing-file convention)."""
+    result = _cli("--out-dir", str(tmp_path / "ghost"),
+                  "--report-dir", str(tmp_path / "reports"))
+
+    assert result.returncode == 2
+    assert "error" in result.stderr.lower()

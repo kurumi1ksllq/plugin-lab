@@ -1,4 +1,4 @@
-"""aggregate_report.py — Pure-function layer for batch reverse-derive reports.
+"""aggregate_report.py — Batch reverse-derive aggregation reports.
 
 Wave-1 T1-B (ticket #24): harmonic extraction/summary and
 measurement-validity predicates consumed by the later-wave aggregation
@@ -12,15 +12,25 @@ Wave-3 T1-D (ticket #24): report writers — write_markdown (human-readable
 per-plugin report) and write_json (machine-readable mirror). Both are
 deterministic (plugins sorted by slug) and idempotent: re-running with the
 same rows/meta reproduces byte-identical output except the generated_at
-timestamp. CLI wiring belongs to Wave 4 T1-E; none here.
+timestamp.
+
+Wave-4 T1-E (ticket #24): CLI — scan --out-dir, aggregate every plugin
+with a dataset.json, write both reports and print a console summary.
 
 Stdlib only, no third-party dependencies.
 
-Usage (import only; consumed by the aggregation engine):
+Usage (import only):
     from aggregate_report import load_harmonic, harmonic_summary, ...
+
+Usage (CLI):
+    python tools/aggregate_report.py [--out-dir DIR] [--report-dir DIR]
+        [--json PATH] [--markdown PATH]
 """
+import argparse
+import datetime
 import json
 import math
+import sys
 from pathlib import Path
 
 from reverse_derive import derive_compression, derive_freq, derive_gr_tau
@@ -495,3 +505,73 @@ def write_json(rows, meta, path):
     out_path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n",
                         encoding="utf-8")
     return out_path
+
+
+# ---------------------------------------------------------------------------
+# CLI (T1-E)
+# ---------------------------------------------------------------------------
+
+
+def _utc_now_iso():
+    """Stable ISO-8601 UTC timestamp (seconds precision) for generated_at."""
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(
+        timespec="seconds")
+
+
+def main(argv=None):
+    """CLI entry: scan --out-dir, aggregate, write both reports, summarize.
+
+    Exit codes: 0 = success; 2 = --out-dir missing entirely (mirrors
+    compare_freq's missing-file convention). Plugins WITHOUT a dataset.json
+    are skipped by discovery (never an error); the stale out/summary.json is
+    not a plugin. OSError from the report writers propagates (never
+    swallowed, matching write_markdown/write_json contract).
+    """
+    parser = argparse.ArgumentParser(
+        description="Aggregate per-plugin analysis reports from a "
+                    "PluginLab out directory")
+    parser.add_argument("--out-dir", default="out", metavar="DIR",
+                        help="directory to scan for per-plugin dataset dirs "
+                             "(default: out)")
+    parser.add_argument("--report-dir", default=".", metavar="DIR",
+                        help="directory for the default-named reports "
+                             "(default: current dir)")
+    parser.add_argument("--json", metavar="PATH", default=None,
+                        help="explicit aggregate_report.json path "
+                             "(overrides --report-dir)")
+    parser.add_argument("--markdown", metavar="PATH", default=None,
+                        help="explicit aggregate_report.md path "
+                             "(overrides --report-dir)")
+    args = parser.parse_args(argv)
+
+    out_dir = Path(args.out_dir)
+    if not out_dir.is_dir():
+        print(f"error: out dir not found: {args.out_dir}", file=sys.stderr)
+        return 2
+
+    plugins = discover_plugins(out_dir)
+    rows = [analyze_plugin(Path(p["path"]) / "dataset.json")
+            for p in plugins if p["has_dataset"]]
+    meta = {"generated_at": _utc_now_iso(),
+            "out_dir": str(out_dir.resolve())}
+
+    report_dir = Path(args.report_dir)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    md_path = write_markdown(rows, meta,
+                             args.markdown or report_dir / "aggregate_report.md")
+    json_path = write_json(rows, meta,
+                           args.json or report_dir / "aggregate_report.json")
+
+    counts = _count_rows(rows)
+    ok_count = counts["total"] - counts["degenerate"] - counts["no_data"]
+    print(f"out dir: {out_dir.resolve()}")
+    print(f"plugins: {counts['total']} (ok={ok_count}, "
+          f"degenerate={counts['degenerate']}, "
+          f"no-data={counts['no_data']}, "
+          f"derivation-failed={counts['derivation_failed']})")
+    print(f"reports: {md_path}, {json_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
