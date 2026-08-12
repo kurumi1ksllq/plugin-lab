@@ -79,7 +79,7 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 ## 待办（下一步）—— 以 GitHub issue 为准
 
-> 2026-08-12 更新：原路线图（docs/roadmap-next.md）五块（C/E/A/B/D）已全部完成并删除（内容在 git 历史与 PR 记录中；块 D 进程外托管已完成：harmonic/compression 子进程测量于 #14 交付，gr_timeline 后置为 #15）。**需求与待开发全部走 GitHub issue**（当前 open：#9 AI 反推闭环冲刺、#15 gr_timeline 子进程测量、#16 hosted 子进程测量 stop 可达、#17 RecorderEngine 上层）；历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成；块 B 记录模式于 2026-08-10 完成，见下方完成记录）。
+> 2026-08-12 更新：原路线图（docs/roadmap-next.md）五块（C/E/A/B/D）已全部完成并删除（内容在 git 历史与 PR 记录中；块 D 进程外托管已完成：harmonic/compression 子进程测量于 #14 交付，gr_timeline 于 #15 交付（PR #19））。**需求与待开发全部走 GitHub issue**（当前 open：#9 AI 反推闭环冲刺、#17 RecorderEngine 上层；#15 已完成待合并、#16 已关闭——子进程测量期间 stop 可达经 #2/#3 并发改造已实现，见已知限制节）；历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成；块 B 记录模式于 2026-08-10 完成，见下方完成记录）。
 
 ## 阶段 1 完成记录（2026-08-02）
 
@@ -333,9 +333,9 @@ DESIGN.md                 # 设计文档
 **已知限制**：
 
 - **D5 编辑器 SetParent 后置**（v1 决策）：子进程 Generic 编辑器经 SetParent 显示到宿主未实施——AI 主路径不需要，黑名单插件无原生 UI 为可接受降级
-- **非 freq 黑名单插件测量不可用**（ADR-D-7）：ChildWavAnalyzer 仅支持 frequency_response，harmonic/compression 黑名单插件返回 "child measurement not implemented for type X"——安全优先，绝不禁用黑名单隔离兜底宿主直载；子进程扩展 harmonic/compression 后自然解锁
+- **非 freq 黑名单插件测量已全覆盖**（#15，2026-08-12）：ChildWavAnalyzer 现支持 frequency_response/harmonic/compression/gr_timeline 全部 4 类型（原 ADR-D-7 拒绝分支最终反转，gr_timeline 于 #15 放行）——安全优先，未知类型仍拒绝且不触达子进程
 - **Pianoteq 9 黑名单条目为注入**（本机装有 Pianoteq 9，但黑名单默认无其条目——验收经 pluginlist.xml 注入条目模拟宿主杀手场景，完成后已还原；子进程加载即杀子进程的宿主侧完整链路已验证）
-- **hosted 子进程测量为同步阻塞**：黑名单插件 measure 期间 CommandParser 阻塞等待子进程（秒级），期间 stop 不可达——与宿主直测 measure 语义一致，协议面扩展留后续
+- **~~hosted 子进程测量为同步阻塞~~**（已解决，2026-08-11 #2/#3 并发改造）：~~黑名单插件 measure 期间 CommandParser 阻塞等待子进程（秒级），期间 stop 不可达~~——PipeServer 双轨后 `stop` 作为控制命令在管道读线程内联执行，长命令期间可达（见 `source/ipc/AGENTS.md` 并发模型；测试：PipeServerTests C1、ChildMeasureOrchestratorTests cancel 用例）
 
 ## 开发流程标准化记录（2026-08-11，GitHub 分支/PR 工作流）
 
