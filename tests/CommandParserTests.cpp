@@ -479,6 +479,53 @@ TEST_CASE ("CommandParser: loadPlugin returns error for unknown plugin", "[comma
     REQUIRE (response.contains ("\"error\""));
 }
 
+//==============================================================================
+// 3b. Windows backslash paths (issue #20) — a compliant JSON command escapes
+// each backslash as \\; the server (juce::JSON::parse) must decode them back
+// to single backslashes so the path matches a registered plugin's
+// fileOrIdentifier. A NON-compliant raw command (unescaped \D, \P, \b) is
+// undefined JSON and must NOT be relied upon — clients must escape.
+//==============================================================================
+
+TEST_CASE ("CommandParser: loadPlugin decodes escaped Windows backslash path (issue 20)",
+           "[commandparser][loadPlugin][json]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // Register a fake plugin whose canonical path contains backslashes —
+    // exactly what a real Windows VST3 install looks like.
+    PluginManager pm;
+    juce::PluginDescription desc;
+    desc.name             = "BackslashVST3";
+    desc.pluginFormatName = "VST3";
+    desc.fileOrIdentifier = R"(C:\Program Files\Common Files\VST3\Backslash.vst3)";
+    desc.uniqueId         = 0xDCBA4321;
+    pm.getKnownPlugins().addType (desc);
+
+    CommandParser parser;
+    parser.setPluginManager (&pm);
+
+    std::atomic<bool> callbackFired { false };
+    juce::PluginDescription capturedDesc;
+    parser.setLoadPluginCallback ([&] (const juce::PluginDescription& d) {
+        callbackFired.store (true);
+        capturedDesc = d;
+    });
+
+    // ---- Act ----
+    // Compliant JSON: every backslash escaped as \\ in the wire command.
+    auto response = parser.handleCommand (
+        R"({"cmd":"loadPlugin","path":"C:\\Program Files\\Common Files\\VST3\\Backslash.vst3"})");
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (callbackFired.load());
+    REQUIRE (capturedDesc.fileOrIdentifier == R"(C:\Program Files\Common Files\VST3\Backslash.vst3)");
+}
+
 TEST_CASE ("CommandParser: loadPlugin/setParam/getParams responses are strict JSON",
            "[commandparser][response-json]")
 {

@@ -63,7 +63,18 @@ try {
     }
 
     # Send the command as one message (newline-terminated, JSON line).
-    $bytes = [Text.Encoding]::UTF8.GetBytes($Command + "`n")
+    # Issue #20: Windows paths in a hand-written command carry raw backslashes
+    # (D:\plugins\x.vst3), which is NOT valid JSON — the server's
+    # juce::JSON::parse decodes \D as D, \b as backspace, corrupting the path
+    # (smoke evidence: D:\Documents\... arrived as D:Documents...). Auto-escape
+    # bare backslashes so callers can pass Windows paths naturally:
+    #   1. protect already-compliant \\ pairs (and longer runs) with a marker,
+    #   2. escape every remaining (bare) backslash to \\,
+    #   3. restore the protected pairs unchanged.
+    # Compliant commands and commands without backslashes pass through byte-for-byte.
+    $marked = [System.Text.RegularExpressions.Regex]::Replace($Command, '\\\\', '__BS__')
+    $escaped = $marked.Replace('\', '\\').Replace('__BS__', '\\')
+    $bytes = [Text.Encoding]::UTF8.GetBytes($escaped + "`n")
     $written = [uint32]0
     if (-not [Kernel32]::WriteFile($pipe, $bytes, [uint32]$bytes.Length, [ref]$written, [IntPtr]::Zero)) {
         throw "WriteFile failed (last error $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))"
