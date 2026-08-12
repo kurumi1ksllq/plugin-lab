@@ -46,6 +46,7 @@ PluginLab/
 | 崩溃日志/minidump         | `source/utils/CrashLog.cpp`                          | `%TEMP%\pluginlab_crashlog.txt`             |
 | 导出 JSON 反推验证        | `tools/reverse_derive.py`、`tools/verify_export.py` | stdlib-only Python                         |
 | 批量聚合报告（out/ 扫描） | `tools/aggregate_report.py`                          | CLI 聚合 markdown+json 报告；默认态标 degenerate |
+| 四类型导出对比               | `tools/compare_all.py`                               | CLI: freq/compression/gr/harmonic 对比         |
 | IPC 手动客户端            | `tools/ipc_client.ps1`                               | NamedPipe 客户端，可配超时                  |
 | 测试设施（假插件）        | `tests/TestPlugin.h`、`tests/TestCompressorPlugin.h` | 确定性 ground truth                         |
 
