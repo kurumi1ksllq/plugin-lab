@@ -49,9 +49,18 @@ Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`ju
 - 测试 target 同样 /W4 /permissive- /WX（警告即错误）
 - TDD：先写头文件（RED 阶段）再实现
 
+## TOOLS PYTEST（CI 强制）
+
+tools/ 下的 Python 工具测试套件（stdlib-only，无 requirements.txt），由 `.github/workflows/build.yml` 的 `python-tools` job 强制执行：
+
+- `test_aggregate_report.py`、`test_synthetic_dataset.py`、`test_compare_all.py`（批量报告/合成数据/四类型对比）
+- `test_describe_quality.py`、`test_describe_render.py`、`test_describe_chain.py`、`test_describe_schema.py`（处理链路描述生成）
+
+共 145 用例（2026-08-13 实测 `python -m pytest tools/ -q`：145 passed）。CI 步骤：`pip install pytest` → `python -m pytest tools/ -q`，失败即 CI 失败——工具脚本改动不再依赖手动跑。
+
 ## GOTCHAS
 
 - `PipeServerTests` 创建**真实** `\\.\pipe\PluginLab`：必须串行运行，且同时不能有其他 PluginLab 实例
 - 禁外部音频素材、禁测试源里写 main()
 - **真插件例外（2026-08-10 块 D T3/T5 授权）**：`ChildHostParityTests.cpp` 与 `ChildProtocolTests.cpp` 用真实 VST3（`CHILD_PARITY_PLUGIN` 编译定义，当前 magic.CURVE.vst3）——前者做子进程 vs 宿主直测端到端比对（<0.5dB 验收），后者验证 snapshot_params/restore_params 稳定 id 键控（D3a，需真插件参数集）。这是「无外部素材」规则的**登记例外**（黑盒测量/参数契约验收必须真插件，假插件不能顶替）；插件缺失时 SKIP（Catch2 SKIP 语义）不 fail；其余测试仍守无外部素材
-- 不属于 ctest 的验证：`tools/verify_export.py`、`tools/reverse_derive.py`（stdlib-only Python，真插件验收，手动跑）
+- 不属于 ctest 的验证：`tools/verify_export.py`、`tools/reverse_derive.py`（stdlib-only Python，真插件验收，手动跑）；tools/ 下 pytest 套件（145 用例）已由 CI 的 `python-tools` job 强制，见上方「TOOLS PYTEST」节
