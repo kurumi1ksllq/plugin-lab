@@ -5,6 +5,7 @@
 #include "../host/PluginManager.h"
 #include "../capture/MeasurementSession.h"
 #include "../capture/ParameterTimeline.h"
+#include "../analysis/Export.h"
 #include "../analysis/FreqResponse.h"
 #include "../analysis/HarmonicAnalysis.h"
 #include "../analysis/CompressionCurve.h"
@@ -204,6 +205,19 @@ private:
     // D6: child-measure target path of a blacklisted plugin that was never
     // loaded in the host (set by the host load path; see the measure case).
     juce::String childMeasurePath;
+
+    // Issue #39: the last successful in-process measurement (measure command
+    // or dataset battery), captured together with the export context frozen
+    // at measurement time — the exportData command re-exports this pair as a
+    // dataset JSON without re-running. Written inside the dispatched command
+    // bodies on the message thread; read by exportData on the IPC worker.
+    // The single-worker FIFO queue plus the WaitableEvent handoff between
+    // commands order every write before the next command's read; the lock
+    // keeps the access uniform with the plugin/session pointer rule (issue
+    // #33 D2: copy under lock, use outside).
+    MeasurementResults lastResults;
+    Export::Context lastExportContext;
+    bool hasLastResults = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CommandParser)
 };

@@ -3102,3 +3102,469 @@ TEST_CASE ("CommandParser: timeline commands error paths",
     juce::File::getSpecialLocation (juce::File::tempDirectory)
         .getChildFile ("pluginlab_timeline_ok_play.wav").deleteFile();
 }
+
+//==============================================================================
+// 11. IPC validation + exportData (issues #34/#39/#40/#41)
+//
+// Note on NaN vs Infinity in these tests: juce::JSON::parse rejects the bare
+// token `NaN` at parse time ("invalid JSON"), so the NaN cases below only pin
+// that the whole chain never accepts it. The genuinely reachable garbage is
+// the overflow literal `1e999`, which strtod parses to +Infinity — the old
+// code passed it through to plugin parameters / durations / rates (issue #34:
+// NaN and Inf both compare FALSE against range checks like `rate <= 0.0`).
+//==============================================================================
+
+TEST_CASE ("CommandParser: setParam rejects non-numeric, non-finite and out-of-range values",
+           "[commandparser][setParam][validation]")
+{
+    ensureMessageManager();
+
+    TestPlugin plugin;
+    CommandParser parser;
+    parser.setPluginInstance (&plugin);
+
+    // Bare NaN token: the JSON layer itself rejects it — pin that the whole
+    // chain never accepts the value.
+    auto nanResp = parser.handleCommand (R"({"cmd":"setParam","name":"Gain","value":NaN})");
+    REQUIRE (nanResp.contains ("\"ok\":false"));
+
+    // 1e999 overflows to +Infinity, which the old code passed straight to
+    // setValueNotifyingHost (issue #34).
+    auto infResp = parser.handleCommand (R"({"cmd":"setParam","name":"Gain","value":1e999})");
+    REQUIRE (infResp.contains ("\"ok\":false"));
+    REQUIRE (infResp.contains ("value"));
+
+    // Missing value: previously silently coerced to 0.0 (issue #41).
+    auto missingResp = parser.handleCommand (R"({"cmd":"setParam","name":"Gain"})");
+    REQUIRE (missingResp.contains ("\"ok\":false"));
+    REQUIRE (missingResp.contains ("value"));
+
+    // String value: no silent coercion to 0.0.
+    auto stringResp = parser.handleCommand (R"({"cmd":"setParam","name":"Gain","value":"loud"})");
+    REQUIRE (stringResp.contains ("\"ok\":false"));
+    REQUIRE (stringResp.contains ("value"));
+
+    // Normalized parameters live in 0..1 — outside is rejected (issue #34).
+    auto highResp = parser.handleCommand (R"({"cmd":"setParam","name":"Gain","value":1.5})");
+    REQUIRE (highResp.contains ("\"ok\":false"));
+    REQUIRE (highResp.contains ("0..1"));
+    auto lowResp = parser.handleCommand (R"({"cmd":"setParam","name":"Gain","value":-0.5})");
+    REQUIRE (lowResp.contains ("\"ok\":false"));
+
+    // Every rejected command left the parameter untouched (initial 0.0).
+    REQUIRE (plugin.getParameters()[0]->getValue() == Catch::Approx (0.0f));
+
+    // A valid 0..1 value still works.
+    auto okResp = parser.handleCommand (R"({"cmd":"setParam","name":"Gain","value":0.5})");
+    REQUIRE (okResp.contains ("\"ok\":true"));
+    REQUIRE (plugin.getParameters()[0]->getValue() == Catch::Approx (0.5f));
+}
+
+TEST_CASE ("CommandParser: noise source rejects invalid duration",
+           "[commandparser][source-noise][validation]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_noise_validation.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+
+    // +Infinity duration (1e999): the old code accepted it and asked the
+    // sweep for a garbage sample count (issue #34).
+    auto infResp = parser.handleCommand (
+        juce::String (R"({"cmd":"measure","source":"noise","duration":1e999,"path":)")
+        + juce::JSON::toString (exportPath) + "}");
+    flushMessageManager (200);
+    REQUIRE (infResp.contains ("\"ok\":false"));
+    REQUIRE (infResp.contains ("duration"));
+
+    // Non-positive duration: rejected (the sweep would run 0 samples).
+    auto negResp = parser.handleCommand (
+        juce::String (R"({"cmd":"measure","source":"noise","duration":-1,"path":)")
+        + juce::JSON::toString (exportPath) + "}");
+    flushMessageManager (200);
+    REQUIRE (negResp.contains ("\"ok\":false"));
+    REQUIRE (negResp.contains ("duration"));
+
+    // A valid bounded duration still works.
+    auto okResp = parser.handleCommand (
+        juce::String (R"({"cmd":"measure","source":"noise","duration":1,"path":)")
+        + juce::JSON::toString (exportPath) + "}");
+    flushMessageManager (200);
+    REQUIRE (okResp.contains ("\"ok\":true"));
+    REQUIRE (okResp.contains ("\"samples\":48000"));
+
+    // Cleanup
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+}
+
+TEST_CASE ("CommandParser: noise source rejects unbounded duration (issue 34)",
+           "[commandparser][source-noise][validation]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_noise_unbounded.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+
+    // 1e12 s would be ~4.8e16 samples at 48 kHz — an offline full-CPU
+    // capture with an unbounded CaptureBuffer and WAV mirror. The old code
+    // accepted it (issue #34); the fix rejects anything above the 1 h cap.
+    // (Deliberately a separate TEST_CASE: running this against the unfixed
+    // code would start that unbounded capture, so the RED pass filters it
+    // out — the +Infinity case above is its fast-failing RED evidence.)
+    auto hugeResp = parser.handleCommand (
+        juce::String (R"({"cmd":"measure","source":"noise","duration":1e12,"path":)")
+        + juce::JSON::toString (exportPath) + "}");
+    flushMessageManager (200);
+    REQUIRE (hugeResp.contains ("\"ok\":false"));
+    REQUIRE (hugeResp.contains ("duration"));
+
+    // Cleanup
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+}
+
+TEST_CASE ("CommandParser: dynamic source rejects non-finite carrier frequency",
+           "[commandparser][source-dynamic][validation]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // +Infinity carrier would poison the dynamic signal generator (issue #34
+    // sweep: numeric fields flowing into generated buffers).
+    auto infCarrier = parser.handleCommand (
+        R"({"cmd":"measure","source":"dynamic","carrier_freq":1e999})");
+    flushMessageManager (200);
+    REQUIRE (infCarrier.contains ("\"ok\":false"));
+    REQUIRE (infCarrier.contains ("carrier_freq"));
+
+    auto infStart = parser.handleCommand (
+        R"({"cmd":"measure","source":"dynamic","carrier_start_hz":1e999})");
+    flushMessageManager (200);
+    REQUIRE (infStart.contains ("\"ok\":false"));
+    REQUIRE (infStart.contains ("carrier_start_hz"));
+}
+
+TEST_CASE ("CommandParser: scan rejects non-finite values",
+           "[commandparser][scan][validation]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // +Infinity (1e999) slipped past the old 0..1 range check (NaN/Inf
+    // compare false against both bounds) and poisoned the scanned parameter
+    // (issue #34 sweep). Pre-fix the command failed with "scan failed" (the
+    // poisoned run produced garbage analysis) — the fix must reject the
+    // values up front with the range message.
+    auto response = parser.handleCommand (
+        R"({"cmd":"scan","param_id":"gain","values":[0.5,1e999]})");
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("values out of range"));
+}
+
+TEST_CASE ("CommandParser: dataset scan block rejects non-finite values",
+           "[commandparser][dataset][validation]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // 1e999 is a double, so it passed parseNumberArray's type check, and the
+    // NaN/Inf comparison against the 0..1 bounds is false — the old code
+    // accepted it (issue #34) and ran the scan with a poisoned parameter
+    // (which then failed on its own, masking the gap — this case pins the
+    // contract: an inf scan value must never run a scan round). With an
+    // empty battery every block fails → "all measurements failed".
+    auto response = parser.handleCommand (
+        R"({"cmd":"dataset","types":[],"scan":{"param_id":"gain","values":[1e999]}})");
+    flushMessageManager (200);
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("all measurements failed"));
+}
+
+TEST_CASE ("CommandParser: playTimeline rejects invalid rate",
+           "[commandparser][playTimeline][validation]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->addTestParameter ("drive", "Drive", 0.0f);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // Valid (empty) timeline file so the rate check is what fails.
+    const juce::File tlPath = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                  .getChildFile ("pluginlab_timeline_rate_validation.json");
+    tlPath.deleteFile();
+    tlPath.replaceWithText (R"({"type":"parameter_timeline","events":[]})");
+
+    // +Infinity rate (1e999) bypassed the old `rate <= 0.0` check — NaN/Inf
+    // compare false (issue #34).
+    const juce::String infCmd =
+        juce::String (R"({"cmd":"playTimeline","rate":1e999,"path":)")
+        + juce::JSON::toString (tlPath.getFullPathName()) + "}";
+    auto infResp = parser.handleCommand (infCmd);
+    flushMessageManager (200);
+    REQUIRE (infResp.contains ("\"ok\":false"));
+    REQUIRE (infResp.contains ("invalid rate"));
+
+    // rate 0 → still rejected (existing behavior, kept).
+    const juce::String zeroCmd =
+        juce::String (R"({"cmd":"playTimeline","rate":0,"path":)")
+        + juce::JSON::toString (tlPath.getFullPathName()) + "}";
+    auto zeroResp = parser.handleCommand (zeroCmd);
+    REQUIRE (zeroResp.contains ("\"ok\":false"));
+    REQUIRE (zeroResp.contains ("invalid rate"));
+
+    // A finite positive rate still works.
+    const juce::String okCmd =
+        juce::String (R"({"cmd":"playTimeline","rate":1.0,"path":)")
+        + juce::JSON::toString (tlPath.getFullPathName()) + "}";
+    auto okResp = parser.handleCommand (okCmd);
+    flushMessageManager (200);
+    REQUIRE (okResp.contains ("\"ok\":true"));
+    REQUIRE (okResp.contains ("\"samples\":"));
+
+    // Cleanup (play-result JSON + WAV are derived siblings of the timeline).
+    tlPath.deleteFile();
+    juce::File::getSpecialLocation (juce::File::tempDirectory)
+        .getChildFile ("pluginlab_timeline_rate_validation_play.json").deleteFile();
+    juce::File::getSpecialLocation (juce::File::tempDirectory)
+        .getChildFile ("pluginlab_timeline_rate_validation_play.wav").deleteFile();
+}
+
+TEST_CASE ("CommandParser: exportData re-exports the last measurement result",
+           "[commandparser][exportData]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+    session.setMeasurementType (MeasurementSession::Type::frequencyResponse);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // 1. No measurement yet -> "no measurement result" (issue #39).
+    auto noResult = parser.handleCommand (R"({"cmd":"exportData","path":"Z:\\no_result.json"})");
+    REQUIRE (noResult.contains ("\"ok\":false"));
+    REQUIRE (noResult.contains ("no measurement result"));
+
+    // 2. Empty path -> rejected up front (issue #40).
+    auto emptyPath = parser.handleCommand (R"({"cmd":"exportData"})");
+    REQUIRE (emptyPath.contains ("\"ok\":false"));
+    REQUIRE (emptyPath.contains ("invalid path"));
+
+    // 3. After a measure: re-export as a dataset JSON (issue #39).
+    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                   .getChildFile ("pluginlab_exportdata_test");
+    tempDir.createDirectory();
+    const juce::File measureJson = tempDir.getChildFile ("exportdata_measure.json");
+    const juce::File dataJson    = tempDir.getChildFile ("exportdata_out.json");
+    measureJson.deleteFile();
+    measureJson.withFileExtension (".wav").deleteFile();
+    dataJson.deleteFile();
+    dataJson.withFileExtension (".wav").deleteFile();
+
+    auto measureResp = parser.handleCommand (
+        juce::String (R"({"cmd":"measure","type":"frequency_response","path":)")
+        + juce::JSON::toString (measureJson.getFullPathName()) + "}");
+    flushMessageManager (200);
+    REQUIRE (measureResp.contains ("\"ok\":true"));
+
+    auto exportResp = parser.handleCommand (
+        juce::String (R"({"cmd":"exportData","path":)")
+        + juce::JSON::toString (dataJson.getFullPathName()) + "}");
+    REQUIRE (exportResp.contains ("\"ok\":true"));
+    REQUIRE (exportResp.contains ("\"export_path\":"));
+
+    REQUIRE (dataJson.existsAsFile());
+    auto exported = juce::JSON::parse (dataJson.loadFileAsString());
+    auto* exportObj = exported.getDynamicObject();
+    REQUIRE (exportObj != nullptr);
+    REQUIRE (exportObj->getProperty ("type").toString() == "dataset");
+    REQUIRE (exportObj->hasProperty ("frequency_response"));
+
+    // 4. A failed write fails the command (issue #40): a directory
+    //    masquerading as the export path makes replaceWithText fail on
+    //    Windows.
+    const juce::File dirAsPath = tempDir.getChildFile ("exportdata_dir.json");
+    dirAsPath.createDirectory();
+    auto dirResp = parser.handleCommand (
+        juce::String (R"({"cmd":"exportData","path":)")
+        + juce::JSON::toString (dirAsPath.getFullPathName()) + "}");
+    REQUIRE (dirResp.contains ("\"ok\":false"));
+    REQUIRE (dirResp.contains ("export write failed"));
+    dirAsPath.deleteRecursively();
+
+    // Cleanup
+    measureJson.deleteFile();
+    measureJson.withFileExtension (".wav").deleteFile();
+    dataJson.deleteFile();
+    dataJson.withFileExtension (".wav").deleteFile();
+    tempDir.deleteRecursively();
+}
+
+TEST_CASE ("CommandParser: dataset rejects empty export path",
+           "[commandparser][dataset][validation]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // No "path" field: previously the export silently wrote to File("") /
+    // File(".wav") in the CWD and answered ok:true (issue #40). A scan
+    // block keeps the battery empty but makes the command reach the export
+    // stage (the path check sits after the all-fail determination, so
+    // `types:[]` alone still reports "all measurements failed").
+    auto response = parser.handleCommand (
+        R"({"cmd":"dataset","types":[],"scan":{"param_id":"gain","values":[0.5]}})");
+    flushMessageManager (200);
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("invalid path"));
+
+    // The empty-path scan run may have flushed a crash-mirror ".wav" to the
+    // CWD (setFlushConfig derived it from the empty path) — remove it.
+    juce::File (".wav").deleteFile();
+}
+
+TEST_CASE ("CommandParser: measure and dataset fail when the export write fails",
+           "[commandparser][export-write-fail]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestPlugin>();
+    plugin->setGain (1.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // A directory masquerading as the export path: replaceWithText cannot
+    // open it, so writeToFile fails. The old code ignored the bool return
+    // and answered ok:true (issue #40).
+    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                   .getChildFile ("pluginlab_export_write_fail");
+    tempDir.createDirectory();
+    const juce::File measureDir = tempDir.getChildFile ("measure_out.json");
+    measureDir.createDirectory();
+    const juce::File datasetDir = tempDir.getChildFile ("dataset_out.json");
+    datasetDir.createDirectory();
+
+    auto measureResp = parser.handleCommand (
+        juce::String (R"({"cmd":"measure","type":"frequency_response","path":)")
+        + juce::JSON::toString (measureDir.getFullPathName()) + "}");
+    flushMessageManager (200);
+    REQUIRE (measureResp.contains ("\"ok\":false"));
+    REQUIRE (measureResp.contains ("export write failed"));
+
+    auto datasetResp = parser.handleCommand (
+        juce::String (R"({"cmd":"dataset","path":)")
+        + juce::JSON::toString (datasetDir.getFullPathName()) + "}");
+    flushMessageManager (200);
+    REQUIRE (datasetResp.contains ("\"ok\":false"));
+    REQUIRE (datasetResp.contains ("export write failed"));
+
+    // Cleanup
+    measureDir.deleteRecursively();
+    datasetDir.deleteRecursively();
+    tempDir.deleteRecursively();
+}
