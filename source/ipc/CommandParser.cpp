@@ -486,14 +486,20 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     // --- setParam ---
     if (cmd == "setParam")
     {
-        if (plugin == nullptr)
+        // The plugin is dereferenced on this (worker) thread — hold the
+        // pointer lock across the whole dereference so a concurrent
+        // message-thread swap + destroy (issue #33 D2) can neither tear the
+        // pointer nor destroy the instance while it is in use.
+        std::lock_guard<std::mutex> lock (pluginLock);
+
+        if (pluginPtr == nullptr)
             return Protocol::makeResponse (false, R"("error":"no plugin loaded")");
 
         auto name = obj->getProperty ("name").toString();
         auto paramId = obj->getProperty ("param_id").toString();
         double value = obj->getProperty ("value");
 
-        auto& params = plugin->getParameters();
+        auto& params = pluginPtr->getParameters();
 
         // Parameter resolution order (documented):
         //   1. param_id (stable hosted-parameter ID) — authoritative when
@@ -537,11 +543,15 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     // --- getParams ---
     if (cmd == "getParams")
     {
-        if (plugin == nullptr)
+        // Same as setParam: hold the pointer lock across the dereference
+        // (issue #33 D2).
+        std::lock_guard<std::mutex> lock (pluginLock);
+
+        if (pluginPtr == nullptr)
             return Protocol::makeResponse (false, R"("error":"no plugin loaded")");
 
         juce::String data = R"("params":[)";
-        auto& params = plugin->getParameters();
+        auto& params = pluginPtr->getParameters();
         for (int i = 0; i < params.size(); ++i)
         {
             auto p = params[i];
@@ -569,6 +579,19 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     // --- measure ---
     if (cmd == "measure")
     {
+        // Issue #33 D2: snapshot the plugin/session pointers under the lock —
+        // the setters run on the message thread while this command runs on
+        // the IPC worker. The locals shadow the members for the rest of the
+        // case (the dispatched body runs on the message thread, where the D1
+        // in-flight-job guard refuses plugin unloads for the run's duration).
+        juce::AudioPluginInstance* plugin;
+        MeasurementSession* session;
+        {
+            std::lock_guard<std::mutex> lock (pluginLock);
+            plugin = this->pluginPtr;
+            session = this->sessionPtr;
+        }
+
         if (session == nullptr)
             return Protocol::makeResponse (false, R"("error":"no session or plugin")");
 
@@ -668,7 +691,6 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         }
 
         session->setSource (source);
-        session->setPluginInstance (plugin);
 
         // Determine export path:
         //   - signal/noise/dynamic → "path" (existing protocol)
@@ -836,6 +858,17 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     // --- scan ---
     if (cmd == "scan")
     {
+        // Issue #33 D2: snapshot the pointers under the lock (the workers
+        // swap them on the message thread); the locals shadow the members
+        // for the rest of the case.
+        juce::AudioPluginInstance* plugin;
+        MeasurementSession* session;
+        {
+            std::lock_guard<std::mutex> lock (pluginLock);
+            plugin = this->pluginPtr;
+            session = this->sessionPtr;
+        }
+
         if (session == nullptr || plugin == nullptr)
             return Protocol::makeResponse (false, R"("error":"no session or plugin")");
 
@@ -900,7 +933,6 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         session->setFreqExcitation (false);
 
         session->setSource (source);
-        session->setPluginInstance (plugin);
 
         // --- export path (default pluginlab_scan.json) ---
         auto path = resolveExportPath (*obj, source, "pluginlab_scan.json");
@@ -972,6 +1004,17 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     // --- dataset ---
     if (cmd == Protocol::Command::dataset)
     {
+        // Issue #33 D2: snapshot the pointers under the lock (the workers
+        // swap them on the message thread); the locals shadow the members
+        // for the rest of the case.
+        juce::AudioPluginInstance* plugin;
+        MeasurementSession* session;
+        {
+            std::lock_guard<std::mutex> lock (pluginLock);
+            plugin = this->pluginPtr;
+            session = this->sessionPtr;
+        }
+
         if (session == nullptr || plugin == nullptr)
             return Protocol::makeResponse (false, R"("error":"no session or plugin")");
 
@@ -1098,7 +1141,6 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
                 session->setSource (run->source);
                 session->setMeasurementType (run->type);
-                session->setPluginInstance (plugin);
 
                 // Frequency-response excitation applies to the whole dataset.
                 if (run->type == MeasurementSession::Type::frequencyResponse)
@@ -1169,7 +1211,6 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                     // scan command's default).
                     session->setSource (MeasurementSession::Source::signal);
                     session->setMeasurementType (scanType);
-                    session->setPluginInstance (plugin);
 
                     ScanEngine engine;
                     engine.setPluginInstance (plugin);
@@ -1328,10 +1369,12 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     // export of the in-memory session result; no measurement runs here.
     if (cmd == Protocol::Command::exportWav)
     {
-        if (session == nullptr)
+        // sessionPtr is set once before the pipe server starts (never swapped
+        // at runtime), so reading it lock-free is safe by construction.
+        if (sessionPtr == nullptr)
             return Protocol::makeResponse (false, R"("error":"no session")");
 
-        auto& result = session->getResult();
+        auto& result = sessionPtr->getResult();
         if (result.getNumRecordedSamples() <= 0)
             return Protocol::makeResponse (false, R"("error":"no measurement result")");
 
@@ -1360,13 +1403,17 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     // captured — the recorded events are replayed later by playTimeline.
     if (cmd == Protocol::Command::recordTimeline)
     {
-        if (plugin == nullptr)
+        // startRecording attaches a listener to the plugin on this (worker)
+        // thread — hold the pointer lock across it (issue #33 D2).
+        std::lock_guard<std::mutex> lock (pluginLock);
+
+        if (pluginPtr == nullptr)
             return Protocol::makeResponse (false, R"("error":"no plugin loaded")");
 
         if (timeline.isRecording())
             return Protocol::makeResponse (false, R"("error":"already recording")");
 
-        timeline.startRecording (plugin);
+        timeline.startRecording (pluginPtr);
         return Protocol::makeResponse (true, R"("recording":true)");
     }
 
@@ -1413,6 +1460,17 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     // measure (WaitableEvent + callAsync to the message thread).
     if (cmd == Protocol::Command::playTimeline)
     {
+        // Issue #33 D2: snapshot the pointers under the lock (the workers
+        // swap them on the message thread); the locals shadow the members
+        // for the rest of the case.
+        juce::AudioPluginInstance* plugin;
+        MeasurementSession* session;
+        {
+            std::lock_guard<std::mutex> lock (pluginLock);
+            plugin = this->pluginPtr;
+            session = this->sessionPtr;
+        }
+
         if (session == nullptr || plugin == nullptr)
             return Protocol::makeResponse (false, R"("error":"no session or plugin")");
 
@@ -1467,7 +1525,6 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         session->setMeasurementType (MeasurementSession::Type::frequencyResponse);
         session->setSource (MeasurementSession::Source::signal);
         session->setFreqExcitation (false);
-        session->setPluginInstance (plugin);
 
         // The play-result JSON never overwrites the input timeline file:
         // "tl.json" → "tl_play.json" (sibling name built by hand —
@@ -1530,8 +1587,8 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         // the worker). Falls back to the session-only cancel when unwired.
         if (cancelRequestCallback)
             cancelRequestCallback();
-        else if (session != nullptr)
-            session->cancel();
+        else if (sessionPtr != nullptr)
+            sessionPtr->cancel();
         return Protocol::makeResponse (true);
     }
 
