@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <mutex>
 #include "../host/PluginManager.h"
 #include "../capture/MeasurementSession.h"
 #include "../capture/ParameterTimeline.h"
@@ -55,10 +56,28 @@ public:
     void setPluginManager (PluginManager* pm)  { pluginManager = pm; }
 
     /** Set the active measurement session. */
-    void setSession (MeasurementSession* s)    { session = s; }
+    void setSession (MeasurementSession* s)
+    {
+        // Lock-guarded like the plugin pointer (issue #33 D2): the session is
+        // set once before the pipe server starts, but the lock keeps the
+        // swap/read pairing uniform.
+        std::lock_guard<std::mutex> lock (pluginLock);
+        sessionPtr = s;
+    }
 
-    /** Set the active plugin instance. */
-    void setPluginInstance (juce::AudioPluginInstance* p) { plugin = p; }
+    /** Set the active plugin instance.
+     *
+     *  Issue #33 D2: the pointer is swapped on the message thread while
+     *  commands dereference it on the IPC worker — the swap is lock-guarded
+     *  against every worker read. The caller must NOT destroy the old
+     *  instance until AFTER the swap returns (null first, destroy second),
+     *  so a worker that grabbed the lock earlier can never dereference a
+     *  destroyed instance. */
+    void setPluginInstance (juce::AudioPluginInstance* p)
+    {
+        std::lock_guard<std::mutex> lock (pluginLock);
+        pluginPtr = p;
+    }
 
     /** Set a callback to load a plugin (runs on message thread). */
     void setLoadPluginCallback (std::function<void(const juce::PluginDescription&)> cb)
@@ -122,8 +141,16 @@ public:
 
 private:
     PluginManager* pluginManager = nullptr;
-    MeasurementSession* session = nullptr;
-    juce::AudioPluginInstance* plugin = nullptr;
+    MeasurementSession* sessionPtr = nullptr;
+    juce::AudioPluginInstance* pluginPtr = nullptr;
+
+    // Issue #33 D2: serializes the plugin/session pointer swap (message
+    // thread, setPluginInstance/setSession) against worker-thread reads in
+    // handleCommand. Never held across a message-thread dispatch (the
+    // dispatched body runs on the message thread, where the D1 in-flight-job
+    // guard already serializes unloads — holding the lock across done.wait()
+    // would deadlock with the message thread).
+    mutable std::mutex pluginLock;
 
     // Parameter-automation recorder (B2, recordTimeline/stopTimeline).
     // Owned here — recording is non-blocking event capture, independent of
