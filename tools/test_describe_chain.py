@@ -37,6 +37,7 @@ from test_data.chain_fixtures import (  # noqa: E402
     make_compression_conflict,
     make_compression_degenerate,
     make_compressor_snapshot,
+    make_eq_dynamic_snapshot,
     make_eq_unused_snapshot,
     make_freq_artifact,
     make_freq_clean,
@@ -47,6 +48,7 @@ from test_data.chain_fixtures import (  # noqa: E402
     make_harmonic_artifact,
     make_harmonic_clean,
     make_harmonic_none,
+    make_multiband_comp_snapshot,
     make_pro_c3_row,
     make_pro_q4_row,
     make_scepter_row,
@@ -139,6 +141,26 @@ def test_classify_eq_unused_snapshot():
     result = dc.classify_plugin_type(make_eq_unused_snapshot())
     assert result["kind"] == "eq-only"
     assert any("unused" in item.lower() for item in result["basis"])
+
+
+def test_classify_eq_dynamic_snapshot():
+    """Band keys + per-band dynamics (Attack/Release/Threshold), no ratio
+    → eq-dynamics hybrid kind, high confidence, basis notes all bands
+    unused."""
+    result = dc.classify_plugin_type(make_eq_dynamic_snapshot())
+    assert result["kind"] == "eq-dynamics"
+    assert result["confidence"] == "high"
+    assert any("unused" in item.lower() for item in result["basis"])
+
+
+def test_classify_multiband_comp_snapshot():
+    """Band keys + per-band Ratio → compressor (ratio is the compressor
+    tell), never eq-dynamics; basis notes both families detected."""
+    result = dc.classify_plugin_type(make_multiband_comp_snapshot())
+    assert result["kind"] == "compressor"
+    assert result["kind"] != "eq-dynamics"
+    assert result["confidence"] == "high"
+    assert any("EQ band keys" in item for item in result["basis"])
 
 
 def test_classify_no_snapshot():

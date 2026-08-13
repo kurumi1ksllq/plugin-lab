@@ -41,6 +41,14 @@ def test_artifact_doc_valid():
     assert result["errors"] == []
 
 
+def test_eq_dynamics_kind_accepted():
+    """kind 'eq-dynamics' is in the plugin-kind vocab — accepted."""
+    doc = copy.deepcopy(make_chain_doc_clean())
+    doc["plugins"][0]["plugin_type"]["kind"] = "eq-dynamics"
+    result = validate_chain_doc(doc)
+    assert result == {"ok": True, "errors": []}
+
+
 # ---------------------------------------------------------------------------
 # Malformed documents must be rejected with named errors
 # ---------------------------------------------------------------------------
@@ -107,4 +115,4 @@ def test_shared_threshold_constants():
     """Thresholds re-exported from describe_quality keep the pinned values."""
     assert SANE_Q_MAX == 1000.0
     assert THD_CLEAN_MAX_PCT == 20.0
-    assert CONTRACT_VERSION == "1"
+    assert CONTRACT_VERSION == "2"

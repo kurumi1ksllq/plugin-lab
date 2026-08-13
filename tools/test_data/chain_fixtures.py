@@ -14,7 +14,8 @@ tools/aggregate_report.py) and the measurement exports (SPEC.md):
     compression section -> {threshold_db, ratio, status, json_fitted}
     aggregate row       -> {slug, plugin, has_*, freq, compression, gr,
                             harmonic, status}
-    parameter snapshots -> analyzer / compressor / EQ dicts
+    parameter snapshots -> analyzer / compressor / EQ / dynamic-EQ /
+                          multiband-compressor dicts
     chain_doc           -> full describe_chain output document
 
 Values marked "verified" are the real measured pro-c-3 / scepter / pro-q-4
@@ -245,6 +246,36 @@ def make_eq_unused_snapshot():
             "Band 2 Used": 0.0, "Band 2 Enabled": 1.0,
             "Band 2 Frequency": 0.6, "Band 2 Q": 0.707, "Band 2 Gain": 0.5,
             "Band 24 Used": 0.0}
+
+
+def make_eq_dynamic_snapshot():
+    """Return the pro-q-4 dynamic-EQ snapshot: EQ-band keys AND per-band
+    dynamics (Band N Attack/Release/Threshold) plus global gain keys,
+    NO Ratio key anywhere — the hybrid shape classify_plugin_type must
+    report as eq-dynamics."""
+    return {"Band 1 Used": 0.0, "Band 1 Frequency": 0.5752, "Band 1 Q": 0.707,
+            "Band 1 Gain": 0.5, "Band 1 Attack": 0.1423,
+            "Band 1 Release": 0.2779, "Band 1 Threshold": 0.7333,
+            "Band 2 Used": 0.0, "Band 2 Frequency": 0.6, "Band 2 Q": 0.707,
+            "Band 2 Gain": 0.5, "Band 2 Attack": 0.1, "Band 2 Release": 0.2,
+            "Band 2 Threshold": 0.7,
+            "Band 24 Used": 0.0, "Band 24 Frequency": 0.55, "Band 24 Q": 0.9,
+            "Band 24 Gain": 0.4, "Band 24 Attack": 0.15,
+            "Band 24 Release": 0.25, "Band 24 Threshold": 0.75,
+            "Auto Gain": 0.0, "Gain Scale": 0.5, "Solo Gain": 0.0}
+
+
+def make_multiband_comp_snapshot():
+    """Return the multiband-compressor snapshot: the same EQ-band keys PLUS
+    per-band Ratio/Threshold/Attack — the ratio key is the compressor
+    tell that must never classify as eq-dynamics."""
+    return {"Band 1 Used": 0.0, "Band 1 Frequency": 0.5752, "Band 1 Q": 0.707,
+            "Band 1 Gain": 0.5, "Band 1 Threshold": 0.7333,
+            "Band 1 Ratio": 0.56, "Band 1 Attack": 0.1423,
+            "Band 1 Release": 0.2779,
+            "Band 2 Used": 0.0, "Band 2 Frequency": 0.6, "Band 2 Q": 0.707,
+            "Band 2 Gain": 0.5, "Band 2 Threshold": 0.7, "Band 2 Ratio": 0.4,
+            "Band 2 Attack": 0.1, "Band 2 Release": 0.2}
 
 
 # ======================= chain_doc builders ==================================

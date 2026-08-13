@@ -43,12 +43,12 @@ from describe_quality import (SANE_Q_MIN, SANE_Q_MAX, TAU_MIN_MS,
 # ---------------------------------------------------------------------------
 
 # Anchor for the T4 consumer: bump whenever the chain_doc contract changes.
-CONTRACT_VERSION = "1"
+CONTRACT_VERSION = "2"
 
 VERDICT_OVERALL = {"none", "clean", "artifact"}
 VERDICT_NL = {"not-measured", "clean", "artifact"}
-KIND_VOCAB = {"analyzer", "compressor", "eq-only", "dynamics-only",
-              "processor", "unknown"}
+KIND_VOCAB = {"analyzer", "compressor", "dynamics-only", "eq-dynamics",
+              "eq-only", "processor", "unknown"}
 CONFIDENCE = {"high", "low"}
 
 # ---------------------------------------------------------------------------

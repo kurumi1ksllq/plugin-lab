@@ -165,6 +165,11 @@ def classify_plugin_type(snapshot, row=None):
 
     Deterministic keyword rules, checked in this order:
       - analyzer:      any FFT Size / Hold Peaks / Smoothing key
+      - eq-dynamics:   EQ-band keys AND dynamics keys both present with no
+                       Ratio key anywhere (dynamic-EQ pattern: per-band
+                       Attack/Release/Threshold without a ratio, e.g.
+                       Pro-Q 4); basis notes the all-bands-unused state
+                       when every "Band N Used" is 0.0
       - eq-only:       EQ-band keys present AND no dynamics keys; basis
                        notes whether every "Band N Used" is 0.0 (all bands
                        unused) or not (eq-active)
@@ -176,6 +181,12 @@ def classify_plugin_type(snapshot, row=None):
                        without a parameter snapshot; heuristic, basis
                        explains) — only when `row` is given
       - unknown:       nothing matched (or no snapshot at all)
+
+    Hybrid disambiguator: bands + dynamics keys alone would be ambiguous
+    (multiband compressors expose the same band keys). A Ratio key
+    (global or per-band) marks a multiband compressor → falls through to
+    the dynamics branch instead of eq-dynamics; its absence marks the
+    dynamic-EQ pattern → eq-dynamics.
 
     Returns {"kind": str, "confidence": "high"|"low", "basis": [str]}.
     """
@@ -197,6 +208,24 @@ def classify_plugin_type(snapshot, row=None):
 
     bands = _eq_band_keys(snapshot)
     dynamics_keys = _dynamics_keys(snapshot)
+    if bands and dynamics_keys:
+        has_ratio = any("Ratio" in key for key in dynamics_keys)
+        if not has_ratio:
+            # Dynamic-EQ pattern (per-band dynamics, no ratio) — the
+            # hybrid eq-dynamics kind.
+            used_keys = [key for key in bands if key.endswith(" Used")]
+            unused = (bool(used_keys)
+                      and all(snapshot.get(key) == 0.0 for key in used_keys))
+            basis = ["EQ band keys and dynamics keys both present"]
+            if unused:
+                basis.append(f"all {len(used_keys)} bands unused "
+                             "(Used == 0.0)")
+            basis.append("no ratio keys (dynamic-EQ pattern)")
+            return {"kind": "eq-dynamics", "confidence": "high",
+                    "basis": basis}
+        # Ratio present → multiband compressor: fall through to the
+        # dynamics branch below (compressor / dynamics-only).
+
     if bands and not dynamics_keys:
         used_keys = [key for key in bands if key.endswith(" Used")]
         unused = (bool(used_keys)
@@ -212,9 +241,11 @@ def classify_plugin_type(snapshot, row=None):
         has_threshold = any("Threshold" in key for key in dynamics_keys)
         has_ratio = any("Ratio" in key for key in dynamics_keys)
         kind = "compressor" if has_threshold and has_ratio else "dynamics-only"
-        return {"kind": kind, "confidence": "high",
-                "basis": ["dynamics keys present: "
-                          + ", ".join(sorted(dynamics_keys))]}
+        basis = ["dynamics keys present: "
+                 + ", ".join(sorted(dynamics_keys))]
+        if bands:
+            basis.append("EQ band keys also present (multiband processor)")
+        return {"kind": kind, "confidence": "high", "basis": basis}
 
     return {"kind": "unknown", "confidence": "low",
             "basis": ["no recognized parameter keys"]}
