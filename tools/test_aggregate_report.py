@@ -12,6 +12,7 @@ known-parameter docs).
 Usage:
     python -m pytest tools/test_aggregate_report.py -q
 """
+import hashlib
 import json
 from pathlib import Path
 
@@ -20,6 +21,8 @@ import pytest
 from aggregate_report import (
     LOCKED_TOLERANCES,
     analyze_plugin,
+    check_slug_plugin_consistency,
+    detect_duplicate_datasets,
     discover_plugins,
     harmonic_summary,
     is_compression_unity,
@@ -278,7 +281,7 @@ def _write_doc(tmp_path, slug, doc):
 def test_analyze_plugin_synthetic_derives_all_sections(tmp_path):
     """A synthetic dataset with known params derives every section as ok."""
     data = make_dataset(
-        "synth", "Synthetic",
+        "synth", "Synth",
         peak_hz=1000.0, gain_db=6.0, q=1.0,
         threshold_db=-30.0, ratio=4.0,
         attack_sec=0.001, release_sec=0.05,
@@ -289,7 +292,7 @@ def test_analyze_plugin_synthetic_derives_all_sections(tmp_path):
     row = analyze_plugin(path)
 
     assert row["slug"] == "synth"
-    assert row["plugin"] == "Synthetic"
+    assert row["plugin"] == "Synth"
     assert row["has_freq"] is True and row["has_compression"] is True
     assert row["has_gr"] is True and row["has_harmonic"] is True
     assert row["freq"]["status"] == "ok"
@@ -373,7 +376,7 @@ def test_verify_against_calibration_all_checks_pass(tmp_path):
     """Known ground truth vs derived row: every check passes with small
     error (freq < 1%, gain < 0.05 dB) and sensible units."""
     data = make_dataset(
-        "synth", "Synthetic",
+        "synth", "Synth",
         peak_hz=1000.0, gain_db=6.0, q=1.0,
         threshold_db=-30.0, ratio=4.0,
         attack_sec=0.001, release_sec=0.05)
@@ -404,7 +407,7 @@ def test_verify_against_checks_only_known_derived_pairs(tmp_path):
     """Only parameters with both a known expected and a derived value
     are checked; unknown params in known_params are ignored."""
     data = make_dataset(
-        "synth", "Synthetic",
+        "synth", "Synth",
         peak_hz=1000.0, gain_db=6.0, q=1.0,
         threshold_db=-30.0, ratio=4.0,
         attack_sec=0.001, release_sec=0.05)
@@ -421,7 +424,7 @@ def test_verify_against_no_known_params_yields_no_checks(tmp_path):
     """No known params -> no checks; all_ok is False (nothing verified
     is not a pass)."""
     data = make_dataset(
-        "synth", "Synthetic",
+        "synth", "Synth",
         peak_hz=1000.0, gain_db=6.0, q=1.0,
         threshold_db=-30.0, ratio=4.0,
         attack_sec=0.001, release_sec=0.05)
@@ -506,7 +509,7 @@ def _analyzed_rows(tmp_path):
     data_dir = tmp_path / "datasets"
     data_dir.mkdir()
     data = make_dataset(
-        "synth", "Synthetic",
+        "synth", "Synth",
         peak_hz=1000.0, gain_db=6.0, q=1.0,
         threshold_db=-30.0, ratio=4.0,
         attack_sec=0.001, release_sec=0.05,
@@ -530,7 +533,8 @@ def test_write_json_real_rows(tmp_path):
     assert text.endswith("\n")
     doc = json.loads(text)
     assert set(doc) == {"generated_at", "out_dir", "tolerances", "counts",
-                        "plugins"}
+                        "plugins", "integrity"}
+    assert doc["integrity"] == []
     assert doc["generated_at"] == _META["generated_at"]
     assert doc["out_dir"] == _META["out_dir"]
     assert doc["tolerances"] == LOCKED_TOLERANCES
@@ -538,7 +542,7 @@ def test_write_json_real_rows(tmp_path):
                              "degenerate": 0, "derivation_failed": 1}
     assert [p["slug"] for p in doc["plugins"]] == ["empty", "synth"]
     assert doc["plugins"][0]["status"] == "no-data"
-    assert doc["plugins"][1]["plugin"] == "Synthetic"
+    assert doc["plugins"][1]["plugin"] == "Synth"
     assert doc["plugins"][1]["freq"]["freq_hz"] == pytest.approx(
         1000.0, rel=0.01)
 
@@ -553,7 +557,7 @@ def test_write_markdown_real_rows(tmp_path):
     assert path.is_file()
     text = path.read_text(encoding="utf-8")
     assert "## synth" in text
-    assert "Synthetic" in text
+    assert "Synth" in text
     assert "## empty" in text
     assert "threshold_db=-30" in text
     assert "ratio=4" in text
@@ -686,7 +690,7 @@ def _synthetic_out_dir(tmp_path):
     out_dir = tmp_path / "out"
     (out_dir / "synth").mkdir(parents=True)
     data = make_dataset(
-        "synth", "Synthetic",
+        "synth", "Synth",
         peak_hz=1000.0, gain_db=6.0, q=1.0,
         threshold_db=-30.0, ratio=4.0,
         attack_sec=0.001, release_sec=0.05,
@@ -741,3 +745,177 @@ def test_cli_missing_out_dir_exits_2(tmp_path):
 
     assert result.returncode == 2
     assert "error" in result.stderr.lower()
+
+# ---------------------------------------------------------------------------
+# Data integrity (issue #32): slug<->context.plugin consistency +
+# byte-level duplicate detection
+# ---------------------------------------------------------------------------
+
+
+def test_check_slug_plugin_consistency_case_only():
+    """A case-only difference between slug and plugin name is consistent."""
+    result = check_slug_plugin_consistency("scepter", "Scepter")
+    assert result == {"ok": True, "note": None}
+
+
+def test_check_slug_plugin_consistency_slugified():
+    """A plugin name that slugifies to the slug (spaces/punctuation) is
+    consistent: 'Pro-Q 4' -> 'pro-q-4'."""
+    result = check_slug_plugin_consistency("pro-q-4", "Pro-Q 4")
+    assert result == {"ok": True, "note": None}
+
+
+def test_check_slug_plugin_consistency_mismatch():
+    """A plugin name that does not slugify to the slug is a mismatch with a
+    note naming both sides."""
+    result = check_slug_plugin_consistency(
+        "uadx-vibe-analog-machines-essentials", "Scepter")
+    assert result["ok"] is False
+    assert "mismatch" in result["note"]
+    assert "uadx-vibe-analog-machines-essentials" in result["note"]
+    assert "Scepter" in result["note"]
+
+
+def test_check_slug_plugin_consistency_missing_plugin_name():
+    """None/empty plugin name cannot be judged: ok True + note, never a
+    false positive."""
+    result = check_slug_plugin_consistency("scepter", None)
+    assert result["ok"] is True
+    assert result["note"] == "no context.plugin"
+    result = check_slug_plugin_consistency("scepter", "")
+    assert result["ok"] is True
+    assert result["note"] == "no context.plugin"
+
+
+def _rows_with_paths(tmp_path, files):
+    """Build analyze-style rows carrying dataset_path for byte-sized files."""
+    rows = []
+    for slug, bytes_ in files.items():
+        out = tmp_path / slug
+        out.mkdir()
+        path = out / "dataset.json"
+        path.write_bytes(bytes_)
+        rows.append({"slug": slug, "dataset_path": str(path)})
+    return rows
+
+
+def test_detect_duplicate_datasets_identical_bytes(tmp_path):
+    """Two dataset files with identical bytes yield one duplicate pair with
+    the matching SHA-256."""
+    rows = _rows_with_paths(tmp_path, {
+        "scepter": b"same bytes",
+        "uadx-vibe-analog-machines-essentials": b"same bytes",
+    })
+
+    dups = detect_duplicate_datasets(rows)
+
+    assert len(dups) == 1
+    pair = dups[0]
+    assert set(pair) == {"slug_a", "slug_b", "sha256"}
+    assert {pair["slug_a"], pair["slug_b"]} == {
+        "scepter", "uadx-vibe-analog-machines-essentials"}
+    assert pair["sha256"] == hashlib.sha256(b"same bytes").hexdigest()
+
+
+def test_detect_duplicate_datasets_distinct_bytes(tmp_path):
+    """Two dataset files with different bytes yield no duplicates."""
+    rows = _rows_with_paths(tmp_path, {"a": b"one", "b": b"two"})
+
+    assert detect_duplicate_datasets(rows) == []
+
+
+def test_analyze_plugin_data_integrity_slug_mismatch(tmp_path):
+    """A dataset whose context.plugin does not match its dir slug is flagged
+    slug_ok False — while the overall measurement status stays 'ok'."""
+    data = make_dataset(
+        "uadx-vibe-analog-machines-essentials", "Scepter",
+        peak_hz=1000.0, gain_db=6.0, q=1.0,
+        threshold_db=-30.0, ratio=4.0,
+        attack_sec=0.001, release_sec=0.05)
+    path = _write_doc(tmp_path, "uadx-vibe-analog-machines-essentials", data)
+
+    row = analyze_plugin(path)
+
+    assert row["slug"] == "uadx-vibe-analog-machines-essentials"
+    assert row["plugin"] == "Scepter"
+    assert row["data_integrity"] == {
+        "slug_ok": False,
+        "note": "slug 'uadx-vibe-analog-machines-essentials' vs "
+                "context.plugin 'Scepter' mismatch — possible "
+                "duplicate/stale data"}
+    assert row["status"] == "ok"      # integrity is separate from quality
+
+
+def test_analyze_plugin_data_integrity_consistent(tmp_path):
+    """A consistent slug<->plugin pair carries slug_ok True, note None."""
+    data = make_dataset(
+        "scepter", "Scepter",
+        peak_hz=1000.0, gain_db=6.0, q=1.0,
+        threshold_db=-30.0, ratio=4.0,
+        attack_sec=0.001, release_sec=0.05)
+    path = _write_doc(tmp_path, "scepter", data)
+
+    row = analyze_plugin(path)
+
+    assert row["data_integrity"] == {"slug_ok": True, "note": None}
+
+
+def test_analyze_plugin_data_integrity_unreadable_dataset(tmp_path):
+    """An unreadable dataset cannot be judged: slug_ok True with a note
+    (never a false integrity flag), overall no-data unchanged."""
+    row = analyze_plugin(tmp_path / "ghost" / "dataset.json")
+
+    assert row["data_integrity"] == {"slug_ok": True,
+                                     "note": "no context.plugin"}
+    assert row["status"] == "no-data"
+
+
+def test_write_json_integrity_list_failing_row(tmp_path):
+    """A row with slug_ok False lands in the top-level integrity list as
+    {slug, plugin, slug_ok, note}."""
+    row = _hand_built_rows()[0]
+    row["data_integrity"] = {
+        "slug_ok": False,
+        "note": "slug 'flat' vs context.plugin 'FlatBoi' mismatch — "
+                "possible duplicate/stale data"}
+    path = write_json([row], _META, tmp_path / "report.json")
+
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["integrity"] == [{
+        "slug": "flat", "plugin": "FlatBoi", "slug_ok": False,
+        "note": "slug 'flat' vs context.plugin 'FlatBoi' mismatch — "
+                "possible duplicate/stale data"}]
+
+
+def test_write_json_integrity_empty_when_consistent(tmp_path):
+    """All-consistent rows (or rows without a data_integrity key) produce an
+    empty integrity list — always present, deterministic."""
+    rows = _hand_built_rows()
+    path = write_json(rows, _META, tmp_path / "report.json")
+
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert doc["integrity"] == []
+
+
+def test_write_markdown_integrity_section(tmp_path):
+    """A failing row renders a '## Data integrity' section naming slug,
+    plugin and note."""
+    row = _hand_built_rows()[0]
+    row["data_integrity"] = {
+        "slug_ok": False,
+        "note": "slug 'flat' vs context.plugin 'FlatBoi' mismatch — "
+                "possible duplicate/stale data"}
+    path = write_markdown([row], _META, tmp_path / "report.md")
+
+    text = path.read_text(encoding="utf-8")
+    assert "## Data integrity" in text
+    assert "| flat | FlatBoi |" in text
+    assert "mismatch" in text
+
+
+def test_write_markdown_no_integrity_section_when_consistent(tmp_path):
+    """All-consistent rows add no Data integrity section — no noise."""
+    path = write_markdown(_hand_built_rows(), _META, tmp_path / "report.md")
+
+    text = path.read_text(encoding="utf-8")
+    assert "Data integrity" not in text

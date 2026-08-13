@@ -17,6 +17,13 @@ timestamp.
 Wave-4 T1-E (ticket #24): CLI — scan --out-dir, aggregate every plugin
 with a dataset.json, write both reports and print a console summary.
 
+Wave-5 (issue #32): data-integrity checks — per-plugin slug<->context.plugin
+consistency (check_slug_plugin_consistency, carried as a data_integrity
+field in analyze_plugin rows), byte-level duplicate detection across the
+plugin set (detect_duplicate_datasets), a top-level "integrity" list in
+write_json and a "## Data integrity" section in write_markdown; main()
+warns on issues without changing the exit code.
+
 Stdlib only, no third-party dependencies.
 
 Usage (import only):
@@ -28,6 +35,7 @@ Usage (CLI):
 """
 import argparse
 import datetime
+import hashlib
 import json
 import math
 import sys
@@ -175,6 +183,66 @@ def discover_plugins(out_dir):
 
 
 # ---------------------------------------------------------------------------
+# Data integrity (issue #32)
+# ---------------------------------------------------------------------------
+
+
+def _slugify(name):
+    """Slug-normalize a plugin name: lowercase, non-alphanumeric chars to
+    '-', consecutive separators collapsed, no leading/trailing '-' (e.g.
+    'Pro-Q 4' -> 'pro-q-4')."""
+    out = []
+    last_sep = False
+    for ch in name.lower():
+        if ch.isalnum():
+            out.append(ch)
+            last_sep = False
+        elif not last_sep:
+            out.append("-")
+            last_sep = True
+    return "".join(out).strip("-")
+
+
+def check_slug_plugin_consistency(slug, plugin_name):
+    """Check a plugin's directory slug against its dataset's context.plugin.
+
+    Normalizes plugin_name (slugify + case-insensitive exact match) and
+    compares to the slug. Returns {"ok": bool, "note": str|None} — ok True
+    with note None when consistent, ok False with a mismatch note when not.
+    A None/empty plugin_name cannot be judged: ok True, note
+    'no context.plugin' (never a false positive).
+    """
+    if not plugin_name:
+        return {"ok": True, "note": "no context.plugin"}
+    if _slugify(plugin_name) == slug or plugin_name.lower() == slug.lower():
+        return {"ok": True, "note": None}
+    return {"ok": False,
+            "note": f"slug '{slug}' vs context.plugin '{plugin_name}' "
+                    "mismatch — possible duplicate/stale data"}
+
+
+def detect_duplicate_datasets(rows):
+    """Detect byte-level duplicate dataset files across the plugin set.
+
+    Rows carry 'dataset_path' (each a dataset.json path). Any two rows whose
+    files have identical SHA-256 (hashlib.sha256 over the raw file bytes)
+    yield one {"slug_a", "slug_b", "sha256"} pair; pairs are sorted by
+    (slug_a, slug_b) for deterministic output.
+    """
+    by_hash = {}
+    for row in rows:
+        digest = hashlib.sha256(Path(row["dataset_path"]).read_bytes())
+        by_hash.setdefault(digest.hexdigest(), []).append(row["slug"])
+    dups = []
+    for digest, slugs in by_hash.items():
+        for i, slug_a in enumerate(slugs):
+            for slug_b in slugs[i + 1:]:
+                dups.append({"slug_a": slug_a, "slug_b": slug_b,
+                             "sha256": digest})
+    return sorted(dups, key=lambda d: (d["slug_a"], d["slug_b"]))
+
+
+# ---------------------------------------------------------------------------
 # Per-plugin analysis
 # ---------------------------------------------------------------------------
 
@@ -194,6 +262,7 @@ def _derivation_failed_row(slug, plugin="?"):
                    "status": "derivation-failed"},
             "harmonic": {"tones_count": 0, "summary": [],
                          "status": "derivation-failed"},
+            "data_integrity": {"slug_ok": True, "note": "no context.plugin"},
             "status": "no-data"}
 
 
@@ -308,9 +377,12 @@ def analyze_plugin(dataset_path):
         return _derivation_failed_row(slug)
 
     try:
-        plugin = (data.get("context") or {}).get("plugin") or "?"
+        context_plugin = (data.get("context") or {}).get("plugin")
     except (AttributeError, TypeError):
-        plugin = "?"
+        context_plugin = None
+    plugin = context_plugin if context_plugin else "?"
+    check = check_slug_plugin_consistency(slug, context_plugin)
+    integrity = {"slug_ok": check["ok"], "note": check["note"]}
 
     freq, has_freq = _analyze_freq(data)
     compression, has_compression = _analyze_compression(data)
@@ -330,7 +402,8 @@ def analyze_plugin(dataset_path):
             "has_freq": has_freq, "has_compression": has_compression,
             "has_gr": has_gr, "has_harmonic": has_harmonic,
             "freq": freq, "compression": compression, "gr": gr,
-            "harmonic": harmonic, "status": overall}
+            "harmonic": harmonic, "data_integrity": integrity,
+            "status": overall}
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +459,26 @@ def verify_against(derived_row, known_params):
 # Locked tolerance key -> unit suffix rendered in the markdown summary.
 _TOLERANCE_UNITS = {"freq_pct": "%", "gain_db": " dB", "q_pct": "%",
                     "threshold_db": " dB", "ratio_pct": "%", "tau_pct": "%"}
+
+
+def _integrity_issues(rows):
+    """Rows whose slug<->context.plugin consistency check failed (slug_ok
+    False). Rows without a data_integrity key (hand-built) or with an ok
+    check never count as issues."""
+    return [r for r in rows
+            if r.get("data_integrity") and not r["data_integrity"]["slug_ok"]]
+
+
+def _integrity_markdown(issues):
+    """'## Data integrity' section lines: one table row per failing row."""
+    lines = ["## Data integrity", "",
+             "| Slug | Plugin | Note |",
+             "| --- | --- | --- |"]
+    for row in issues:
+        lines.append("| {} | {} | {} |".format(
+            row["slug"], row["plugin"],
+            row["data_integrity"]["note"]))
+    return lines + [""]
 
 
 def _count_rows(rows):
@@ -470,15 +563,21 @@ def write_markdown(rows, meta, path):
     """Write a human-readable per-plugin aggregation report.
 
     Plugins are sorted by slug (defensive; discover_plugins already yields
-    them sorted). The output is deterministic and idempotent: re-running
-    with the same rows reproduces byte-identical output except the
-    generated_at value from meta. Returns the path written; OSError from
-    the filesystem is propagated to the caller (never swallowed).
+    them sorted). A '## Data integrity' section is emitted between the
+    per-plugin sections and the summary ONLY when at least one row fails the
+    slug<->context.plugin check (all-consistent runs stay noise-free). The
+    output is deterministic and idempotent: re-running with the same rows
+    reproduces byte-identical output except the generated_at value from
+    meta. Returns the path written; OSError from the filesystem is
+    propagated to the caller (never swallowed).
     """
     sorted_rows = sorted(rows, key=lambda r: r["slug"])
     lines = ["# Plugin aggregation report", ""]
     for row in sorted_rows:
         lines.extend(_row_markdown(row))
+    issues = _integrity_issues(sorted_rows)
+    if issues:
+        lines.extend(_integrity_markdown(issues))
     lines.extend(_summary_markdown(_count_rows(sorted_rows),
                                    meta["generated_at"]))
     out_path = Path(path)
@@ -490,17 +589,24 @@ def write_json(rows, meta, path):
     """Write a machine-readable mirror of the aggregation report.
 
     Top-level keys: generated_at, out_dir, tolerances (LOCKED_TOLERANCES),
-    counts and plugins (sorted by slug). Well-formed JSON via json.dumps
-    (indent=2, ensure_ascii=False) plus a trailing newline, mirroring the
-    batch_collect summary convention. Returns the path written; OSError
-    from the filesystem is propagated to the caller (never swallowed).
+    counts, plugins (sorted by slug) and integrity — a list of
+    {slug, plugin, slug_ok, note} for every row failing the slug<->context
+    .plugin check, [] when all consistent (always present, deterministic).
+    Well-formed JSON via json.dumps (indent=2, ensure_ascii=False) plus a
+    trailing newline, mirroring the batch_collect summary convention.
+    Returns the path written; OSError from the filesystem is propagated to
+    the caller (never swallowed).
     """
     sorted_rows = sorted(rows, key=lambda r: r["slug"])
     doc = {"generated_at": meta["generated_at"],
            "out_dir": meta["out_dir"],
            "tolerances": LOCKED_TOLERANCES,
            "counts": _count_rows(sorted_rows),
-           "plugins": sorted_rows}
+           "plugins": sorted_rows,
+           "integrity": [{"slug": r["slug"], "plugin": r["plugin"],
+                          "slug_ok": r["data_integrity"]["slug_ok"],
+                          "note": r["data_integrity"]["note"]}
+                         for r in _integrity_issues(sorted_rows)]}
     out_path = Path(path)
     out_path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n",
                         encoding="utf-8")
@@ -550,8 +656,11 @@ def main(argv=None):
         return 2
 
     plugins = discover_plugins(out_dir)
-    rows = [analyze_plugin(Path(p["path"]) / "dataset.json")
-            for p in plugins if p["has_dataset"]]
+    dataset_paths = [Path(p["path"]) / "dataset.json"
+                     for p in plugins if p["has_dataset"]]
+    rows = [analyze_plugin(p) for p in dataset_paths]
+    for row, path in zip(rows, dataset_paths):
+        row["dataset_path"] = str(path)
     meta = {"generated_at": _utc_now_iso(),
             "out_dir": str(out_dir.resolve())}
 
@@ -570,6 +679,16 @@ def main(argv=None):
           f"no-data={counts['no_data']}, "
           f"derivation-failed={counts['derivation_failed']})")
     print(f"reports: {md_path}, {json_path}")
+    integrity_issues = _integrity_issues(rows)
+    if integrity_issues:
+        noun = "issue" if len(integrity_issues) == 1 else "issues"
+        details = "; ".join(f"{r['slug']} <-> {r['plugin']}"
+                            for r in integrity_issues)
+        print(f"WARNING: {len(integrity_issues)} data-integrity {noun} "
+              f"({details})")
+    for dup in detect_duplicate_datasets(rows):
+        print(f"WARNING: duplicate dataset: {dup['slug_a']} <-> {dup['slug_b']} "
+              f"(identical dataset.json, SHA-256 {dup['sha256'][:12]})")
     return 0
 
 
