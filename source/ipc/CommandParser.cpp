@@ -11,9 +11,30 @@
 #include "../analysis/WavExporter.h"
 
 #include <cfloat>
+#include <cmath>
 
 namespace
 {
+// Returns true when `v` is a JSON number that converts to a finite double.
+// juce::JSON::parse accepts overflow literals ("1e999" → +Infinity), and
+// NaN/Infinity compare FALSE against every range check (`NaN <= 0.0` is
+// false), so unfiltered they would flow into plugin parameters, durations
+// and rates as garbage (issue #34/#41). Every numeric IPC field that ends
+// up in a plugin parameter, a buffer size or a duration goes through this.
+static bool isFiniteNumber (const juce::var& v, double& out)
+{
+    if (! (v.isDouble() || v.isInt() || v.isInt64()))
+        return false;
+    out = static_cast<double> (v);
+    return std::isfinite (out);
+}
+
+// Upper bound for the noise-source duration (seconds). One hour of noise is
+// already absurd for a measurement; without a bound a "duration" of 1e12
+// would ask the sweep for ~4.8e16 samples at 48 kHz — an offline full-CPU
+// capture with an unbounded CaptureBuffer and WAV mirror (issue #34).
+constexpr double kMaxNoiseDurationSec = 3600.0;
+
 /** Escape a string for embedding inside a JSON string literal. juce::String::quoted()
     only doubles quote chars — backslashes (Windows paths!) stay unescaped, which
     yields INVALID JSON (`\P`, `\C` are illegal escapes). See verifier V1 finding and
@@ -247,18 +268,40 @@ static juce::String configureSessionSource (MeasurementSession& session, const j
 
         double duration = 2.0;
         if (obj.hasProperty ("duration"))
-            duration = static_cast<double> (obj.getProperty ("duration"));
+        {
+            // Issue #34: reject non-finite, non-positive and unbounded
+            // durations (1e12 s would be ~4.8e16 samples at 48 kHz — an
+            // unbounded capture + WAV mirror).
+            if (! isFiniteNumber (obj.getProperty ("duration"), duration)
+                || duration <= 0.0 || duration > kMaxNoiseDurationSec)
+                return R"("error":"invalid duration")";
+        }
 
         uint32_t seed = 0x2E42A5;
         if (obj.hasProperty ("seed"))
-            seed = static_cast<uint32_t> (static_cast<int64_t> (obj.getProperty ("seed")));
+        {
+            // Issue #34 sweep: a non-number seed would silently coerce (a
+            // NaN seed is an out-of-range int64 cast).
+            double seedValue = 0.0;
+            if (! isFiniteNumber (obj.getProperty ("seed"), seedValue))
+                return R"("error":"invalid seed")";
+            seed = static_cast<uint32_t> (static_cast<int64_t> (seedValue));
+        }
 
         session.setNoiseConfig (noiseType, duration, seed);
     }
     else if (source == MeasurementSession::Source::dynamic)
     {
+        // Issue #34 sweep: the carrier fields flow into the dynamic signal
+        // generator — a non-finite value would poison every generated
+        // sample (and the GR/tau analysis downstream).
         if (obj.hasProperty ("carrier_freq"))
-            session.setDynamicCarrierFreq (static_cast<double> (obj.getProperty ("carrier_freq")));
+        {
+            double carrierHz = 0.0;
+            if (! isFiniteNumber (obj.getProperty ("carrier_freq"), carrierHz))
+                return R"("error":"invalid carrier_freq")";
+            session.setDynamicCarrierFreq (carrierHz);
+        }
 
         // The carrier sweep must start high enough that the detector is
         // not polluted by low-frequency carrier wobble (otherwise the GR
@@ -266,7 +309,10 @@ static juce::String configureSessionSource (MeasurementSession& session, const j
         // to 10 kHz, matching CompressionFamily's internal configuration.
         double carrierStartHz = 10000.0;
         if (obj.hasProperty ("carrier_start_hz"))
-            carrierStartHz = static_cast<double> (obj.getProperty ("carrier_start_hz"));
+        {
+            if (! isFiniteNumber (obj.getProperty ("carrier_start_hz"), carrierStartHz))
+                return R"("error":"invalid carrier_start_hz")";
+        }
         session.setDynamicCarrierStartHz (carrierStartHz);
     }
 
@@ -361,7 +407,9 @@ static bool parseNumberArray (const juce::var& var, std::vector<double>& out,
         if (! (v.isDouble() || v.isInt() || v.isInt64()))
             return false;
         const double dv = static_cast<double> (v);
-        if (dv < min || dv > max)
+        // Issue #34: NaN/Infinity would pass the [min,max] comparison (both
+        // compare false) — reject them explicitly.
+        if (! std::isfinite (dv) || dv < min || dv > max)
             return false;
         out.push_back (dv);
     }
@@ -498,7 +546,17 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
         auto name = obj->getProperty ("name").toString();
         auto paramId = obj->getProperty ("param_id").toString();
-        double value = obj->getProperty ("value");
+
+        // Issue #41: a missing/string value used to silently coerce to 0.0;
+        // issue #34: NaN/Infinity would poison setValueNotifyingHost.
+        // Require a finite number within the normalized 0..1 parameter range
+        // (the repo's measurement context stores normalized parameters — see
+        // getParams and the scan command's 0..1 contract).
+        double value = 0.0;
+        if (! isFiniteNumber (obj->getProperty ("value"), value))
+            return Protocol::makeResponse (false, R"("error":"missing or invalid value")");
+        if (value < 0.0 || value > 1.0)
+            return Protocol::makeResponse (false, R"#("error":"value out of range (0..1)")#");
 
         auto& params = pluginPtr->getParameters();
 
@@ -906,8 +964,11 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         values.reserve (static_cast<size_t> (valuesVar.size()));
         for (int i = 0; i < valuesVar.size(); ++i)
         {
-            const double v = static_cast<double> (valuesVar[i]);
-            if (v < 0.0 || v > 1.0)
+            // Issue #34: NaN/Infinity slipped past the old range check
+            // (both compare false against 0..1) and poisoned the scanned
+            // parameter; strings silently coerced to 0.0.
+            double v = 0.0;
+            if (! isFiniteNumber (valuesVar[i], v) || v < 0.0 || v > 1.0)
                 return Protocol::makeResponse (false, R"#("error":"values out of range (0..1)")#");
             values.push_back (static_cast<float> (v));
         }
@@ -1492,8 +1553,9 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         double rate = 1.0;
         if (obj->hasProperty ("rate"))
         {
-            rate = static_cast<double> (obj->getProperty ("rate"));
-            if (rate <= 0.0)
+            // Issue #34: NaN/Infinity bypassed the old `rate <= 0.0` check
+            // (both compare false) — require a finite positive rate.
+            if (! isFiniteNumber (obj->getProperty ("rate"), rate) || rate <= 0.0)
                 return Protocol::makeResponse (false, R"("error":"invalid rate")");
         }
 
@@ -1515,9 +1577,19 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             if (evObj == nullptr)
                 return Protocol::makeResponse (false, R"("error":"invalid timeline json")");
             TimelineEvent ev;
-            ev.timeMs = static_cast<int64_t> (evObj->getProperty ("time_ms"));
+            // Issue #34 sweep: event values flow into plugin parameters
+            // during playback — require finite numbers (time_ms) and
+            // normalized 0..1 values, mirroring the setParam/scan
+            // validation. A NaN value would poison the parameter the same
+            // way setParam used to.
+            double timeMs = 0.0, valueNormalized = 0.0;
+            if (! isFiniteNumber (evObj->getProperty ("time_ms"), timeMs)
+                || ! isFiniteNumber (evObj->getProperty ("value"), valueNormalized)
+                || valueNormalized < 0.0 || valueNormalized > 1.0)
+                return Protocol::makeResponse (false, R"("error":"invalid timeline json")");
+            ev.timeMs = static_cast<int64_t> (timeMs);
             ev.paramId = evObj->getProperty ("param_id").toString();
-            ev.valueNormalized = static_cast<float> (static_cast<double> (evObj->getProperty ("value")));
+            ev.valueNormalized = static_cast<float> (valueNormalized);
             events.push_back (ev);
         }
 
