@@ -781,6 +781,18 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
             Export::Context ctx = buildExportContext (plugin, *session, source, sourceStr);
 
+            // Issue #39: keep the result + frozen export context for the
+            // exportData command (re-export without re-running). Copy under
+            // the lock (issue #33 D2 pattern) — this body runs on the
+            // message thread, exportData reads on the IPC worker after this
+            // command's WaitableEvent handoff.
+            {
+                std::lock_guard<std::mutex> lock (pluginLock);
+                lastResults = results;
+                lastExportContext = ctx;
+                hasLastResults = true;
+            }
+
             auto exportJson = exportResultsToJSON (results, ctx, session->getBlockSize());
 
             juce::File exportFile (path);
@@ -1210,7 +1222,19 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
                 juce::String error;
                 if (runAndAnalyze (session, plugin, run->source, run->sourceStr, run->results, error))
+                {
                     run->ok = true;
+                    // Issue #39: keep the last successful battery run (with
+                    // its own per-source context) for exportData.
+                    Export::Context runCtx = buildExportContext (plugin, *session,
+                                                                 run->source, run->sourceStr);
+                    {
+                        std::lock_guard<std::mutex> lock (pluginLock);
+                        lastResults = run->results;
+                        lastExportContext = runCtx;
+                        hasLastResults = true;
+                    }
+                }
                 // Per-type failure: record types[type] = false and continue
                 // with the next type.
             }
@@ -1456,6 +1480,78 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (false, R"("error":"wav export failed")");
 
         return Protocol::makeResponse (true, R"("wav_path":")" + escapeJsonString (wavFile.getFullPathName()) + "\"");
+    }
+
+    // --- exportData ---
+    // Re-exports the current/last measurement result as a dataset JSON to
+    // the given path (issue #39 — Protocol.h declared exportData but
+    // handleCommand had no branch, so it always answered "unknown cmd").
+    // Pure offline export: no measurement runs here. The result + frozen
+    // export context were captured at measurement time by the measure and
+    // dataset bodies (lastResults).
+    if (cmd == Protocol::Command::exportCmd)
+    {
+        auto path = obj->getProperty ("path").toString();
+        if (path.isEmpty())
+            return Protocol::makeResponse (false, R"("error":"invalid path")");
+
+        MeasurementResults last;
+        Export::Context ctx;
+        bool hasLast = false;
+        {
+            // Issue #33 D2 pattern: copy under the lock (the writing bodies
+            // run on the message thread), use outside.
+            std::lock_guard<std::mutex> lock (pluginLock);
+            last = lastResults;
+            ctx = lastExportContext;
+            hasLast = hasLastResults;
+        }
+
+        if (! hasLast)
+            return Protocol::makeResponse (false, R"("error":"no measurement result")");
+
+        // Serialise the stored result the same way the originating command
+        // did: raw captures (non-signal, non-GR) are raw_capture JSON;
+        // everything else becomes a single-block dataset package.
+        juce::String exportJson;
+        if (last.source != Protocol::Source::signal
+            && last.type != MeasurementSession::Type::grTimeline)
+        {
+            exportJson = Export::rawCaptureToJSON (last.rawSamples, last.rawSampleRate,
+                                                   ctx.blockSize, ctx);
+        }
+        else
+        {
+            Export::Dataset dataset;
+            switch (last.type)
+            {
+                case MeasurementSession::Type::frequencyResponse:
+                    dataset.freq = &last.freq;
+                    break;
+                case MeasurementSession::Type::harmonicAnalysis:
+                    dataset.harmonic = &last.harmonic;
+                    break;
+                case MeasurementSession::Type::compressionCurve:
+                    dataset.compression = &last.compression;
+                    break;
+                case MeasurementSession::Type::grTimeline:
+                    dataset.grTimeline = &last.gr;
+                    dataset.grTau = &last.tau;
+                    break;
+            }
+            exportJson = Export::datasetToJSON (dataset, ctx);
+        }
+
+        // Directory policy mirrors the dataset command (create parents
+        // before writing); a failed write fails the command (issue #40).
+        juce::File (path).getParentDirectory().createDirectory();
+        if (! Export::writeToFile (exportJson, juce::File (path)))
+        {
+            CRASH_LOG_ERR ("Export", "exportData write failed: " + path);
+            return Protocol::makeResponse (false, R"("error":"export write failed")");
+        }
+
+        return Protocol::makeResponse (true, R"("export_path":")" + escapeJsonString (path) + "\"");
     }
 
     // --- recordTimeline ---
