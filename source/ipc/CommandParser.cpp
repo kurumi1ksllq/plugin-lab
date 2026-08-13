@@ -795,8 +795,14 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
             auto exportJson = exportResultsToJSON (results, ctx, session->getBlockSize());
 
+            // Issue #40: a failed export write must fail the command (the
+            // bool return used to be ignored).
             juce::File exportFile (path);
-            Export::writeToFile (exportJson, exportFile);
+            if (! Export::writeToFile (exportJson, exportFile))
+            {
+                CRASH_LOG_ERR ("Export", "measure export write failed: " + path);
+                return Protocol::makeResponse (false, R"("error":"export write failed")");
+            }
 
             // measurementCompleteCallback is fired synchronously on the
             // measurement thread — unit tests assert this timing.
@@ -878,7 +884,13 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             if (exportJson.isEmpty())
                 return Protocol::makeResponse (false, R"("error":"child measurement failed")");
 
-            Export::writeToFile (exportJson, juce::File (r.exportPath));
+            // Issue #40: a failed export write must fail the command (the
+            // bool return used to be ignored).
+            if (! Export::writeToFile (exportJson, juce::File (r.exportPath)))
+            {
+                CRASH_LOG_ERR ("Export", "child measure export write failed: " + r.exportPath);
+                return Protocol::makeResponse (false, R"("error":"export write failed")");
+            }
 
             // Metadata reported by the child (it owns the instance, ADR-D-6);
             // the four fields the in-process path also returns stay aligned.
@@ -1049,8 +1061,14 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             Export::Context ctx = buildExportContext (plugin, *session, source, sourceStr);
 
             auto exportJson = Export::scanToJSON (scanResult, scanType, ctx);
+            // Issue #40: a failed export write must fail the command (the
+            // bool return used to be ignored).
             juce::File exportFile (path);
-            Export::writeToFile (exportJson, exportFile);
+            if (! Export::writeToFile (exportJson, exportFile))
+            {
+                CRASH_LOG_ERR ("Export", "scan export write failed: " + path);
+                return Protocol::makeResponse (false, R"("error":"export write failed")");
+            }
 
             // scanCompleteCallback fires synchronously on the measurement
             // thread — unit tests assert this timing (measure pattern).
@@ -1387,6 +1405,14 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             if (! anyBatteryOk && ! scanOk && ! cfOk)
                 return Protocol::makeResponse (false, R"("error":"all measurements failed")");
 
+            // Export-path validation (issue #40): an empty path used to
+            // write to File("")/File(".wav") in the CWD and still answer
+            // ok:true. Checked here — after the all-fail determination —
+            // so an empty battery (`types:[]`) still reports "all
+            // measurements failed".
+            if (path.isEmpty())
+                return Protocol::makeResponse (false, R"("error":"invalid path")");
+
             // --- aggregate + export ---
             // Battery results/ok are addressed by protocol key (the table is
             // the single mapping between protocol keys and per-type state).
@@ -1419,7 +1445,13 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
             auto exportJson = Export::datasetToJSON (dataset, ctx);
             juce::File (path).getParentDirectory().createDirectory();
-            Export::writeToFile (exportJson, juce::File (path));
+            // Issue #40: a failed export write must fail the command (the
+            // bool return used to be ignored).
+            if (! Export::writeToFile (exportJson, juce::File (path)))
+            {
+                CRASH_LOG_ERR ("Export", "dataset export write failed: " + path);
+                return Protocol::makeResponse (false, R"("error":"export write failed")");
+            }
 
             // Response "types" object always carries all 4 keys (true/false),
             // derived from the battery table in protocol order.
@@ -1726,7 +1758,14 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 + R"(,"rate":)" + juce::String (rate, 4)
                 + R"(,"samples":)" + juce::String (session->getResult().getNumRecordedSamples())
                 + R"(,"sample_rate":)" + juce::String (session->getResult().getSampleRate()) + "}";
-            Export::writeToFile (playJson, playJsonFile);
+            // Issue #40: a failed export write must fail the command (the
+            // bool return used to be ignored).
+            if (! Export::writeToFile (playJson, playJsonFile))
+            {
+                CRASH_LOG_ERR ("Export", "timeline play export write failed: "
+                               + playJsonFile.getFullPathName());
+                return Protocol::makeResponse (false, R"("error":"export write failed")");
+            }
 
             juce::String d = R"("samples":)" + juce::String (session->getResult().getNumRecordedSamples())
                            + R"(,"rate":)" + juce::String (rate, 4)
