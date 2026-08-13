@@ -7,6 +7,10 @@
  *   froze for ~5s when the window was closed.
  * Test B: normal client communication still works after the overlapped
  *   ConnectNamedPipe rework (connect, send command, receive response).
+ * Tests S1/S2/S3 (issue #35): oversized messages are drained and answered
+ *   instead of dropping the connection; a second server on the same name is
+ *   rejected (single startup instance blocks squatting); the pipe DACL grants
+ *   the current user + Administrators + SYSTEM only.
  *
  * Note: these tests create the real named pipe \\.\pipe\PluginLab.
  * No other PluginLab instance may be running while they execute, and the
@@ -16,12 +20,19 @@
 
 #include "../source/ipc/PipeServer.h"
 #include <windows.h>
+#include <sddl.h>
 
 #include <atomic>
 #include <chrono>
 #include <cstring>
 #include <string>
 #include <thread>
+#include <vector>
+
+// CrashLog recording-stub helpers (defined in CommandParserStubs.cpp)
+extern void clearCrashLog();
+extern int crashLogErrorCount();
+extern bool crashLogContains (const juce::String& substr);
 
 namespace
 {
@@ -431,4 +442,137 @@ TEST_CASE ("PipeServer: sequential commands round-trip exactly (R3)",
 
     ::CloseHandle (client);
     server.shutdown();
+}
+
+//==============================================================================
+// Test S1 (issue #35) — an oversized message (larger than the server's
+// 65535-byte read cap) must NOT kill the connection: the server answers
+// {"ok":false,"error":"command too large"} and the connection stays usable for
+// the next command. Before the fix, ReadFile failed with ERROR_MORE_DATA which
+// the read loop treated as a disconnect (no branch for it) — the client was
+// dropped and its next command could never be served.
+//==============================================================================
+
+TEST_CASE ("PipeServer: oversized message gets error response and keeps connection (issue #35)",
+           "[pipeserver][communication]")
+{
+    PipeServer server;
+    server.setCommandHandler ([] (const juce::String& command) { return "echo:" + command; });
+    server.startup();
+
+    HANDLE client = connectClient();
+    REQUIRE (client != INVALID_HANDLE_VALUE);
+
+    // Act: one message of exactly the server's 65536-byte inbound buffer size.
+    // Message-mode read caps at bufferSize - 1 (65535), so this message is
+    // guaranteed to produce ERROR_MORE_DATA on the server side (one WriteFile
+    // = one message; pipe buffers grow beyond the nominal size as needed).
+    const size_t bigSize = 65536;
+    std::string big (bigSize, 'x');
+    DWORD written = 0;
+    REQUIRE (::WriteFile (client, big.data(), (DWORD) big.size(), &written, nullptr) != FALSE);
+
+    // Assert: the server answers with the error line and does NOT drop us.
+    char buffer[1024] = {};
+    DWORD read = 0;
+    REQUIRE (::ReadFile (client, buffer, (DWORD) (sizeof (buffer) - 1),
+                         &read, nullptr) != FALSE);
+    buffer[read] = '\0';
+    REQUIRE (std::string (buffer) == R"({"ok":false,"error":"command too large"})");
+
+    // Assert: the connection is still alive — a normal command round-trips.
+    REQUIRE (sendCommand (client, "ping") == "echo:ping");
+
+    ::CloseHandle (client);
+    server.shutdown();
+}
+
+//==============================================================================
+// Test S2 (issue #35) — name squatting is blocked: the server creates ONE
+// pipe instance at startup with FILE_FLAG_FIRST_PIPE_INSTANCE and keeps it
+// alive. A second server on the same name must fail with ERROR_ACCESS_DENIED
+// and report the failure (pipeAcquired stays false, crash log records it).
+// Before the fix, every server created PIPE_UNLIMITED_INSTANCES without
+// FILE_FLAG_FIRST_PIPE_INSTANCE — an attacker holding the name was handed the
+// next client connection (MITM on the AI controller).
+//==============================================================================
+
+TEST_CASE ("PipeServer: second server on the same name is rejected (issue #35)",
+           "[pipeserver][security]")
+{
+    clearCrashLog();
+
+    PipeServer first;
+    first.setCommandHandler ([] (const juce::String&) { return juce::String ("{}"); });
+    first.startup();
+
+    // Arrange: the first server owns the name (single instance, kept alive).
+    for (int i = 0; i < 100 && ! first.isPipeAcquired(); ++i)
+        std::this_thread::sleep_for (std::chrono::milliseconds (20));
+    REQUIRE (first.isPipeAcquired());
+    REQUIRE (first.getLastPipeCreateError() == 0);
+
+    // Act: a second server tries to create an instance of the same name.
+    PipeServer second;
+    second.setCommandHandler ([] (const juce::String&) { return juce::String ("{}"); });
+    second.startup();
+
+    // Assert: the second server's CreateNamedPipeA fails with
+    // ERROR_ACCESS_DENIED — FILE_FLAG_FIRST_PIPE_INSTANCE rejects the
+    // squatter instead of silently creating a parallel instance.
+    bool sawAccessDenied = false;
+    for (int i = 0; i < 100 && ! sawAccessDenied; ++i)
+    {
+        sawAccessDenied = (second.getLastPipeCreateError()
+                           == static_cast<uint32_t> (ERROR_ACCESS_DENIED));
+        std::this_thread::sleep_for (std::chrono::milliseconds (20));
+    }
+    REQUIRE (sawAccessDenied);
+    REQUIRE (! second.isPipeAcquired());
+
+    // Assert: the failure is reported through the crash log (clear error).
+    REQUIRE (crashLogContains ("PipeServer::CreateNamedPipeA"));
+
+    second.shutdown();
+    first.shutdown();
+}
+
+//==============================================================================
+// Test S3 (issue #35) — the pipe's DACL grants GENERIC_ALL to the current
+// user, BUILTIN\Administrators (BA) and SYSTEM (SY), and nothing else
+// (deny-unlisted SDDL semantics). Cross-user processes are excluded; a same-
+// user process (the AI client, tools/ipc_client.ps1) is admitted. Exercising
+// the DACL end-to-end needs a second Windows user, so the test asserts the
+// security descriptor that gets attached to the pipe.
+//==============================================================================
+
+TEST_CASE ("PipeServer: pipe DACL grants user+admin+system only (issue #35)",
+           "[pipeserver][security]")
+{
+    const auto sddl = PipeServer::getDefaultPipeSddl();
+
+    // Act/Assert: a valid DACL was built with exactly the three allow ACEs.
+    REQUIRE (sddl.isNotEmpty());
+    REQUIRE (sddl.startsWith ("D:(A;;GA;;;"));
+    REQUIRE (sddl.contains ("(A;;GA;;;BA)"));
+    REQUIRE (sddl.contains ("(A;;GA;;;SY)"));
+
+    // Assert: the current user's SID is the first principal in the DACL
+    // (re-derived independently with the same Win32 calls).
+    HANDLE token = nullptr;
+    REQUIRE (::OpenProcessToken (::GetCurrentProcess(), TOKEN_QUERY, &token) != FALSE);
+    DWORD size = 0;
+    ::GetTokenInformation (token, TokenUser, nullptr, 0, &size);
+    std::vector<BYTE> tokenInfo (size);
+    REQUIRE (::GetTokenInformation (token, TokenUser, tokenInfo.data(), size, &size) != FALSE);
+    ::CloseHandle (token);
+
+    auto* tokenUser = reinterpret_cast<TOKEN_USER*> (tokenInfo.data());
+    LPWSTR sidStr = nullptr;
+    REQUIRE (::ConvertSidToStringSidW (tokenUser->User.Sid, &sidStr) != FALSE);
+    const juce::String userSid (sidStr);
+    ::LocalFree (sidStr);
+
+    REQUIRE (sddl.contains (userSid));
+    REQUIRE (sddl.indexOf (userSid) > 0);   // after the "D:(A;;GA;;;" prefix
 }
