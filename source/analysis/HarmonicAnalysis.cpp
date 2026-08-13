@@ -6,7 +6,8 @@
 HarmonicAnalysis::Result HarmonicAnalysis::analyze (
     const juce::AudioBuffer<float>& wet,
     double sr,
-    const std::vector<double>& fundamentalFreqs)
+    const std::vector<double>& fundamentalFreqs,
+    double segmentDurationSec)
 {
     Result result;
     result.sampleRate = sr;
@@ -15,11 +16,22 @@ HarmonicAnalysis::Result HarmonicAnalysis::analyze (
     const int numSamples = wet.getNumSamples();
     const int fftOrder = 16;  // 65536-point FFT for good low-freq resolution
 
+    // Segment-based windowing (issue #38): each fundamental plays alone in
+    // its own segment (SequentialTone excitation), so tone i's FFT window
+    // must be centered inside segment i. A non-segment excitation
+    // (segmentDurationSec <= 0.0) keeps the old whole-recording window.
+    const int segmentLen = (segmentDurationSec > 0.0)
+        ? static_cast<int> (sr * segmentDurationSec)
+        : numSamples;
+    int64_t segmentStart = 0;
+
     for (double freq : fundamentalFreqs)
     {
-        auto toneResult = analyzeTone (wetData, numSamples, sr, freq, fftOrder);
+        auto toneResult = analyzeTone (wetData, numSamples, sr, freq,
+                                       segmentStart, segmentLen, fftOrder);
         if (! toneResult.harmonics.empty())
             result.tones.push_back (toneResult);
+        segmentStart += segmentLen;
     }
 
     return result;
@@ -30,6 +42,8 @@ HarmonicAnalysis::ToneResult HarmonicAnalysis::analyzeTone (
     int numSamples,
     double sampleRate,
     double fundamentalFreq,
+    int64_t segmentStart,
+    int segmentLen,
     int fftOrder,
     int numHarmonics)
 {
@@ -40,9 +54,19 @@ HarmonicAnalysis::ToneResult HarmonicAnalysis::analyzeTone (
     const int numBins = fftSize / 2 + 1;
     const double freqStep = sampleRate / fftSize;
 
-    // Take a section of audio centered on the tone (use middle portion)
-    int analysisLen = juce::jmin (fftSize, numSamples);
-    int startPos = (numSamples - analysisLen) / 2;
+    // Take a section of audio centered on THIS tone's segment (issue #38:
+    // with one tone per segment (SequentialTone excitation) the FFT window
+    // must stay inside segment i — the old whole-recording window mixed the
+    // other fundamentals into every tone's harmonics, inflating THD toward
+    // ~100% even for a perfectly linear plugin).
+    int analysisLen = juce::jmin (fftSize, segmentLen);
+    if (analysisLen > numSamples)
+        analysisLen = numSamples;
+    int64_t startPos = segmentStart + (segmentLen - analysisLen) / 2;
+    if (startPos < 0)
+        startPos = 0;
+    if (startPos + analysisLen > numSamples)
+        startPos = numSamples - analysisLen;
 
     FftHelper fft (fftOrder);
     std::vector<float> window (fftSize, 0.0f);

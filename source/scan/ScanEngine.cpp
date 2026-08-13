@@ -145,7 +145,8 @@ ScanEngine::ScanResult ScanEngine::run (const juce::String& paramId,
                 HarmonicAnalysis analyser;
                 entry.harmonic = analyser.analyze (recorded.getWetBuffer(),
                                                    recorded.getSampleRate(),
-                                                   session_->getFundamentalFreqs());
+                                                   session_->getFundamentalFreqs(),
+                                                   session_->getSegmentDurationSec());
                 break;
             }
             case MeasurementSession::Type::compressionCurve:
