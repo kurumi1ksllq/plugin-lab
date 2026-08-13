@@ -509,8 +509,9 @@ public:
         if (measurementSession)
             measurementSession->cancel();
 
-        // 2. Unload current plugin + close editor window.
-        unloadCurrentPlugin();
+        // 2. Unload current plugin + close editor window (pointer detach
+        //    before destroy — issue #33 D2).
+        detachCurrentPlugin();
 
         // 3. Shut down the pipe server (joins IPC thread).
         if (pipeServer)
@@ -724,6 +725,24 @@ public:
      */
     void handleAsyncUpdate() override
     {
+        // Issue #33 D1: an editor close requested while a measurement/scan/
+        // playback run was in flight is applied once the run finishes (the
+        // sweep dereferences the plugin on the message thread, so destroying
+        // it mid-run is a use-after-free). Re-triggers itself until the run
+        // ends — covers success, failure and cancel paths alike.
+        if (unloadPending)
+        {
+            if (! measurementSession->isRunning())
+            {
+                unloadPending = false;
+                onPluginWindowClosed();
+            }
+            else
+            {
+                triggerAsyncUpdate();
+            }
+        }
+
         // Incremental list refresh (throttled via AsyncUpdater merge — see
         // changeListenerCallback; processed before the scan-complete block so
         // the list is fresh when a plugin-load selects a row).
@@ -769,16 +788,30 @@ public:
         // Process plugin-load result.
         if (loadUpdatePending.exchange (false))
         {
-            try
+            // Issue #33 D1: a load that completed while a measurement/scan/
+            // playback run is in flight must NOT be applied yet —
+            // openEditorWindowFor destroys the current plugin, which the
+            // sweep may still be processing. Re-queue instead: the update
+            // loop re-runs once the run finishes (the re-trigger below keeps
+            // an update pending for the job's whole duration).
+            if (measurementSession->isRunning())
             {
-                auto inst = std::move (pendingInstance);
-                juce::String name = std::move (pendingName);
-                openEditorWindowFor (std::move (inst), name);
+                loadUpdatePending = true;
+                triggerAsyncUpdate();
             }
-            catch (...)
+            else
             {
-                CRASH_LOG_ERR ("Load UI update", "exception caught");
-                loadingRunning = false;
+                try
+                {
+                    auto inst = std::move (pendingInstance);
+                    juce::String name = std::move (pendingName);
+                    openEditorWindowFor (std::move (inst), name);
+                }
+                catch (...)
+                {
+                    CRASH_LOG_ERR ("Load UI update", "exception caught");
+                    loadingRunning = false;
+                }
             }
         }
 
@@ -1181,6 +1214,20 @@ private:
     //==============================================================================
     void loadPluginByDescription (const juce::PluginDescription& desc)
     {
+        // Issue #33 D1: a measurement/scan/playback run executes on the
+        // message thread and yields the message loop per block, so load
+        // events (row click, IPC loadPlugin) CAN arrive mid-job. Loading
+        // swaps the plugin instance the sweep is processing (openEditorWindowFor
+        // destroys the current one) — a use-after-free. Refuse while a run
+        // is in flight.
+        if (measurementSession != nullptr && measurementSession->isRunning())
+        {
+            statusLabel->setText ("Busy - measurement in progress",
+                                  juce::dontSendNotification);
+            CRASH_LOG_WARN ("Load refused", "measurement in progress");
+            return;
+        }
+
         if (loadingRunning.exchange (true))
             return;
 
@@ -1955,7 +2002,10 @@ private:
     void openEditorWindowFor (std::unique_ptr<juce::AudioPluginInstance> instance,
                                const juce::String& name)
     {
-        unloadCurrentPlugin();
+        // Issue #33 D2: null the parser/session pointers BEFORE destroying
+        // the previous instance (a worker command can then never dereference
+        // it mid-destruction — see detachCurrentPlugin).
+        detachCurrentPlugin();
         pluginLoaded = false;
         livePlugin = nullptr;
 
@@ -2020,13 +2070,47 @@ private:
         loadingRunning = false;
     }
 
+    //==============================================================================
+    /** Detach the plugin from the IPC pipeline BEFORE destroying it (issue
+     *  #33 D2). The pointer swap is lock-guarded inside CommandParser, so
+     *  the null swap must complete before the instance dies: a worker
+     *  command that grabbed the lock after the swap sees nullptr (→ "no
+     *  plugin loaded") instead of a pointer that is about to be destroyed;
+     *  one that grabbed it earlier finishes its dereference before the swap
+     *  can proceed. Must run on the message thread. */
+    void detachCurrentPlugin()
+    {
+        if (commandParser)
+            commandParser->setPluginInstance (nullptr);
+        if (measurementSession)
+            measurementSession->setPluginInstance (nullptr);
+        unloadCurrentPlugin();
+    }
+
     void onPluginWindowClosed()
     {
-        unloadCurrentPlugin();
+        // Issue #33 D1: destroying the plugin while a measurement/scan/
+        // playback run is in flight is a use-after-free — the sweep
+        // dereferences the instance on the message thread. Defer the unload
+        // to the job's end: the window hides immediately so the close feels
+        // responsive, and the deferred unload is applied by handleAsyncUpdate
+        // (self-re-triggering until the run finishes — covers success,
+        // failure and cancel paths alike).
+        if (measurementSession != nullptr && measurementSession->isRunning())
+        {
+            unloadPending = true;
+            if (editorWindow != nullptr)
+                editorWindow->setVisible (false);
+            statusLabel->setText ("Closing after measurement finishes...",
+                                  juce::dontSendNotification);
+            CRASH_LOG_INFO ("Editor close deferred", "measurement in progress");
+            triggerAsyncUpdate();
+            return;
+        }
+
+        detachCurrentPlugin();
         pluginLoaded = false;
         livePlugin = nullptr;
-        commandParser->setPluginInstance (nullptr);
-        measurementSession->setPluginInstance (nullptr);
 
         // The scan parameter combo needs a plugin — empty + disable it.
         scanParamCombo->clear();
@@ -2145,6 +2229,11 @@ private:
     // Re-entry guard: a measurement runs synchronously on the message thread
     // (~5 s), so a second click must be ignored while one is in progress.
     bool measurementInProgress = false;
+
+    // Issue #33 D1: an editor-close (or completed load) deferred while a
+    // measurement/scan/playback run was in flight — applied by
+    // handleAsyncUpdate once the run finishes. Message thread only.
+    bool unloadPending = false;
 
     // Right-panel frequency-response plots
     std::unique_ptr<PlotWidget> magPlot;

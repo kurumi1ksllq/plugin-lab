@@ -105,6 +105,14 @@ public:
     /** Request cancellation (thread-safe). */
     void cancel() { runner.cancel(); }
 
+    /** True while a measurement run is executing (issue #33 D1).
+     *  The host refuses plugin load/unload while a run is in flight: the
+     *  sweep dereferences the plugin on the message thread and yields the
+     *  message loop per block, so load/unload events CAN interleave.
+     *  Safe to call from the message thread only — run() (which writes the
+     *  underlying flag) and the load/unload guards both execute there. */
+    bool isRunning() const { return runner.isRunning(); }
+
     //==============================================================================
     /** Get the recorded result. */
     CaptureBuffer& getResult() { return runner.getResult(); }
