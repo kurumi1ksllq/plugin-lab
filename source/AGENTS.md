@@ -2,15 +2,15 @@
 
 ## OVERVIEW
 
-9 个子模块（块 D 新增 `child/`）+ Main.cpp 共 73 文件（36 .cpp + 37 .h）。模块边界由根 CMakeLists.txt 单一 target_sources 清单强制，目录不自包含。全局风格/构建命令/通用反模式见根 `AGENTS.md`，此处只写 source 层独有的结构、接线与边界。
+9 个子模块（块 D 新增 `child/`）+ Main.cpp 共 77 文件（38 .cpp + 39 .h）。模块边界由根 CMakeLists.txt 单一 target_sources 清单强制，目录不自包含。全局风格/构建命令/通用反模式见根 `AGENTS.md`，此处只写 source 层独有的结构、接线与边界。
 
 ## STRUCTURE
 
 ```
 source/
-├── Main.cpp          # 入口 + 装配中枢（1829 行 god file）
+├── Main.cpp          # 入口 + 装配中枢（2301 行 god file）
 ├── host/             # VST3 扫描/加载/崩溃保护（唯一 /EHa TU 所在）
-├── signal/           # SignalGenerator 接口 + 7 生成器 —— 见 signal/AGENTS.md
+├── signal/           # SignalGenerator 接口 + 8 生成器 —— 见 signal/AGENTS.md
 ├── capture/          # 测量编排（SweepRunner 冻结管线 + MeasurementSession）—— 见 capture/AGENTS.md
 ├── scan/             # ScanEngine 参数扫描（快照/恢复/取消 RAII）
 ├── analysis/         # 6 分析器 + Export（手写 JSON）—— 见 analysis/AGENTS.md
@@ -42,7 +42,7 @@ source/
 
 - `/EHa` 只用于指定 TU：`host/` 两个（PluginManager + EditorCrashGuard）+ `capture/SweepRunner.cpp`（2026-08-08 块 C 任务 1 授权例外：测量路径保护，根 CMake 与 tests/CMakeLists 各一处 `set_source_files_properties`）+ `source/child/PluginHostChild.cpp`（2026-08-10 块 D D1a 授权例外：子进程加载插件路径保护，仅根 CMake 一处，子进程不编入测试）+ `source/capture/SweepRunner.cpp`（子进程 PluginHostChild 目标内的第二处 /EHa，2026-08-10 块 D D2a 授权例外：子进程内同跑插件 processBlock，需在 PluginHostChild 目标下单独 set_source_files_properties，目录作用域不传播）+ `tests/ChildHostParityTests.cpp`（2026-08-10 块 D T3 授权例外：真插件端到端比对测试，进程内加载 VST3 DLL 需保护，仅 tests 一处），勿再扩散
 - 所有类 `JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR`；成员类内初始化默认值（sampleRate=48000.0, blockSize=512）
-- `Main.cpp:455/470` 是全库仅有的两个无 CRASH_LOG catch（ListBox 回调，antipattern，勿复制）
+- `MainContentComponent::getNumRows` / `paintListBoxItem` 是全库仅有的两个无 CRASH_LOG catch（ListBox 回调，antipattern，勿复制）
 
 ## SOURCE-UNIQUE ANTI-PATTERNS
 

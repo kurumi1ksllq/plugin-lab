@@ -79,7 +79,7 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 ## 待办（下一步）—— 以 GitHub issue 为准
 
-> 2026-08-12 更新：原路线图（docs/roadmap-next.md）五块（C/E/A/B/D）已全部完成并删除（内容在 git 历史与 PR 记录中；块 D 进程外托管已完成：harmonic/compression 子进程测量于 #14 交付，gr_timeline 于 #15 交付（PR #19））。**需求与待开发全部走 GitHub issue**（当前 open：#9 AI 反推闭环冲刺、#17 RecorderEngine 上层；#15 已完成待合并、#16 已关闭——子进程测量期间 stop 可达经 #2/#3 并发改造已实现，见已知限制节）；历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成；块 B 记录模式于 2026-08-10 完成，见下方完成记录）。
+> 2026-08-12 更新：原路线图（docs/roadmap-next.md）五块（C/E/A/B/D）已全部完成并删除（内容在 git 历史与 PR 记录中；块 D 进程外托管已完成：harmonic/compression 子进程测量于 #14 交付，gr_timeline 于 #15 交付（PR #19））。**需求与待开发全部走 GitHub issue**（当前 open：#9 AI 反推闭环冲刺、#17 RecorderEngine 上层；#15 已完成（PR #19 合并）、#16 已关闭——子进程测量期间 stop 可达经 #2/#3 并发改造已实现，见已知限制节）；历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成；块 B 记录模式于 2026-08-10 完成，见下方完成记录）。
 
 ## 阶段 1 完成记录（2026-08-02）
 
@@ -199,9 +199,9 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 source/
 ├── Main.cpp              # 主窗口 + 专用扫描/加载线程 + 独立窗口管理
 ├── host/PluginManager    # VST3 扫描/加载（/EHa + 黑名单 + 死马踏板 + 看门狗）
-├── host/child*           # 进程外托管（块 D）：ChildProcessCoordinator / ChildMeasureOrchestrator / ChildMeasureContract（黑名单插件测量）
+├── host/child*           # 进程外托管（块 D）：PluginHostChildCoordinator / ChildMeasureOrchestrator / ChildMeasureContract（黑名单插件测量）
 ├── ui/PluginEditorWindow # 独立插件编辑器窗口（DocumentWindow 子类）
-├── signal/               # 信号生成器 (SineSweep/MultiTone/ToneBurst/Impulse/FilePlayback/NoiseGenerator/EnvelopeSignal)
+├── signal/               # 信号生成器 (SineSweep/MultiTone/ToneBurst/Impulse/FilePlayback/NoiseGenerator/EnvelopeSignal/SequentialTone)
 ├── capture/              # 采集引擎 (AudioBuffer::CaptureBuffer/SweepRunner/MeasurementSession/ParameterTimeline)
 ├── analysis/             # 分析引擎 (FreqResponse/Harmonic/CompressionCurve/GainReduction/TimeConstants/CompressionFamily + Export + WavExporter)
 ├── ipc/                  # Named Pipe 控制 (PipeServer 双轨并发/CommandParser/Protocol)
@@ -251,7 +251,7 @@ DESIGN.md                 # 设计文档
 
 - [x] **任务 1 测量路径异常保护**（ea1ebe2）：SweepRunner.cpp 开 /EHa + run() 全 plugin 调用 try/catch（prepare/process/teardown 三段），异常 → CRASH_LOG + 测量失败响应，宿主存活；5 个测试锁定（SweepRunner + CommandParser 级），真机 Pro-Q 4 回归通过
 - [x] **任务 2 EditorCrashGuard 入测试目标**（6a77fb5）：真实 EditorCrashGuard.cpp 编入 unit_tests（/EHa），移除空桩；5 个测试含 **SEH 硬件故障保护**（析构访问违规被 catch(...) 拦截）与 C++ 异常路径
-- [x] **任务 3 Generic 编辑器兜底**（1dcb013 已实现，本块验证）：Main.cpp:1617-1628 fallback（createEditorSafe null → GenericAudioProcessorEditor + try/catch → 仍失败 "Loaded (no editor)"）；真机 Pro-Q 4 "Editor ok" 原生编辑器，fallback 不误触发
+- [x] **任务 3 Generic 编辑器兜底**（1dcb013 已实现，本块验证）：`MainContentComponent::openEditorWindowFor` fallback（createEditorSafe null → GenericAudioProcessorEditor + try/catch → 仍失败 "Loaded (no editor)"）；真机 Pro-Q 4 "Editor ok" 原生编辑器，fallback 不误触发
 - [x] **任务 4 观察者指针生命周期加固**（add971c）：PluginEditorWindow::closeButtonPressed 先 move 出回调再调用（回调内 delete-this 加固）；其余观察者（ChangeListener/Timer/CommandParser 回调）审查确认析构顺序安全。真机验证：IPC 加载 Pro-Q 4 → WM_CLOSE 关闭（editor 窗口 + 主窗口）→ 干净退出，crashlog 无 ERROR
 - [x] **任务 5 CGII.vst3 预防性黑名单**（见"已知残留"）：`blacklistUnregistered` + `isBlacklistedPath` + scanDirectory 跳过接线；4 个单测锁定；真机二次热启无 CGII 重扫
 - [x] **任务 6 data-schema scan 结构最终核对**（f44e7a0）：§5 scan 与 scanToJSON 逐字段核对一致（顶层 scan/context 七字段/family/精度/dataset 内嵌）；补 context 顶层 sample_rate + source 断言锁定（[export][scan-schema] 30 断言）；data-schema.md 记核对记录
@@ -269,12 +269,12 @@ DESIGN.md                 # 设计文档
   修复：超时/挂起持久化黑名单的路径全部 setCacheFile(tmp)；changeListenerCallback 改 pending flag + triggerAsyncUpdate（AsyncUpdater ≤50ms 合并刷新）。验证全量绿（commit message 记 158/158），Debug 热扫 ~1s。
 - **`063edf3`** docs：sync AGENTS.md —— 刷新 commit ref + 测试计数对齐（commit message 记 126/126，**实测为 158/158**，后续以 tests/AGENTS.md 158 为准）。
 
-**测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158、186/186、199/199、208/208 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（**265 个 TEST_CASE，2026-08-11 实测**）。
+**测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158、186/186、199/199、208/208 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（**280 个 TEST_CASE，2026-08-12 实测**）。
 
 ## E 块任务 E3 验证记录（2026-08-08）
 
 - 原 roadmap 任务“MeasurementSession::runMultiple 多轮参数扫描接口”已被 ScanEngine::run 完整覆盖（阶段 3 交付），本任务重新定性为验证型，无新增代码：
-  - 多轮参数扫描：run(paramId, values[], type, progress) 每值一轮（ScanEngine.cpp:99-168）✅
+  - 多轮参数扫描：run(paramId, values[], type, progress) 每值一轮（`ScanEngine::run`）✅
   - 曲线族/数据面：ScanResult.family[]（每轮 freq/harmonic/compression + latency + cancelled）✅
   - 取消：cancel() 线程安全，round 边界生效 ✅
   - 参数快照/恢复：RAII ParamGuard（entry 快照全部参数，exit 恢复含取消/异常）✅
@@ -365,7 +365,7 @@ DESIGN.md                 # 设计文档
 
 - **双轨并发**：控制命令（`stop`/`getScanStatus`，`setControlCommands` 配置）在管道读线程**内联**执行（只碰原子/快照）；**其余一切命令**（长命令 measure/playTimeline/dataset/scan + setParam 等快命令）FIFO 排队到**单个 worker 线程**串行执行——杜绝并发触碰 plugin/session 的竞态，同时让长命令期间读循环保持活跃。
 - **写路径**：所有 WriteFile（内联/worker 最终/emitLine 进度行）经 `ioMutex` + 连接代数（generation）防写已关闭/复用句柄。
-- **读路径关键坑**：阻塞 ReadFile 会被另一线程的并发 WriteFile **打断**（实测客户端 ERROR_PIPE_NOT_CONNECTED，误判断连）→ 读循环改 **PeekNamedPipe 轮询**（与 ChildProcessCoordinator 读者同模式）。
+- **读路径关键坑**：阻塞 ReadFile 会被另一线程的并发 WriteFile **打断**（实测客户端 ERROR_PIPE_NOT_CONNECTED，误判断连）→ 读循环改 **PeekNamedPipe 轮询**（与 PluginHostChildCoordinator 读者同模式）。
 - **#3 子进程取消**：`PluginHostChildCoordinator::requestCancel()` 原子标志 → `ChildMeasureOrchestrator::waitForLine` 每轮检查 → 取消 = `coordinator->stop()` **主动弃子**（D3 本就每 run 全新子进程；主动 stop ≠ 崩溃，不增 crashCount、不触发黑名单/崩溃基线），返回 `{"ok":false,"error":"cancelled"}`。`CommandParser::setCancelRequestCallback`（Main.cpp 接线：session + orchestrator 双取消）。
 - **#2 回放进度**：`ParameterTimeline::getPlaybackCursor/getPlaybackEventCount` + `MeasurementSession::setPlaybackProgressCallback`（block callback 中 cursor 前进即发，消息线程）→ GUI「事件 N/M」（~50ms 节流）+ IPC 推送 `{"ok":true,"progress":...,"event_index":N,"event_total":M,"time_ms":T}` 进度行（`Protocol::makeProgress` 复用，子进程先例）。
 - **客户端**：`tools/ipc_client.ps1` 改 PeekNamedPipe 轮询多行读取（进度行/控制 ack 走 stderr，最终响应带 `samples`/`export_path`/`error` 走 stdout）+ `-CancelAfterMs` 连接内发 stop。
