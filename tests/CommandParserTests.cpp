@@ -2116,6 +2116,17 @@ TEST_CASE ("CommandParser: measure dynamic defaults carrier_start_hz to 10000 Hz
     juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
 
+TEST_CASE ("MeasurementSession: dynamic carrier start member default is 10000 Hz",
+           "[measurementsession][dynamic-carrier-default]")
+{
+    // The session member default must agree with the command-side default
+    // (CommandParser defaults carrier_start_hz to 10000 Hz, issue #44) —
+    // otherwise a caller that skips setDynamicCarrierStartHz silently
+    // measures with a different carrier start than the IPC user sees.
+    MeasurementSession session;
+    REQUIRE (session.getDynamicCarrierStartHz() == Catch::Approx (10000.0));
+}
+
 TEST_CASE ("CommandParser: gr_timeline on dynamic source yields valid tau with high carrier start",
            "[commandparser][measure-gr-tau-valid-dynamic]")
 {
