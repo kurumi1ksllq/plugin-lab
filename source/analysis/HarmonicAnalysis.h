@@ -45,17 +45,29 @@ public:
      *  @param wet   Wet (output/processed) audio buffer
      *  @param sr    Sample rate of the recording
      *  @param fundamentalFreqs  List of fundamental frequencies to analyze
+     *  @param segmentDurationSec  Duration of each single-tone segment in the
+     *         excitation (0.0 = not segment-based: fall back to windowing the
+     *         whole recording). With a segment-based SequentialTone
+     *         excitation each tone's FFT window is centered on ITS OWN
+     *         segment — the critical fix behind issue #38 (the old
+     *         whole-recording window mixed co-injected fundamentals into
+     *         every tone's harmonics).
      */
     Result analyze (const juce::AudioBuffer<float>& wet,
                     double sr,
-                    const std::vector<double>& fundamentalFreqs);
+                    const std::vector<double>& fundamentalFreqs,
+                    double segmentDurationSec);
 
 private:
-    /** Analyze a specific fundamental frequency. */
+    /** Analyze a specific fundamental frequency.
+     *  @param segmentStart  First sample of this tone's segment in the recording
+     *  @param segmentLen    Sample count of this tone's segment */
     ToneResult analyzeTone (const float* audio,
                             int numSamples,
                             double sampleRate,
                             double fundamentalFreq,
+                            int64_t segmentStart,
+                            int segmentLen,
                             int fftOrder,
                             int numHarmonics = 10);
 

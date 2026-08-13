@@ -14,7 +14,7 @@ juce_add_console_app(unit_tests)
 juce_generate_juce_header(unit_tests)
 target_sources(unit_tests PRIVATE
     ../source/signal/SignalGenerator.cpp ../source/signal/SineSweep.cpp
-    ../source/signal/MultiTone.cpp ../source/signal/ToneBurst.cpp ../source/signal/Impulse.cpp
+    ../source/signal/MultiTone.cpp ../source/signal/SequentialTone.cpp ../source/signal/ToneBurst.cpp ../source/signal/Impulse.cpp
     ../source/signal/FilePlayback.cpp ../source/signal/NoiseGenerator.cpp
     ../source/signal/EnvelopeSignal.cpp
     ../source/capture/AudioBuffer.cpp ../source/capture/SweepRunner.cpp
@@ -41,7 +41,7 @@ target_sources(unit_tests PRIVATE
     CommandParserRoutingTests.cpp
     CommandParserLoadPluginBlacklistTests.cpp
     PluginManagerTests.cpp
-    FilePlaybackTests.cpp NoiseGeneratorTests.cpp EnvelopeSignalTests.cpp MultiToneTests.cpp
+    FilePlaybackTests.cpp NoiseGeneratorTests.cpp EnvelopeSignalTests.cpp MultiToneTests.cpp SequentialToneTests.cpp
     GainReductionTests.cpp ScanEngineTests.cpp
     TimeConstantsTests.cpp
     CompressionFamilyTests.cpp

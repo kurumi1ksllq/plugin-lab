@@ -4,7 +4,11 @@
 
 /**
  * Multi-tone test signal — multiple sine waves summed together.
- * Useful for harmonic analysis (testing multiple frequencies at once).
+ * Reserved for IMD measurement (DESIGN.md §3.2: IMD uses multi-tone, THD
+ * uses single-tone — never mixed). Do NOT use for THD: octave-spaced
+ * harmonics land on co-injected fundamentals, inflating every tone's THD
+ * toward ~100% even in a perfectly linear plugin (issue #38) — THD uses
+ * SequentialTone instead.
  */
 class MultiTone : public SignalGenerator
 {
