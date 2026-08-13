@@ -1,4 +1,5 @@
 #include "ScanEngine.h"
+#include "../analysis/MeasurementAnalysis.h"
 
 //==============================================================================
 // Configuration
@@ -122,49 +123,15 @@ ScanEngine::ScanResult ScanEngine::run (const juce::String& paramId,
         entry.paramValue      = static_cast<double> (values[round]);
         entry.paramValueText  = param->getText (values[round], 64);
 
-        auto& recorded = session_->getResult();
-        switch (type)
-        {
-            case MeasurementSession::Type::frequencyResponse:
-            {
-                FreqResponse analyser;
-                analyser.setLatencySamples (plugin_->getLatencySamples());
-                if (session_->getFreqExcitation())
-                    entry.freq = analyser.analyzeMLS (recorded.getDryBuffer(),
-                                                      recorded.getWetBuffer(),
-                                                      recorded.getSampleRate(),
-                                                      session_->getFreqMLSLength());
-                else
-                    entry.freq = analyser.analyze (recorded.getDryBuffer(),
-                                                   recorded.getWetBuffer(),
-                                                   recorded.getSampleRate());
-                break;
-            }
-            case MeasurementSession::Type::harmonicAnalysis:
-            {
-                HarmonicAnalysis analyser;
-                entry.harmonic = analyser.analyze (recorded.getWetBuffer(),
-                                                   recorded.getSampleRate(),
-                                                   session_->getFundamentalFreqs(),
-                                                   session_->getSegmentDurationSec());
-                break;
-            }
-            case MeasurementSession::Type::compressionCurve:
-            {
-                CompressionCurve analyser;
-                entry.compression = analyser.analyze (recorded.getDryBuffer(),
-                                                      recorded.getWetBuffer(),
-                                                      recorded.getSampleRate(),
-                                                      session_->getInputLevelsDB());
-                break;
-            }
-
-            // The scan command rejects gr_timeline (GR timelines are
-            // measured via the measure command) — defensive case to keep
-            // the enum switch exhaustive.
-            case MeasurementSession::Type::grTimeline:
-                break;
-        }
+        // One type→analyzer mapping (issue #42): the dispatch + latency
+        // setup is shared with CommandParser::runAndAnalyze (see
+        // MeasurementAnalysis). gr_timeline is rejected by the scan command;
+        // the mapping returns an all-empty entry for it (the old inline
+        // switch broke early, producing the same result).
+        const auto analysed = MeasurementAnalysis::analyzeByType (*session_, plugin_->getLatencySamples());
+        entry.freq        = analysed.freq;
+        entry.harmonic    = analysed.harmonic;
+        entry.compression = analysed.compression;
 
         entry.latencySamples = plugin_->getLatencySamples();
 

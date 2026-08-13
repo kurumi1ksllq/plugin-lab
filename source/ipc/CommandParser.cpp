@@ -8,6 +8,7 @@
 #include "../analysis/GainReduction.h"
 #include "../analysis/TimeConstants.h"
 #include "../analysis/CompressionFamily.h"
+#include "../analysis/MeasurementAnalysis.h"
 #include "../analysis/WavExporter.h"
 
 #include <cfloat>
@@ -61,52 +62,21 @@ static bool runAndAnalyze (MeasurementSession* session, juce::AudioPluginInstanc
 
     if (source == MeasurementSession::Source::signal)
     {
-        // Dispatch the analysis to the analyzer matching the session type.
-        switch (session->getType())
+        // Unreachable — the parsers reject gr_timeline for Source::signal;
+        // the guard is kept from the old inline switch (defensive, and the
+        // shared mapping returns an empty result rather than an error).
+        if (session->getType() == MeasurementSession::Type::grTimeline)
         {
-            case MeasurementSession::Type::frequencyResponse:
-            {
-                FreqResponse fr;
-                fr.setLatencySamples (plugin->getLatencySamples());
-                if (session->getFreqExcitation())
-                    results.freq = fr.analyzeMLS (result.getDryBuffer(),
-                                                  result.getWetBuffer(),
-                                                  result.getSampleRate(),
-                                                  session->getFreqMLSLength());
-                else
-                    results.freq = fr.analyze (result.getDryBuffer(),
-                                               result.getWetBuffer(),
-                                               result.getSampleRate());
-                break;
-            }
-
-            case MeasurementSession::Type::harmonicAnalysis:
-            {
-                HarmonicAnalysis ha;
-                results.harmonic = ha.analyze (result.getWetBuffer(),
-                                               result.getSampleRate(),
-                                               session->getFundamentalFreqs(),
-                                               session->getSegmentDurationSec());
-                break;
-            }
-
-            case MeasurementSession::Type::compressionCurve:
-            {
-                CompressionCurve cc;
-                results.compression = cc.analyze (result.getDryBuffer(),
-                                                  result.getWetBuffer(),
-                                                  result.getSampleRate(),
-                                                  session->getInputLevelsDB());
-                break;
-            }
-
-            // Unreachable — the parser rejects gr_timeline for
-            // Source::signal (defensive, keeps the enum switch
-            // exhaustive).
-            case MeasurementSession::Type::grTimeline:
-                error = R"("error":"gr_timeline requires a non-signal source")";
-                return false;
+            error = R"("error":"gr_timeline requires a non-signal source")";
+            return false;
         }
+
+        // One type→analyzer mapping (issue #42): the dispatch + latency
+        // setup lives in MeasurementAnalysis, shared with ScanEngine.
+        auto analysed = MeasurementAnalysis::analyzeByType (*session, plugin->getLatencySamples());
+        results.freq        = std::move (analysed.freq);
+        results.harmonic    = std::move (analysed.harmonic);
+        results.compression = std::move (analysed.compression);
     }
     else if (session->getType() == MeasurementSession::Type::grTimeline)
     {
