@@ -141,6 +141,43 @@ public:
     juce::String handleCommand (const juce::String& jsonCommand);
 
 private:
+    //==============================================================================
+    // Command-family handlers (issue #42): handleCommand is a thin router —
+    // it parses the JSON, matches the command family and delegates here.
+    // Each handler is a verbatim move of the pre-refactor inline branch:
+    // same guard strings (cmd is passed by the router so the conditions
+    // read exactly as before), same validation order, same JSON responses.
+    // obj is the parsed request object; cmd the request's "cmd" string.
+
+    /** Control commands served directly on the worker thread (non-blocking,
+     *  atomic/snapshot-only): getScanStatus / loadPlugin / setParam /
+     *  getParams / stop. */
+    juce::String handleControlCommands (const juce::DynamicObject& obj, const juce::String& cmd);
+
+    /** measure — a blocking command; the run body is dispatched to the
+     *  message thread via dispatchToMessageThread so processBlock runs
+     *  there (required by Pro-Q 4 and similar VST3 plugins). */
+    juce::String handleMeasurementCommands (const juce::DynamicObject& obj, const juce::String& cmd);
+
+    /** scan — parameter sweep across values; same blocking dispatch as
+     *  measure. */
+    juce::String handleScanCommands (const juce::DynamicObject& obj, const juce::String& cmd);
+
+    /** dataset (measurement battery) / exportWav (offline dry/wet WAV
+     *  export of the last measurement). */
+    juce::String handleDatasetExportCommands (const juce::DynamicObject& obj, const juce::String& cmd);
+
+    /** recordTimeline / stopTimeline / playTimeline — parameter-automation
+     *  recording, export and playback. */
+    juce::String handleTimelineCommands (const juce::DynamicObject& obj, const juce::String& cmd);
+
+    /** Shared blocking dispatch for long commands (measure/scan/dataset/
+     *  playTimeline): executes synchronously when already on the message
+     *  thread (unit tests / message callbacks), otherwise callAsync +
+     *  WaitableEvent so the body runs on the message thread. One helper
+     *  replaces the four textually-identical dispatch blocks. */
+    static juce::String dispatchToMessageThread (const std::function<juce::String()>& run);
+
     PluginManager* pluginManager = nullptr;
     MeasurementSession* sessionPtr = nullptr;
     juce::AudioPluginInstance* pluginPtr = nullptr;

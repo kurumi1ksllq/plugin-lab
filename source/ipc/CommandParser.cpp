@@ -8,6 +8,7 @@
 #include "../analysis/GainReduction.h"
 #include "../analysis/TimeConstants.h"
 #include "../analysis/CompressionFamily.h"
+#include "../analysis/MeasurementAnalysis.h"
 #include "../analysis/WavExporter.h"
 
 #include <cfloat>
@@ -82,52 +83,21 @@ static bool runAndAnalyze (MeasurementSession* session, juce::AudioPluginInstanc
 
     if (source == MeasurementSession::Source::signal)
     {
-        // Dispatch the analysis to the analyzer matching the session type.
-        switch (session->getType())
+        // Unreachable — the parsers reject gr_timeline for Source::signal;
+        // the guard is kept from the old inline switch (defensive, and the
+        // shared mapping returns an empty result rather than an error).
+        if (session->getType() == MeasurementSession::Type::grTimeline)
         {
-            case MeasurementSession::Type::frequencyResponse:
-            {
-                FreqResponse fr;
-                fr.setLatencySamples (plugin->getLatencySamples());
-                if (session->getFreqExcitation())
-                    results.freq = fr.analyzeMLS (result.getDryBuffer(),
-                                                  result.getWetBuffer(),
-                                                  result.getSampleRate(),
-                                                  session->getFreqMLSLength());
-                else
-                    results.freq = fr.analyze (result.getDryBuffer(),
-                                               result.getWetBuffer(),
-                                               result.getSampleRate());
-                break;
-            }
-
-            case MeasurementSession::Type::harmonicAnalysis:
-            {
-                HarmonicAnalysis ha;
-                results.harmonic = ha.analyze (result.getWetBuffer(),
-                                               result.getSampleRate(),
-                                               session->getFundamentalFreqs(),
-                                               session->getSegmentDurationSec());
-                break;
-            }
-
-            case MeasurementSession::Type::compressionCurve:
-            {
-                CompressionCurve cc;
-                results.compression = cc.analyze (result.getDryBuffer(),
-                                                  result.getWetBuffer(),
-                                                  result.getSampleRate(),
-                                                  session->getInputLevelsDB());
-                break;
-            }
-
-            // Unreachable — the parser rejects gr_timeline for
-            // Source::signal (defensive, keeps the enum switch
-            // exhaustive).
-            case MeasurementSession::Type::grTimeline:
-                error = R"("error":"gr_timeline requires a non-signal source")";
-                return false;
+            error = R"("error":"gr_timeline requires a non-signal source")";
+            return false;
         }
+
+        // One type→analyzer mapping (issue #42): the dispatch + latency
+        // setup lives in MeasurementAnalysis, shared with ScanEngine.
+        auto analysed = MeasurementAnalysis::analyzeByType (*session, plugin->getLatencySamples());
+        results.freq        = std::move (analysed.freq);
+        results.harmonic    = std::move (analysed.harmonic);
+        results.compression = std::move (analysed.compression);
     }
     else if (session->getType() == MeasurementSession::Type::grTimeline)
     {
@@ -440,8 +410,48 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     if (obj == nullptr)
         return Protocol::makeResponse (false, R"("error":"invalid JSON")");
 
-    auto cmd = obj->getProperty ("cmd").toString();
+    const auto cmd = obj->getProperty ("cmd").toString();
 
+    // --- thin router (issue #42) ---
+    // handleCommand no longer carries the command bodies: each command
+    // family is delegated to a private handler below. The command strings,
+    // validation order and JSON responses are unchanged — the guard sets
+    // below mirror the pre-refactor if-chain exactly (each protocol command
+    // string is distinct, so dispatch order is irrelevant).
+    if (cmd == Protocol::Command::getScanStatus
+        || cmd == "loadPlugin"
+        || cmd == "setParam"
+        || cmd == "getParams"
+        || cmd == "stop")
+        return handleControlCommands (*obj, cmd);
+
+    if (cmd == "measure")
+        return handleMeasurementCommands (*obj, cmd);
+
+    if (cmd == "scan")
+        return handleScanCommands (*obj, cmd);
+
+    if (cmd == Protocol::Command::dataset
+        || cmd == Protocol::Command::exportWav)
+        return handleDatasetExportCommands (*obj, cmd);
+
+    if (cmd == Protocol::Command::recordTimeline
+        || cmd == Protocol::Command::playTimeline
+        || cmd == Protocol::Command::stopTimeline)
+        return handleTimelineCommands (*obj, cmd);
+
+    return Protocol::makeResponse (false, R"("error":"unknown cmd")");
+}
+
+//==============================================================================
+// Control commands (issue #42): non-blocking commands served directly on
+// the worker thread. The guard chain mirrors the pre-refactor if-chain;
+// `cmd` is passed by the router so the branch conditions read exactly as
+// before the split.
+//==============================================================================
+
+juce::String CommandParser::handleControlCommands (const juce::DynamicObject& obj, const juce::String& cmd)
+{
     // --- getScanStatus (计划步骤 5)：插件扫描状态快照。快照+推送双轨中的快照
     // 侧——纯推送漏掉中途连接的客户端，中途连接者用此命令拿当前状态。
     // 命名避开参数扫描（scan）语义。字段：running/done/progress/count/
@@ -468,7 +478,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     // --- loadPlugin ---
     if (cmd == "loadPlugin")
     {
-        auto path = obj->getProperty ("path").toString();
+        auto path = obj.getProperty ("path").toString();
         if (path.isEmpty())
             return Protocol::makeResponse (false, R"("error":"path required")");
 
@@ -544,8 +554,8 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         if (pluginPtr == nullptr)
             return Protocol::makeResponse (false, R"("error":"no plugin loaded")");
 
-        auto name = obj->getProperty ("name").toString();
-        auto paramId = obj->getProperty ("param_id").toString();
+        auto name = obj.getProperty ("name").toString();
+        auto paramId = obj.getProperty ("param_id").toString();
 
         // Issue #41: a missing/string value used to silently coerce to 0.0;
         // issue #34: NaN/Infinity would poison setValueNotifyingHost.
@@ -553,7 +563,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         // (the repo's measurement context stores normalized parameters — see
         // getParams and the scan command's 0..1 contract).
         double value = 0.0;
-        if (! isFiniteNumber (obj->getProperty ("value"), value))
+        if (! isFiniteNumber (obj.getProperty ("value"), value))
             return Protocol::makeResponse (false, R"("error":"missing or invalid value")");
         if (value < 0.0 || value > 1.0)
             return Protocol::makeResponse (false, R"#("error":"value out of range (0..1)")#");
@@ -635,6 +645,32 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         return Protocol::makeResponse (true, data);
     }
 
+    // --- stop ---
+    if (cmd == "stop")
+    {
+        // Issue #3: the wired callback cancels BOTH the in-process session
+        // and the out-of-process child orchestrator (atomic flag sets — safe
+        // to call from the pipe read thread while the long command runs on
+        // the worker). Falls back to the session-only cancel when unwired.
+        if (cancelRequestCallback)
+            cancelRequestCallback();
+        else if (sessionPtr != nullptr)
+            sessionPtr->cancel();
+        return Protocol::makeResponse (true);
+    }
+
+    // Unreachable — the router dispatches only this family's commands;
+    // mirrors the router's "unknown cmd" tail (defensive).
+    return Protocol::makeResponse (false, R"("error":"unknown cmd")");
+}
+
+//==============================================================================
+// Measurement commands (issue #42): measure — a blocking command; the run
+// body is dispatched to the message thread (see dispatchToMessageThread).
+//==============================================================================
+
+juce::String CommandParser::handleMeasurementCommands (const juce::DynamicObject& obj, const juce::String& cmd)
+{
     // --- measure ---
     if (cmd == "measure")
     {
@@ -688,7 +724,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (false, R"("error":"child measurement not configured")");
 
         // --- input source (default: signal) ---
-        auto sourceStr = obj->getProperty ("source").toString();
+        auto sourceStr = obj.getProperty ("source").toString();
         if (sourceStr.isEmpty())
             sourceStr = Protocol::Source::signal;
 
@@ -698,7 +734,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
         // --- measurement type (analysis field; for raw sources it is only
         //     metadata — defaults to frequency_response when omitted) ---
-        auto t = obj->getProperty ("type").toString();
+        auto t = obj.getProperty ("type").toString();
         if (t.isEmpty())
             t = Protocol::MeasureType::freq;
         if (t == Protocol::MeasureType::freq)
@@ -723,7 +759,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 R"("error":"gr_timeline requires a non-signal source")");
 
         // --- source-specific configuration ---
-        auto sourceError = configureSessionSource (*session, *obj, source);
+        auto sourceError = configureSessionSource (*session, obj, source);
         if (sourceError.isNotEmpty())
             return Protocol::makeResponse (false, sourceError);
 
@@ -732,7 +768,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         // sweep so no stale MLS residue leaks into non-freq exports.
         if (t == Protocol::MeasureType::freq)
         {
-            auto excitationStr = obj->getProperty ("excitation").toString();
+            auto excitationStr = obj.getProperty ("excitation").toString();
             if (excitationStr.isEmpty())
                 excitationStr = Protocol::Excitation::sweep;
             if (excitationStr == Protocol::Excitation::mls)
@@ -754,7 +790,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         // Determine export path:
         //   - signal/noise/dynamic → "path" (existing protocol)
         //   - file → "export_path" ("path" names the input audio file)
-        auto path = resolveExportPath (*obj, source,
+        auto path = resolveExportPath (obj, source,
                                        source == MeasurementSession::Source::signal
                                            ? "pluginlab_freq_response.json"
                                            : "pluginlab_raw_capture.json");
@@ -914,30 +950,23 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return routeToChild ? runChildMeasurement() : runMeasurement();
         };
 
-        // Dispatch strategy:
-        //   - already on the message thread (unit tests, or when called from
-        //     within a message callback):  execute synchronously.
-        //   - any other thread (real IPC PipeServer thread):  dispatch via
-        //     callAsync + WaitableEvent so processBlock runs on the message
-        //     thread (required by Pro-Q 4 and similar VST3 plugins).
-        if (juce::MessageManager::getInstance()->isThisTheMessageThread())
-        {
-            return run();
-        }
-
-        juce::WaitableEvent done;
-        juce::String response;
-
-        juce::MessageManager::callAsync ([&]
-        {
-            response = run();
-            done.signal();
-        });
-
-        done.wait();
-        return response;
+        // Blocking dispatch to the message thread — the run body executes
+        // synchronously on the message thread and via callAsync +
+        // WaitableEvent from any other thread (see dispatchToMessageThread).
+        return dispatchToMessageThread (run);
     }
 
+    // Unreachable — the router dispatches only this family's commands.
+    return Protocol::makeResponse (false, R"("error":"unknown cmd")");
+}
+
+//==============================================================================
+// Scan commands (issue #42): scan — parameter sweep across values; same
+// blocking dispatch as measure.
+//==============================================================================
+
+juce::String CommandParser::handleScanCommands (const juce::DynamicObject& obj, const juce::String& cmd)
+{
     // --- scan ---
     if (cmd == "scan")
     {
@@ -956,7 +985,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (false, R"("error":"no session or plugin")");
 
         // --- measurement type (analysis field; default frequency_response) ---
-        auto t = obj->getProperty ("type").toString();
+        auto t = obj.getProperty ("type").toString();
         if (t.isEmpty())
             t = Protocol::MeasureType::freq;
 
@@ -971,7 +1000,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (false, R"("error":"unknown measure type")");
 
         // --- scanned parameter (located by stable ID) ---
-        auto paramId = obj->getProperty ("param_id").toString();
+        auto paramId = obj.getProperty ("param_id").toString();
         if (paramId.isEmpty())
             return Protocol::makeResponse (false, R"("error":"param_id required")");
 
@@ -980,7 +1009,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (false, R"("error":"parameter not found")");
 
         // --- values (normalized 0..1; must be non-empty) ---
-        auto valuesVar = obj->getProperty ("values");
+        auto valuesVar = obj.getProperty ("values");
         if (! valuesVar.isArray() || valuesVar.size() == 0)
             return Protocol::makeResponse (false, R"("error":"values array required")");
 
@@ -999,7 +1028,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
         // --- input source (default: signal; other sources capture raw per
         //     round — analysis still runs via ScanEngine) ---
-        auto sourceStr = obj->getProperty ("source").toString();
+        auto sourceStr = obj.getProperty ("source").toString();
         if (sourceStr.isEmpty())
             sourceStr = Protocol::Source::signal;
 
@@ -1008,7 +1037,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (false, R"("error":"unknown source")");
 
         // --- source-specific configuration (mirrors the measure command) ---
-        auto sourceError = configureSessionSource (*session, *obj, source);
+        auto sourceError = configureSessionSource (*session, obj, source);
         if (sourceError.isNotEmpty())
             return Protocol::makeResponse (false, sourceError);
 
@@ -1021,7 +1050,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         session->setSource (source);
 
         // --- export path (default pluginlab_scan.json) ---
-        auto path = resolveExportPath (*obj, source, "pluginlab_scan.json");
+        auto path = resolveExportPath (obj, source, "pluginlab_scan.json");
 
         // Crash protection: same WAV mirror as the measure command. Set once
         // here — the ScanEngine reuses this session for every round, so the
@@ -1081,18 +1110,23 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (true, d);
         };
 
-        // Dispatch strategy mirrors the measure command: synchronous on the
-        // message thread, callAsync + WaitableEvent from any other thread.
-        if (juce::MessageManager::getInstance()->isThisTheMessageThread())
-            return runScan();
-
-        juce::WaitableEvent done;
-        juce::String response;
-        juce::MessageManager::callAsync ([&] { response = runScan(); done.signal(); });
-        done.wait();
-        return response;
+        // Blocking dispatch mirrors the measure command (see
+        // dispatchToMessageThread).
+        return dispatchToMessageThread (runScan);
     }
 
+    // Unreachable — the router dispatches only this family's commands.
+    return Protocol::makeResponse (false, R"("error":"unknown cmd")");
+}
+
+//==============================================================================
+// Dataset / export commands (issue #42): dataset — measurement battery
+// with optional scan / compression_family blocks; exportWav — offline
+// dry/wet WAV export of the last measurement.
+//==============================================================================
+
+juce::String CommandParser::handleDatasetExportCommands (const juce::DynamicObject& obj, const juce::String& cmd)
+{
     // --- dataset ---
     if (cmd == Protocol::Command::dataset)
     {
@@ -1148,7 +1182,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         // requests no battery (a scan/compression_family-only dataset is
         // still valid); an unknown string fails the whole command.
         std::vector<juce::String> requestedTypes;
-        auto typesVar = obj->getProperty ("types");
+        auto typesVar = obj.getProperty ("types");
         if (! typesVar.isArray())
         {
             for (const auto& b : battery)
@@ -1173,7 +1207,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         // validation).
         bool freqExcitationValid = true;
         bool freqExcitationMLS = false;
-        auto excitationStr = obj->getProperty ("excitation").toString();
+        auto excitationStr = obj.getProperty ("excitation").toString();
         if (excitationStr.isEmpty())
             excitationStr = Protocol::Excitation::sweep;
         if (excitationStr == Protocol::Excitation::mls)
@@ -1188,7 +1222,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
 
         // Export path: the dataset command has no input file, so "path"
         // always names the JSON destination.
-        auto path = obj->getProperty ("path").toString();
+        auto path = obj.getProperty ("path").toString();
 
         // Crash protection: mirror the captured dry/wet audio to a WAV file
         // next to the export JSON (same as measure/scan; the last run's
@@ -1227,7 +1261,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
                 // For the gr_timeline run this applies the same dynamic-carrier
                 // defaults (carrier_start_hz = 10 kHz) the standalone measure
                 // path relies on, keeping the tau estimate valid.
-                auto sourceError = configureSessionSource (*session, *obj, run->source);
+                auto sourceError = configureSessionSource (*session, obj, run->source);
                 if (sourceError.isNotEmpty())
                     continue;   // skip this type; unreachable for signal/dynamic
 
@@ -1262,7 +1296,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             bool scanOk = false;
             MeasurementSession::Type scanType = MeasurementSession::Type::frequencyResponse;
 
-            auto scanVar = obj->getProperty ("scan");
+            auto scanVar = obj.getProperty ("scan");
             if (scanVar.isObject())
             {
                 auto* scanObj = scanVar.getDynamicObject();
@@ -1343,7 +1377,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             CompressionFamily::FamilyResult cfResult;
             bool cfOk = false;
 
-            auto cfVar = obj->getProperty ("compression_family");
+            auto cfVar = obj.getProperty ("compression_family");
             if (cfVar.isObject())
             {
                 auto* cfObj = cfVar.getDynamicObject();
@@ -1469,16 +1503,9 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (true, d);
         };
 
-        // Dispatch strategy mirrors measure/scan: synchronous on the message
-        // thread, callAsync + WaitableEvent from any other thread.
-        if (juce::MessageManager::getInstance()->isThisTheMessageThread())
-            return runDataset();
-
-        juce::WaitableEvent done;
-        juce::String response;
-        juce::MessageManager::callAsync ([&] { response = runDataset(); done.signal(); });
-        done.wait();
-        return response;
+        // Blocking dispatch mirrors measure/scan (see
+        // dispatchToMessageThread).
+        return dispatchToMessageThread (runDataset);
     }
 
     // --- exportWav ---
@@ -1496,7 +1523,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         if (result.getNumRecordedSamples() <= 0)
             return Protocol::makeResponse (false, R"("error":"no measurement result")");
 
-        auto path = obj->getProperty ("path").toString();
+        auto path = obj.getProperty ("path").toString();
         if (path.isEmpty())
             return Protocol::makeResponse (false, R"("error":"path required")");
 
@@ -1523,7 +1550,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
     // dataset bodies (lastResults).
     if (cmd == Protocol::Command::exportCmd)
     {
-        auto path = obj->getProperty ("path").toString();
+        auto path = obj.getProperty ("path").toString();
         if (path.isEmpty())
             return Protocol::makeResponse (false, R"("error":"invalid path")");
 
@@ -1586,6 +1613,18 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         return Protocol::makeResponse (true, R"("export_path":")" + escapeJsonString (path) + "\"");
     }
 
+    // Unreachable — the router dispatches only this family's commands.
+    return Protocol::makeResponse (false, R"("error":"unknown cmd")");
+}
+
+//==============================================================================
+// Timeline commands (issue #42): parameter-automation recording
+// (recordTimeline/stopTimeline, non-blocking) and playback (playTimeline,
+// blocking — dispatched like measure).
+//==============================================================================
+
+juce::String CommandParser::handleTimelineCommands (const juce::DynamicObject& obj, const juce::String& cmd)
+{
     // --- recordTimeline ---
     // Non-blocking, events-only parameter automation recording (B2): attach
     // as an AudioProcessorListener and queue every setValueNotifyingHost
@@ -1616,7 +1655,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         if (! timeline.isRecording())
             return Protocol::makeResponse (false, R"("error":"not recording")");
 
-        auto path = obj->getProperty ("path").toString();
+        auto path = obj.getProperty ("path").toString();
         if (path.isEmpty())
             return Protocol::makeResponse (false, R"("error":"path required")");
 
@@ -1670,7 +1709,7 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         if (timeline.isRecording())
             return Protocol::makeResponse (false, R"("error":"stop recording first")");
 
-        auto path = obj->getProperty ("path").toString();
+        auto path = obj.getProperty ("path").toString();
         if (path.isEmpty())
             return Protocol::makeResponse (false, R"("error":"path required")");
 
@@ -1679,11 +1718,11 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (false, R"("error":"file not found")");
 
         double rate = 1.0;
-        if (obj->hasProperty ("rate"))
+        if (obj.hasProperty ("rate"))
         {
             // Issue #34: NaN/Infinity bypassed the old `rate <= 0.0` check
             // (both compare false) — require a finite positive rate.
-            if (! isFiniteNumber (obj->getProperty ("rate"), rate) || rate <= 0.0)
+            if (! isFiniteNumber (obj.getProperty ("rate"), rate) || rate <= 0.0)
                 return Protocol::makeResponse (false, R"("error":"invalid rate")");
         }
 
@@ -1774,31 +1813,35 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
             return Protocol::makeResponse (true, d);
         };
 
-        // Dispatch strategy mirrors the measure command: synchronous on the
-        // message thread, callAsync + WaitableEvent from any other thread.
-        if (juce::MessageManager::getInstance()->isThisTheMessageThread())
-            return runPlayback();
-
-        juce::WaitableEvent done;
-        juce::String response;
-        juce::MessageManager::callAsync ([&] { response = runPlayback(); done.signal(); });
-        done.wait();
-        return response;
+        // Blocking dispatch mirrors the measure command (see
+        // dispatchToMessageThread).
+        return dispatchToMessageThread (runPlayback);
     }
 
-    // --- stop ---
-    if (cmd == "stop")
-    {
-        // Issue #3: the wired callback cancels BOTH the in-process session
-        // and the out-of-process child orchestrator (atomic flag sets — safe
-        // to call from the pipe read thread while the long command runs on
-        // the worker). Falls back to the session-only cancel when unwired.
-        if (cancelRequestCallback)
-            cancelRequestCallback();
-        else if (sessionPtr != nullptr)
-            sessionPtr->cancel();
-        return Protocol::makeResponse (true);
-    }
-
+    // Unreachable — the router dispatches only this family's commands.
     return Protocol::makeResponse (false, R"("error":"unknown cmd")");
+}
+
+//==============================================================================
+// Shared blocking dispatch (issue #42): one helper replacing the four
+// textually-identical WaitableEvent blocks in the pre-refactor
+// handleCommand (measure/scan/dataset/playTimeline).
+//==============================================================================
+
+juce::String CommandParser::dispatchToMessageThread (const std::function<juce::String()>& run)
+{
+    // Dispatch strategy:
+    //   - already on the message thread (unit tests, or when called from
+    //     within a message callback):  execute synchronously.
+    //   - any other thread (real IPC PipeServer thread):  dispatch via
+    //     callAsync + WaitableEvent so processBlock runs on the message
+    //     thread (required by Pro-Q 4 and similar VST3 plugins).
+    if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+        return run();
+
+    juce::WaitableEvent done;
+    juce::String response;
+    juce::MessageManager::callAsync ([&] { response = run(); done.signal(); });
+    done.wait();
+    return response;
 }

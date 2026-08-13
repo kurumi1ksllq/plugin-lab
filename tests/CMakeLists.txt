@@ -28,6 +28,7 @@ target_sources(unit_tests PRIVATE
     ../source/analysis/WavExporter.cpp
     ../source/analysis/WavCaptureReader.cpp
     ../source/analysis/ChildWavAnalyzer.cpp
+    ../source/analysis/MeasurementAnalysis.cpp
     ../source/utils/FftHelper.cpp ../source/utils/MathUtils.cpp
     ../source/ipc/CommandParser.cpp
     ../source/ipc/PipeServer.cpp
