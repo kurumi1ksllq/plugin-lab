@@ -33,7 +33,7 @@ namespace ChildWavAnalyzer
                                                 const juce::String& classId,
                                                 int latencySamples);
 
-    /** Analyze a child-measured MultiTone WAV and return the export JSON
+    /** Analyze a child-measured SequentialTone WAV and return the export JSON
      *  (T1 — same ADR-D-6/D2b pattern as analyzeChildFrequencyResponse).
      *  @param wavPath      2*numChannels-channel 24-bit WAV ([dry, wet] layout)
      *  @param numChannels  plugin channel count (dry and wet share it)
