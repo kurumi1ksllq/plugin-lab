@@ -195,7 +195,12 @@ set_source_files_properties(source/capture/SweepRunner.cpp PROPERTIES
 )
 
 # ── Tools ───────────────────────────────────────────────────────────────────
-add_subdirectory(tools)
+# VST3Scanner is runtime-dead (scanning happens in-process) — kept as a
+# reference build, so it is gated off by default (issue #44).
+option(BUILD_VST3SCANNER "Build the standalone VST3Scanner reference tool" OFF)
+if(BUILD_VST3SCANNER)
+    add_subdirectory(tools)
+endif()
 
 # PluginManager.cpp needs /EHa to catch hardware crashes from buggy VST3
 set_source_files_properties(source/host/PluginManager.cpp PROPERTIES
