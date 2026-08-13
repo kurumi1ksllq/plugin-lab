@@ -224,13 +224,16 @@ def test_is_harmonic_empty_false():
 
 def test_locked_tolerances_seeded_with_headroom():
     """Locked tolerances sit far above the measured calibration seed
-    (0.68% freq / 0.005 dB gain / 2.77% Q / bit-exact compression+GR)."""
+    (0.68% freq / 0.005 dB gain / 2.77% Q / bit-exact compression+GR);
+    ratio_pct aligns to the real Pro-C 3 bound (STATUS.md:140, 25%) and
+    harmonic_thd_pct locks the post-#38 single-tone THD acceptance bound."""
     assert LOCKED_TOLERANCES["freq_pct"] == 5.0
     assert LOCKED_TOLERANCES["gain_db"] == 0.5
     assert LOCKED_TOLERANCES["q_pct"] == 20.0
     assert LOCKED_TOLERANCES["threshold_db"] == 1.0
-    assert LOCKED_TOLERANCES["ratio_pct"] == 20.0
+    assert LOCKED_TOLERANCES["ratio_pct"] == 25.0
     assert LOCKED_TOLERANCES["tau_pct"] == 20.0
+    assert LOCKED_TOLERANCES["harmonic_thd_pct"] == 20.0
 
 
 # ---------------------------------------------------------------------------

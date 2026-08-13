@@ -53,13 +53,24 @@ from reverse_derive import derive_compression, derive_freq, derive_gr_tau
 # Q worst 2.767%, compression threshold/ratio and GR attack/release bit-exact
 # (0.0000 error). Each tolerance carries ~10x headroom over the measured
 # error, matching issue #24 acceptance (freq mean |delta| < 0.5 dB).
+# ratio_pct deviates from the headroom rule on purpose: it is aligned to the
+# documented real-plugin bound in STATUS.md:140 — real Pro-C 3 round-trips
+# show 14.3-23.5% ratio error (soft knee + under-compressed burst) and 25%
+# passes, while the synthetic headroom bound (20%) would reject a legit
+# real-plugin round-trip at T5 acceptance.
+# harmonic_thd_pct is post-#38 (single-tone THD fix, PR #48): clean identity
+# plugins measure THD < 1%, so 20.0 is the real-plugin acceptance bound — a
+# plugin above it is very nonlinear or the measurement is broken. T5 (#28)
+# consumes it ("harmonic 按 T1 校准容差判定"); calibrate() applies it as a
+# one-sided measurement-sanity bound.
 LOCKED_TOLERANCES = {
-    "freq_pct": 5.0,        # percent, e.g. 1000 Hz -> [950, 1050]
-    "gain_db": 0.5,         # absolute dB
-    "q_pct": 20.0,          # percent
-    "threshold_db": 1.0,    # absolute dB
-    "ratio_pct": 20.0,      # percent
-    "tau_pct": 20.0,        # percent, attack_ms / release_ms
+    "freq_pct": 5.0,            # percent, e.g. 1000 Hz -> [950, 1050]
+    "gain_db": 0.5,             # absolute dB
+    "q_pct": 20.0,              # percent
+    "threshold_db": 1.0,        # absolute dB
+    "ratio_pct": 25.0,          # percent (STATUS.md:140 real Pro-C 3 bound)
+    "tau_pct": 20.0,            # percent, attack_ms / release_ms
+    "harmonic_thd_pct": 20.0,   # percent, one-sided bound on measured THD
 }
 
 # Check-name -> (LOCKED_TOLERANCES key, error mode). Modes mirror
@@ -458,7 +469,8 @@ def verify_against(derived_row, known_params):
 
 # Locked tolerance key -> unit suffix rendered in the markdown summary.
 _TOLERANCE_UNITS = {"freq_pct": "%", "gain_db": " dB", "q_pct": "%",
-                    "threshold_db": " dB", "ratio_pct": "%", "tau_pct": "%"}
+                    "threshold_db": " dB", "ratio_pct": "%", "tau_pct": "%",
+                    "harmonic_thd_pct": "%"}
 
 
 def _integrity_issues(rows):
