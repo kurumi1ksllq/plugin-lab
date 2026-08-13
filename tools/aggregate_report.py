@@ -24,6 +24,18 @@ plugin set (detect_duplicate_datasets), a top-level "integrity" list in
 write_json and a "## Data integrity" section in write_markdown; main()
 warns on issues without changing the exit code.
 
+Wave-6 (issues #37, #45): calibration verification + summary drift —
+LOCKED_TOLERANCES gains harmonic_thd_pct and ratio_pct is aligned to the
+real Pro-C 3 bound (STATUS.md:140); --calibrate DIR is a separate mode
+that re-derives every plugin and checks the results against the
+known-provenance values embedded in each dataset doc (compression.fitted
++ gr_timeline.tau), exiting non-zero when any locked tolerance is
+exceeded; --summary PATH attaches stale-data drift detection to a normal
+report run (summary-listed plugins missing from the scan, informational,
+exit unchanged). The two are independent: --calibrate short-circuits the
+report run (passing --summary with it is an error); --summary only
+attaches to the report run.
+
 Stdlib only, no third-party dependencies.
 
 Usage (import only):
@@ -31,7 +43,8 @@ Usage (import only):
 
 Usage (CLI):
     python tools/aggregate_report.py [--out-dir DIR] [--report-dir DIR]
-        [--json PATH] [--markdown PATH]
+        [--json PATH] [--markdown PATH] [--summary PATH]
+    python tools/aggregate_report.py --calibrate DIR
 """
 import argparse
 import datetime
@@ -53,13 +66,24 @@ from reverse_derive import derive_compression, derive_freq, derive_gr_tau
 # Q worst 2.767%, compression threshold/ratio and GR attack/release bit-exact
 # (0.0000 error). Each tolerance carries ~10x headroom over the measured
 # error, matching issue #24 acceptance (freq mean |delta| < 0.5 dB).
+# ratio_pct deviates from the headroom rule on purpose: it is aligned to the
+# documented real-plugin bound in STATUS.md:140 — real Pro-C 3 round-trips
+# show 14.3-23.5% ratio error (soft knee + under-compressed burst) and 25%
+# passes, while the synthetic headroom bound (20%) would reject a legit
+# real-plugin round-trip at T5 acceptance.
+# harmonic_thd_pct is post-#38 (single-tone THD fix, PR #48): clean identity
+# plugins measure THD < 1%, so 20.0 is the real-plugin acceptance bound — a
+# plugin above it is very nonlinear or the measurement is broken. T5 (#28)
+# consumes it ("harmonic 按 T1 校准容差判定"); calibrate() applies it as a
+# one-sided measurement-sanity bound.
 LOCKED_TOLERANCES = {
-    "freq_pct": 5.0,        # percent, e.g. 1000 Hz -> [950, 1050]
-    "gain_db": 0.5,         # absolute dB
-    "q_pct": 20.0,          # percent
-    "threshold_db": 1.0,    # absolute dB
-    "ratio_pct": 20.0,      # percent
-    "tau_pct": 20.0,        # percent, attack_ms / release_ms
+    "freq_pct": 5.0,            # percent, e.g. 1000 Hz -> [950, 1050]
+    "gain_db": 0.5,             # absolute dB
+    "q_pct": 20.0,              # percent
+    "threshold_db": 1.0,        # absolute dB
+    "ratio_pct": 25.0,          # percent (STATUS.md:140 real Pro-C 3 bound)
+    "tau_pct": 20.0,            # percent, attack_ms / release_ms
+    "harmonic_thd_pct": 20.0,   # percent, one-sided bound on measured THD
 }
 
 # Check-name -> (LOCKED_TOLERANCES key, error mode). Modes mirror
@@ -453,12 +477,180 @@ def verify_against(derived_row, known_params):
 
 
 # ---------------------------------------------------------------------------
+# Calibration verification (issue #37 sub-item 2)
+# ---------------------------------------------------------------------------
+
+# Calibrate's per-param report order: verify_against check names in
+# declaration order, then the measured-THD sanity bound.
+_CALIBRATE_PARAM_ORDER = tuple(_CHECK_SPECS) + ("thd_percent",)
+
+
+def _known_params_from_doc(data):
+    """Known-provenance parameters embedded in a dataset doc.
+
+    threshold_db/ratio come from compression.fitted — the C++ export
+    pipeline's own fit, an independent implementation from reverse_derive.py's
+    python fit, so comparing them is a real cross-implementation consistency
+    check. attack_ms/release_ms come from gr_timeline.tau (passthrough:
+    derive_gr_tau only rescales it, so the comparison is tautological but
+    harmless). freq_hz/gain_db/q and thd_percent have no ground truth inside
+    a dataset doc -> not included (calibrate prints 'no ground truth - skip').
+    Malformed blocks yield {} (nothing checkable, never a crash).
+    """
+    known = {}
+    fitted = (data.get("compression") or {}).get("fitted") or {}
+    if isinstance(fitted, dict):
+        if fitted.get("threshold_db") is not None:
+            known["threshold_db"] = fitted["threshold_db"]
+        if fitted.get("ratio") is not None:
+            known["ratio"] = fitted["ratio"]
+    tau = (data.get("gr_timeline") or {}).get("tau") or {}
+    if tau.get("valid"):
+        if tau.get("attack_sec") is not None:
+            known["attack_ms"] = float(tau["attack_sec"]) * 1000.0
+        if tau.get("release_sec") is not None:
+            known["release_ms"] = float(tau["release_sec"]) * 1000.0
+    return known
+
+
+def _measured_thd(row):
+    """Worst measured THD across a row's harmonic tones (None when none)."""
+    thds = [s["thd_percent"] for s in row["harmonic"]["summary"]
+            if s["thd_percent"] is not None]
+    return max(thds) if thds else None
+
+
+def calibrate(out_dir):
+    """Calibration verification mode (issue #37 sub-item 2).
+
+    Discovers plugins under out_dir, analyzes each, and runs verify_against
+    against the known-provenance values embedded in each dataset doc (see
+    _known_params_from_doc): threshold_db/ratio are cross-implementation
+    consistency checks vs the C++ export fit; attack_ms/release_ms are
+    tau-passthrough (tautological); freq_hz/gain_db/q have no ground truth
+    inside a dataset doc and are printed 'no ground truth - skip' — for real
+    plugins the mode validates the PIPELINE's stability (re-derivation vs the
+    export's own fit), not absolute accuracy. thd_percent gets a one-sided
+    sanity bound against LOCKED_TOLERANCES['harmonic_thd_pct']: a plugin above
+    it is very nonlinear or the measurement is broken (stale pre-#38 THD
+    included).
+
+    Prints a per-plugin per-param table with measured errors and a summary
+    table vs LOCKED_TOLERANCES. Returns 0 when every checked tolerance passes,
+    1 when any locked tolerance is exceeded by a measured value (enforceable
+    calibration), 2 when out_dir is missing.
+    """
+    root = Path(out_dir)
+    if not root.is_dir():
+        print(f"error: out dir not found: {out_dir}", file=sys.stderr)
+        return 2
+
+    plugins = [p for p in discover_plugins(root) if p["has_dataset"]]
+    stats = {}  # param -> {"checked": int, "worst": float, "unit": str,
+                #             "tol": float, "all_ok": bool}
+    print(f"calibration: {len(plugins)} plugin(s) in {root.resolve()}")
+    print()
+
+    for plugin in plugins:
+        path = Path(plugin["path"]) / "dataset.json"
+        row = analyze_plugin(path)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                known = _known_params_from_doc(json.load(f))
+        except (OSError, ValueError, json.JSONDecodeError):
+            known = {}
+        result = verify_against(row, known)
+
+        print(f"  {plugin['slug']}")
+        for name in _CALIBRATE_PARAM_ORDER:
+            if name == "thd_percent":
+                continue        # one-sided sanity bound, printed below
+            check = result["checks"].get(name)
+            if check is None:
+                print(f"    {name}: no ground truth - skip")
+                continue
+            ok = "PASS" if check["ok"] else "FAIL"
+            print(f"    {name}: expected={check['expected']:g}, "
+                  f"got={check['got']:g}, error={check['error']:.3f} "
+                  f"{check['unit']} -> {ok}")
+            stat = stats.setdefault(name, {"checked": 0, "worst": 0.0,
+                                           "unit": check["unit"],
+                                           "tol": 0.0, "all_ok": True})
+            stat["checked"] += 1
+            stat["worst"] = max(stat["worst"], check["error"])
+            stat["tol"] = LOCKED_TOLERANCES[_CHECK_SPECS[name][0]]
+            stat["all_ok"] = stat["all_ok"] and check["ok"]
+        thd = _measured_thd(row)
+        if thd is not None:
+            lock = LOCKED_TOLERANCES["harmonic_thd_pct"]
+            ok = thd <= lock
+            print(f"    thd_percent: measured={thd:.3f} % (max across tones), "
+                  f"lock={lock:g} % -> {'PASS' if ok else 'FAIL'}")
+            stat = stats.setdefault("thd_percent", {"checked": 0, "worst": 0.0,
+                                                    "unit": "%", "tol": lock,
+                                                    "all_ok": True})
+            stat["checked"] += 1
+            stat["worst"] = max(stat["worst"], thd)
+            stat["all_ok"] = stat["all_ok"] and ok
+        print()
+
+    print("Calibration vs LOCKED_TOLERANCES")
+    print(f"  {'param':<13} {'checked':<8} {'worst_error':<15} "
+          f"{'tolerance':<13} verdict")
+    for name in _CALIBRATE_PARAM_ORDER:
+        stat = stats.get(name)
+        if stat is None:
+            continue
+        verdict = "PASS" if stat["all_ok"] else "FAIL"
+        worst = f"{stat['worst']:.3f} {stat['unit']}"
+        tol = f"{stat['tol']:g} {stat['unit']}"
+        print(f"  {name:<13} {stat['checked']:<8} {worst:<15} "
+              f"{tol:<13} {verdict}")
+    failed = any(not s["all_ok"] for s in stats.values())
+    if not stats:
+        print("no parameters checkable (no known provenance in any dataset)")
+        return 0
+    if failed:
+        print("calibration: CHECKS FAILED (exit 1)")
+        return 1
+    print("calibration: ALL CHECKS PASSED (exit 0)")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# summary.json drift detection (issue #45)
+# ---------------------------------------------------------------------------
+
+
+def summary_drift(summary_path, scanned_slugs):
+    """Compare a batch_collect summary.json plugin set against the scanned set.
+
+    Reads summary.plugins[].slug; missing = summary-listed slugs absent from
+    scanned_slugs (stale-data detection: the summary claims a measurement the
+    current scan cannot see). Returns {"summary_plugins", "scanned_plugins",
+    "missing"} with deterministic (sorted) scanned/missing lists. Raises
+    OSError/ValueError/json.JSONDecodeError when the file cannot be read or
+    parsed — the caller decides whether that is fatal.
+    """
+    with open(summary_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    summary_slugs = [p["slug"] for p in (data.get("plugins") or [])
+                     if p.get("slug") is not None]
+    scanned = sorted(scanned_slugs)
+    scanned_set = set(scanned)
+    missing = sorted(s for s in summary_slugs if s not in scanned_set)
+    return {"summary_plugins": summary_slugs, "scanned_plugins": scanned,
+            "missing": missing}
+
+
+# ---------------------------------------------------------------------------
 # Report writers (T1-D)
 # ---------------------------------------------------------------------------
 
 # Locked tolerance key -> unit suffix rendered in the markdown summary.
 _TOLERANCE_UNITS = {"freq_pct": "%", "gain_db": " dB", "q_pct": "%",
-                    "threshold_db": " dB", "ratio_pct": "%", "tau_pct": "%"}
+                    "threshold_db": " dB", "ratio_pct": "%", "tau_pct": "%",
+                    "harmonic_thd_pct": "%"}
 
 
 def _integrity_issues(rows):
@@ -628,10 +820,15 @@ def main(argv=None):
     """CLI entry: scan --out-dir, aggregate, write both reports, summarize.
 
     Exit codes: 0 = success; 2 = --out-dir missing entirely (mirrors
-    compare_freq's missing-file convention). Plugins WITHOUT a dataset.json
-    are skipped by discovery (never an error); the stale out/summary.json is
-    not a plugin. OSError from the report writers propagates (never
-    swallowed, matching write_markdown/write_json contract).
+    compare_freq's missing-file convention), --calibrate DIR missing, or
+    --calibrate combined with --summary (the two are independent modes).
+    --calibrate short-circuits the report run (calibration is a separate
+    mode; see calibrate); --summary attaches drift detection to a normal
+    run and never changes the exit code (drift is informational). Plugins
+    WITHOUT a dataset.json are skipped by discovery (never an error); the
+    stale out/summary.json is not a plugin. OSError from the report writers
+    propagates (never swallowed, matching write_markdown/write_json
+    contract).
     """
     parser = argparse.ArgumentParser(
         description="Aggregate per-plugin analysis reports from a "
@@ -648,7 +845,24 @@ def main(argv=None):
     parser.add_argument("--markdown", metavar="PATH", default=None,
                         help="explicit aggregate_report.md path "
                              "(overrides --report-dir)")
+    parser.add_argument("--calibrate", metavar="DIR", default=None,
+                        help="calibration mode (issue #37): analyze plugins "
+                             "under DIR against the known-provenance values "
+                             "embedded in each dataset doc + LOCKED_TOLERANCES; "
+                             "exits non-zero when any tolerance is exceeded. "
+                             "Separate from the report run")
+    parser.add_argument("--summary", metavar="PATH", default=None,
+                        help="batch_collect summary.json to compare against "
+                             "the scanned dataset set (issue #45 stale-data "
+                             "drift; informational, exit unchanged)")
     args = parser.parse_args(argv)
+
+    if args.calibrate is not None:
+        if args.summary is not None:
+            print("error: --summary only attaches to a report run; it cannot "
+                  "be combined with --calibrate", file=sys.stderr)
+            return 2
+        return calibrate(args.calibrate)
 
     out_dir = Path(args.out_dir)
     if not out_dir.is_dir():
@@ -679,6 +893,19 @@ def main(argv=None):
           f"no-data={counts['no_data']}, "
           f"derivation-failed={counts['derivation_failed']})")
     print(f"reports: {md_path}, {json_path}")
+    if args.summary is not None:
+        scanned_slugs = sorted(p["slug"] for p in plugins if p["has_dataset"])
+        try:
+            drift = summary_drift(args.summary, scanned_slugs)
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            print(f"WARNING: cannot read summary {args.summary}: {e}")
+        else:
+            print(f"summary drift: {len(drift['summary_plugins'])} plugin(s) "
+                  f"in summary.json, {len(drift['scanned_plugins'])} scanned, "
+                  f"{len(drift['missing'])} missing")
+            if drift["missing"]:
+                print("WARNING: summary.json lists plugins missing from the "
+                      "scan: " + ", ".join(drift["missing"]))
     integrity_issues = _integrity_issues(rows)
     if integrity_issues:
         noun = "issue" if len(integrity_issues) == 1 else "issues"

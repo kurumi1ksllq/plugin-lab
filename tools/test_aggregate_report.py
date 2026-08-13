@@ -21,6 +21,7 @@ import pytest
 from aggregate_report import (
     LOCKED_TOLERANCES,
     analyze_plugin,
+    calibrate,
     check_slug_plugin_consistency,
     detect_duplicate_datasets,
     discover_plugins,
@@ -29,6 +30,7 @@ from aggregate_report import (
     is_eq_flat,
     is_harmonic_empty,
     load_harmonic,
+    summary_drift,
     verify_against,
     write_json,
     write_markdown,
@@ -224,13 +226,16 @@ def test_is_harmonic_empty_false():
 
 def test_locked_tolerances_seeded_with_headroom():
     """Locked tolerances sit far above the measured calibration seed
-    (0.68% freq / 0.005 dB gain / 2.77% Q / bit-exact compression+GR)."""
+    (0.68% freq / 0.005 dB gain / 2.77% Q / bit-exact compression+GR);
+    ratio_pct aligns to the real Pro-C 3 bound (STATUS.md:140, 25%) and
+    harmonic_thd_pct locks the post-#38 single-tone THD acceptance bound."""
     assert LOCKED_TOLERANCES["freq_pct"] == 5.0
     assert LOCKED_TOLERANCES["gain_db"] == 0.5
     assert LOCKED_TOLERANCES["q_pct"] == 20.0
     assert LOCKED_TOLERANCES["threshold_db"] == 1.0
-    assert LOCKED_TOLERANCES["ratio_pct"] == 20.0
+    assert LOCKED_TOLERANCES["ratio_pct"] == 25.0
     assert LOCKED_TOLERANCES["tau_pct"] == 20.0
+    assert LOCKED_TOLERANCES["harmonic_thd_pct"] == 20.0
 
 
 # ---------------------------------------------------------------------------
@@ -919,3 +924,183 @@ def test_write_markdown_no_integrity_section_when_consistent(tmp_path):
 
     text = path.read_text(encoding="utf-8")
     assert "Data integrity" not in text
+
+
+# ---------------------------------------------------------------------------
+# Calibration verification (issue #37 sub-item 2): calibrate()
+# ---------------------------------------------------------------------------
+
+
+def _calibrate_out_dir(tmp_path, slug="synth", tones=None, **params):
+    """A tmp out dir with one synthetic dataset.json (known params)."""
+    data = make_dataset(slug, "Synth", tones=tones, **params)
+    out_dir = tmp_path / "out"
+    (out_dir / slug).mkdir(parents=True)
+    (out_dir / slug / "dataset.json").write_text(json.dumps(data),
+                                                 encoding="utf-8")
+    return out_dir
+
+
+def test_calibrate_synthetic_out_dir(capsys, tmp_path):
+    """calibrate() against one synthetic dataset: exit 0, per-param table
+    with PASS rows for every known-provenance param (compression.fitted +
+    gr_timeline.tau), 'no ground truth - skip' for freq params and a THD
+    sanity-bound row."""
+    out_dir = _calibrate_out_dir(
+        tmp_path, peak_hz=1000.0, gain_db=6.0, q=1.0,
+        threshold_db=-30.0, ratio=4.0, attack_sec=0.001, release_sec=0.05,
+        tones=[{"fundamental_hz": 440.0, "fundamental_db": -12.0,
+                "thd_percent": 1.0}])
+
+    code = calibrate(out_dir)
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "calibration: 1 plugin(s)" in out
+    assert "threshold_db: expected=-30, got=-30, error=0.000 dB -> PASS" in out
+    assert "ratio: expected=4, got=4, error=0.000 % -> PASS" in out
+    assert "attack_ms: expected=1, got=1, error=0.000 % -> PASS" in out
+    assert "release_ms: expected=50, got=50, error=0.000 % -> PASS" in out
+    assert "freq_hz: no ground truth - skip" in out
+    assert "gain_db: no ground truth - skip" in out
+    assert "q: no ground truth - skip" in out
+    assert "Calibration vs LOCKED_TOLERANCES" in out
+    assert "ratio" in out and "25 %" in out
+    assert "thd_percent" in out and "20 %" in out
+    assert "ALL CHECKS PASSED" in out
+
+
+def test_calibrate_q_beyond_sane_bounds(capsys, tmp_path):
+    """A synthetic dataset whose Q sits beyond sane bounds (0.01 — its -3 dB
+    crossings fall outside the measurement grid) still calibrates: the run
+    completes, compression checks still run, and the q row is reported as-is
+    ('no ground truth - skip') — no crash, no silent drop."""
+    out_dir = _calibrate_out_dir(
+        tmp_path, peak_hz=1000.0, gain_db=6.0, q=0.01,
+        threshold_db=-30.0, ratio=4.0, attack_sec=0.001, release_sec=0.05)
+
+    code = calibrate(out_dir)
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "q: no ground truth - skip" in out
+    assert "ratio: expected=4, got=4" in out       # the run did not bail
+    assert "ALL CHECKS PASSED" in out
+
+
+def test_calibrate_exits_nonzero_on_tolerance_breach(capsys, tmp_path):
+    """A dataset whose fitted provenance contradicts its measured curve
+    (fitted ratio 2.0 vs curve ratio 4.0 -> 100% error > 25%) fails the
+    ratio check and makes calibrate exit non-zero — the calibration is
+    enforceable, not merely a report."""
+    out_dir = _calibrate_out_dir(
+        tmp_path, peak_hz=1000.0, gain_db=6.0, q=1.0,
+        threshold_db=-30.0, ratio=4.0, attack_sec=0.001, release_sec=0.05)
+    data = json.loads((out_dir / "synth" / "dataset.json").read_text(
+        encoding="utf-8"))
+    data["compression"]["fitted"]["ratio"] = 2.0   # tampered provenance
+    (out_dir / "synth" / "dataset.json").write_text(json.dumps(data),
+                                                    encoding="utf-8")
+
+    code = calibrate(out_dir)
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert "ratio: expected=2, got=4, error=100.000 % -> FAIL" in out
+    assert "threshold_db: expected=-30, got=-30, error=0.000 dB -> PASS" in out
+    assert "CHECKS FAILED" in out
+
+
+def test_calibrate_missing_out_dir(capsys, tmp_path):
+    """A missing out dir exits 2 (mirrors main's missing-dir convention)."""
+    code = calibrate(tmp_path / "ghost")
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert "error" in captured.err.lower()
+
+
+# ---------------------------------------------------------------------------
+# summary.json drift detection (issue #45): summary_drift() + --summary
+# ---------------------------------------------------------------------------
+
+
+def test_summary_drift_reports_missing_plugins(tmp_path):
+    """summary-listed plugins absent from the scanned set land in missing;
+    the full plugin lists are reported."""
+    summary = tmp_path / "summary.json"
+    summary.write_text(json.dumps({"plugins": [
+        {"name": "Synth", "slug": "synth"},
+        {"name": "Ghost", "slug": "ghost"},
+        {"name": "NoSlug", "ok": True}], "ok_count": 2, "fail_count": 0}),
+        encoding="utf-8")
+
+    drift = summary_drift(summary, ["synth"])
+
+    assert drift["summary_plugins"] == ["synth", "ghost"]
+    assert drift["scanned_plugins"] == ["synth"]
+    assert drift["missing"] == ["ghost"]
+
+
+def test_summary_drift_no_missing_when_identical(tmp_path):
+    """A summary listing exactly the scanned set has no missing plugins."""
+    summary = tmp_path / "summary.json"
+    summary.write_text(json.dumps({"plugins": [
+        {"name": "Synth", "slug": "synth"}], "ok_count": 1, "fail_count": 0}),
+        encoding="utf-8")
+
+    drift = summary_drift(summary, ["synth"])
+
+    assert drift["missing"] == []
+
+
+def test_cli_summary_drift_reports_missing_plugins(tmp_path):
+    """--summary against a scan missing one summary-listed plugin: exit 0,
+    the summary_drift section reports it and a WARNING names it."""
+    out_dir = _synthetic_out_dir(tmp_path)               # synth only
+    summary = tmp_path / "summary.json"
+    summary.write_text(json.dumps({"plugins": [
+        {"name": "Synth", "slug": "synth"},
+        {"name": "Ghost", "slug": "ghost"}], "ok_count": 1, "fail_count": 0}),
+        encoding="utf-8")
+
+    result = _cli("--out-dir", str(out_dir),
+                  "--report-dir", str(tmp_path / "reports"),
+                  "--summary", str(summary))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "summary drift: 2 plugin(s) in summary.json, 1 scanned, " \
+           "1 missing" in result.stdout
+    assert "WARNING: summary.json lists plugins missing from the scan: " \
+           "ghost" in result.stdout
+
+
+def test_cli_summary_drift_no_drift_when_identical(tmp_path):
+    """--summary listing exactly the scanned set: 0 missing, no WARNING."""
+    out_dir = _synthetic_out_dir(tmp_path)
+    summary = tmp_path / "summary.json"
+    summary.write_text(json.dumps({"plugins": [
+        {"name": "Synth", "slug": "synth"}], "ok_count": 1, "fail_count": 0}),
+        encoding="utf-8")
+
+    result = _cli("--out-dir", str(out_dir),
+                  "--report-dir", str(tmp_path / "reports"),
+                  "--summary", str(summary))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "summary drift: 1 plugin(s) in summary.json, 1 scanned, " \
+           "0 missing" in result.stdout
+    assert "WARNING" not in result.stdout
+
+
+def test_cli_summary_missing_file_warns_but_exits_0(tmp_path):
+    """An unreadable --summary path prints a WARNING and keeps exit 0
+    (drift is informational, never fatal)."""
+    out_dir = _synthetic_out_dir(tmp_path)
+
+    result = _cli("--out-dir", str(out_dir),
+                  "--report-dir", str(tmp_path / "reports"),
+                  "--summary", str(tmp_path / "no-summary.json"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "WARNING: cannot read summary" in result.stdout
