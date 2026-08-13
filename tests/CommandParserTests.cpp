@@ -189,13 +189,25 @@ TEST_CASE ("CommandParser: measure harmonic analysis exports JSON and fires call
     REQUIRE_FALSE (response.contains ("\"error\""));
 
     // 2. The measurement complete callback must have been invoked with the
-    //    harmonic analysis result (tones detected from the multi-tone signal)
+    //    harmonic analysis result (tones detected from the sequential
+    //    single-tone signal)
     REQUIRE (callbackFired.load());
     REQUIRE (capturedResult.type == MeasurementSession::Type::harmonicAnalysis);
     REQUIRE_FALSE (capturedResult.harmonic.tones.empty());
     // The analysis must have actually detected the fundamentals (real signal
     // energy), not emitted empty -120 dB placeholder tones from silence.
     REQUIRE (capturedResult.harmonic.tones[0].fundamentalDB > -100.0);
+
+    // 2b. Issue-#38 regression: a unity-gain (perfectly linear) plugin must
+    //     show near-zero THD per tone — the old octave-colliding MultiTone
+    //     excitation reported THD 96.6-195.8% even on clean plugins (pro-q-4
+    //     showed 195.8%). Single-tone excitation + per-segment windowing
+    //     brings identity THD below 1%.
+    for (const auto& tone : capturedResult.harmonic.tones)
+    {
+        INFO ("tone " << tone.fundamentalFreq << " Hz THD = " << tone.thdPercent);
+        REQUIRE (tone.thdPercent < 1.0);
+    }
 
     // 3. Export file must exist, be parseable, and carry the harmonic payload
     juce::File exportFile (exportPath);

@@ -26,7 +26,7 @@
 #include "../source/host/ChildMeasureContract.h"
 #include "../source/signal/SineSweep.h"
 #include "../source/signal/Impulse.h"
-#include "../source/signal/MultiTone.h"
+#include "../source/signal/SequentialTone.h"
 #include "../source/signal/ToneBurst.h"
 #include "../source/signal/EnvelopeSignal.h"
 
@@ -187,23 +187,24 @@ juce::AudioBuffer<float> delayCopy (const juce::AudioBuffer<float>& src, int del
     return dst;
 }
 
-/** MultiTone fixture mirroring the host harmonic generator config
- *  (MeasurementSession.cpp Type::harmonicAnalysis branch): 8 octave
- *  fundamentals 100..12800 Hz, `durationSec`, `amplitude` — must stay in
- *  lockstep with ChildWavAnalyzer::analyzeChildHarmonic and the child's
- *  handleMeasure branch. */
-juce::AudioBuffer<float> generateMultiTone (double sr, double durationSec, double amplitude)
+/** SequentialTone fixture mirroring the host harmonic generator config
+ *  (MeasurementSession.cpp Type::harmonicAnalysis branch): one sine tone per
+ *  `segmentSec` segment, 7 octave fundamentals 100..6400 Hz (12800 Hz is
+ *  dropped — its H2 exceeds Nyquist), `amplitude` — must stay in lockstep
+ *  with ChildWavAnalyzer::analyzeChildHarmonic and the child's handleMeasure
+ *  branch (issue #38: single-tone THD excitation). */
+juce::AudioBuffer<float> generateSequentialTone (double sr, double segmentSec, double amplitude)
 {
-    MultiTone mt;
-    mt.setDuration (durationSec);
-    mt.setAmplitude (amplitude);
-    mt.setFrequencies ({ 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0, 12800.0 });
-    mt.prepare (sr, 512);
+    SequentialTone st;
+    st.setSegmentDuration (segmentSec);
+    st.setAmplitude (amplitude);
+    st.setFrequencies ({ 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0 });
+    st.prepare (sr, 512);
 
-    const int totalSamples = static_cast<int> (sr * durationSec);
+    const int totalSamples = static_cast<int> (st.getTotalLength());
     juce::AudioBuffer<float> buf (1, totalSamples);
     buf.clear();
-    mt.generate (buf, 0, totalSamples);
+    st.generate (buf, 0, totalSamples);
     return buf;
 }
 
@@ -829,13 +830,13 @@ TEST_CASE ("CommandParser: harmonic measure routes to child and writes the harmo
            "[commandparser][routing][d6][childharmonic]")
 {
     // ---- Arrange ----
-    // MultiTone fixture (identity dry/wet — the octave collisions alone
-    // produce harmonics, so the harmonic analysis yields 7 tones): mirrors
-    // the host harmonic generator config.
+    // SequentialTone fixture (identity dry/wet — one tone per 3 s segment,
+    // so the segment-aware analysis yields 7 tones with near-zero THD):
+    // mirrors the host harmonic generator config (issue #38).
     const auto wavPath = tempWav ("pluginlab_route_har_").getFullPathName();
     const auto childJson = juce::File (wavPath).withFileExtension (".json").getFullPathName();
     {
-        const auto dry = generateMultiTone (44100.0, 2.0, 0.4);
+        const auto dry = generateSequentialTone (44100.0, 3.0, 0.4);
         juce::AudioBuffer<float> wet (dry);
         REQUIRE (writeTestWav (juce::File (wavPath), dry, wet, 44100.0, 24));
     }
@@ -870,6 +871,16 @@ TEST_CASE ("CommandParser: harmonic measure routes to child and writes the harmo
     const auto tones = doc["tones"].getArray();
     REQUIRE (tones != nullptr);
     REQUIRE (tones->size() == 7);   // 8-fundamental config, 12800 Hz dropped
+
+    // Issue-#38 regression: identity dry/wet (perfectly linear pass-through)
+    // must yield near-zero THD per tone — the old octave-colliding MultiTone
+    // excitation reported THD > 100% even for zero distortion.
+    for (const auto& t : *tones)
+    {
+        const double thd = static_cast<double> (t["thd_percent"]);
+        INFO ("tone " << static_cast<double> (t["fundamental_hz"]) << " Hz THD = " << thd);
+        REQUIRE (thd < 1.0);
+    }
 
     // ---- Cleanup ----
     juce::File (childJson).deleteFile();
