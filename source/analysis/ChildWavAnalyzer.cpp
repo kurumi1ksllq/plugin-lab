@@ -67,17 +67,20 @@ juce::String analyzeChildHarmonic (const juce::File& wavPath,
         return {};
 
     // The child's generator config mirrors the host's harmonic branch
-    // (MeasurementSession.cpp Type::harmonicAnalysis, :156-169): MultiTone,
-    // 8 octave fundamentals 100..12800 Hz, 3 s, amplitude 0.4. The analysis
-    // must look for exactly the fundamentals the child generated — keep this
-    // list in lockstep with MeasurementSession.cpp AND PluginHostChild.cpp
-    // handleMeasure (both hardcode the same list; a comment cross-references
-    // each site so the two cannot silently drift).
+    // (MeasurementSession.cpp Type::harmonicAnalysis, :156-169): SequentialTone,
+    // 8 octave fundamentals 100..12800 Hz, one 3 s segment per fundamental,
+    // amplitude 0.4 (issue #38: single-tone THD excitation). The analysis
+    // must look for exactly the fundamentals the child generated AND window
+    // each tone to its own segment — keep this list and the segment duration
+    // in lockstep with MeasurementSession.cpp AND PluginHostChild.cpp
+    // handleMeasure (all three hardcode the same values; each site carries a
+    // cross-referencing comment so they cannot silently drift).
     static const std::vector<double> kFundamentals =
         { 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0, 12800.0 };
+    constexpr double kSegmentDurationSec = 3.0;
 
     HarmonicAnalysis analyzer;
-    const auto result = analyzer.analyze (wet, sampleRate, kFundamentals);
+    const auto result = analyzer.analyze (wet, sampleRate, kFundamentals, kSegmentDurationSec);
 
     // Context built from child-reported metadata + measure-request params
     // (ADR-D-6) — same shape as analyzeChildFrequencyResponse. Non-freq

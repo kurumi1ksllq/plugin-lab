@@ -21,7 +21,7 @@ public:
     enum class Type
     {
         frequencyResponse,   // Sine sweep → frequency/phase response
-        harmonicAnalysis,    // Multi-tone → THD + harmonics
+        harmonicAnalysis,    // Sequential single-tone → THD + harmonics
         compressionCurve,    // Tone burst at multiple levels → gain reduction
         grTimeline           // GR-over-time + attack/release tau (non-signal sources)
     };
@@ -134,6 +134,12 @@ public:
      *  Empty unless the session type is harmonicAnalysis and run() completed. */
     const std::vector<double>& getFundamentalFreqs() const { return fundamentalFreqs; }
 
+    /** Get the per-tone segment duration (seconds) of the harmonic
+     *  excitation. 0.0 unless the session type is harmonicAnalysis and
+     *  run() completed — HarmonicAnalysis windows each tone to its own
+     *  segment (issue #38). */
+    double getSegmentDurationSec() const { return segmentDurationSec; }
+
     /** Get the tone-burst input levels in dB (20*log10(amplitude)).
      *  Empty unless the session type is compressionCurve and run() completed. */
     std::vector<double> getInputLevelsDB() const;
@@ -226,6 +232,7 @@ private:
 
     // Analysis parameters populated by run() from the generated signal.
     std::vector<double> fundamentalFreqs;  // harmonic analysis frequencies
+    double segmentDurationSec = 0.0;       // harmonic tone segment duration (s)
     std::vector<double> lastLevels;        // tone-burst amplitudes (linear)
 
     // Frequency-response excitation selection (default: sine sweep).

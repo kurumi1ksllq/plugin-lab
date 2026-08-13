@@ -2,7 +2,7 @@
 #include "../capture/SweepRunner.h"
 #include "../signal/Impulse.h"
 #include "../signal/SineSweep.h"
-#include "../signal/MultiTone.h"
+#include "../signal/SequentialTone.h"
 #include "../signal/ToneBurst.h"
 #include "../signal/EnvelopeSignal.h"
 #include "../utils/CrashLog.h"
@@ -199,9 +199,9 @@ private:
 
     //==============================================================================
     /** Measure: {type, source, excitation?, sample_rate?, block_size?,
-        export_path, wav_path?} → {"ok", samples, rate, export_path, wav_path,
+        export_path,         wav_path?} → {"ok", samples, rate, export_path, wav_path,
         name, class_id, latency_samples}. D2 scope: frequency_response (sweep
-        or MLS excitation) + harmonic (MultiTone, T1) + compression (ToneBurst,
+        or MLS excitation) + harmonic (SequentialTone, T1) + compression (ToneBurst,
         T2) + gr_timeline (EnvelopeSignal-wrapped SineSweep). The child stays
         a pure collector: it only generates the excitation and captures
         dry/wet — the host analyzes the WAV (ChildWavAnalyzer). */
@@ -212,7 +212,7 @@ private:
         if (type != "frequency_response" && type != "harmonic" && type != "compression"
             && type != "gr_timeline")
             return ChildProtocol::makeResponse (false, R"("error":"unknown measure type")");
-        const bool useMultiTone = (type == "harmonic");
+        const bool useSequentialTone = (type == "harmonic");
         const bool useToneBurst = (type == "compression");
 
         auto exportPath = obj.getProperty ("export_path").toString();
@@ -250,25 +250,27 @@ private:
             // Generator selection mirrors MeasurementSession::run
             // (MeasurementSession.cpp:135-186): sweep → 20 Hz-20 kHz log sweep
             // 5 s, MLS → 16383-sample MLS impulse (both amplitude 0.5);
-            // harmonic → MultiTone, 8 octave fundamentals 100..12800 Hz,
-            // 3 s, amplitude 0.4; compression → ToneBurst, 1000 Hz, default
-            // 9 levels {0.01..0.9}, 50 ms burst + 150 ms gap (prepare()
-            // defaults), master amplitude 1.0; gr_timeline → enveloped
-            // SineSweep 2 s (branch comment below). The host's analysis must
-            // match exactly what is generated here — keep the harmonic and
-            // compression constants in lockstep with MeasurementSession.cpp
-            // AND ChildWavAnalyzer::analyzeChildHarmonic /
-            // analyzeChildCompression (each site carries a cross-referencing
+            // harmonic → SequentialTone, 8 octave fundamentals 100..12800 Hz,
+            // one 3 s segment per fundamental, amplitude 0.4 (issue #38:
+            // single-tone THD excitation — one fundamental at a time, never
+            // MultiTone's co-injected octaves); compression → ToneBurst,
+            // 1000 Hz, default 9 levels {0.01..0.9}, 50 ms burst + 150 ms gap
+            // (prepare() defaults), master amplitude 1.0; gr_timeline →
+            // enveloped SineSweep 2 s (branch comment below). The host's
+            // analysis must match exactly what is generated here — keep the
+            // harmonic and compression constants in lockstep with
+            // MeasurementSession.cpp AND ChildWavAnalyzer::analyzeChildHarmonic
+            // / analyzeChildCompression (each site carries a cross-referencing
             // comment).
             std::unique_ptr<SignalGenerator> gen;
-            if (useMultiTone)
+            if (useSequentialTone)
             {
-                auto multi = std::make_unique<MultiTone>();
-                multi->setDuration (3.0);
-                multi->setAmplitude (0.4);
-                multi->setFrequencies (
+                auto seq = std::make_unique<SequentialTone>();
+                seq->setSegmentDuration (3.0);
+                seq->setAmplitude (0.4);
+                seq->setFrequencies (
                     { 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0, 12800.0 });
-                gen = std::move (multi);
+                gen = std::move (seq);
             }
             else if (useToneBurst)
             {

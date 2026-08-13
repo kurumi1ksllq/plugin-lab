@@ -1,6 +1,6 @@
 #include "MeasurementSession.h"
 #include "../signal/SineSweep.h"
-#include "../signal/MultiTone.h"
+#include "../signal/SequentialTone.h"
 #include "../signal/ToneBurst.h"
 #include "../signal/Impulse.h"
 #include "../signal/FilePlayback.h"
@@ -160,12 +160,18 @@ bool MeasurementSession::run()
                     static const std::vector<double> kFundamentals =
                         { 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0, 12800.0 };
 
-                    auto multi = std::make_unique<MultiTone>();
-                    multi->setDuration (3.0);
-                    multi->setAmplitude (0.4);
-                    multi->setFrequencies (kFundamentals);
+                    // Single-tone-per-segment excitation (DESIGN.md §3.2: THD
+                    // uses single tones, IMD uses multi-tone — never mixed;
+                    // issue #38): each fundamental plays alone for one 3 s
+                    // segment, so HarmonicAnalysis can window each tone to its
+                    // own segment (segmentDurationSec is stored for it).
+                    auto seq = std::make_unique<SequentialTone>();
+                    seq->setSegmentDuration (3.0);
+                    seq->setAmplitude (0.4);
+                    seq->setFrequencies (kFundamentals);
                     fundamentalFreqs = kFundamentals;
-                    gen = std::move (multi);
+                    segmentDurationSec = 3.0;
+                    gen = std::move (seq);
                     break;
                 }
 

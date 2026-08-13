@@ -40,3 +40,21 @@ jobs:
       - name: Test (run 2)
         if: always()
         run: ctest --test-dir build -C Release --timeout 180 --output-on-failure
+
+  # tools/ Python 工具 pytest 套件（stdlib-only，无 requirements.txt）。
+  # 独立轻量 job 与 C++ 构建并行——不必等 30 分钟 MSVC 构建。
+  python-tools:
+    name: python-tools
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # windows-latest 不保证预装 pytest——显式安装
+      - name: Install pytest
+        run: python -m pip install pytest
+
+      # 145 个用例（T1/T2/T3 七套 pytest 套件）——失败即 CI 失败
+      - name: Test (pytest tools/)
+        run: python -m pytest tools/ -q

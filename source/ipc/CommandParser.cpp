@@ -85,7 +85,8 @@ static bool runAndAnalyze (MeasurementSession* session, juce::AudioPluginInstanc
                 HarmonicAnalysis ha;
                 results.harmonic = ha.analyze (result.getWetBuffer(),
                                                result.getSampleRate(),
-                                               session->getFundamentalFreqs());
+                                               session->getFundamentalFreqs(),
+                                               session->getSegmentDurationSec());
                 break;
             }
 

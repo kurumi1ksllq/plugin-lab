@@ -8,7 +8,7 @@
 #include "../source/signal/SineSweep.h"
 #include "../source/signal/EnvelopeSignal.h"
 #include "../source/signal/Impulse.h"
-#include "../source/signal/MultiTone.h"
+#include "../source/signal/SequentialTone.h"
 #include "../source/signal/ToneBurst.h"
 #include "../source/capture/SweepRunner.h"
 #include "TestCompressorPlugin.h"
@@ -178,23 +178,26 @@ juce::File tempWav (const juce::String& prefix)
                .getNonexistentChildFile (prefix, ".wav");
 }
 
-/** MultiTone fixture mirroring the host harmonic generator config
- *  (MeasurementSession.cpp Type::harmonicAnalysis branch): 8 octave
- *  fundamentals 100..12800 Hz, `durationSec`, `amplitude`. The child
- *  (PluginHostChild.cpp handleMeasure) and ChildWavAnalyzer::analyzeChildHarmonic
- *  hardcode the same list — keep the three in lockstep. */
-juce::AudioBuffer<float> generateMultiTone (double sr, double durationSec, double amplitude)
+/** SequentialTone fixture mirroring the host harmonic generator config
+ *  (MeasurementSession.cpp Type::harmonicAnalysis branch): one sine tone per
+ *  `segmentSec` segment, 7 octave fundamentals 100..6400 Hz (12800 Hz is
+ *  dropped — its H2 25600 Hz exceeds Nyquist, so it would yield no harmonics
+ *  anyway), `amplitude`. The child (PluginHostChild.cpp handleMeasure) and
+ *  ChildWavAnalyzer::analyzeChildHarmonic hardcode the same fundamentals +
+ *  3 s segment duration — keep the three in lockstep (issue #38: single-tone
+ *  THD excitation, one fundamental at a time). */
+juce::AudioBuffer<float> generateSequentialTone (double sr, double segmentSec, double amplitude)
 {
-    MultiTone mt;
-    mt.setDuration (durationSec);
-    mt.setAmplitude (amplitude);
-    mt.setFrequencies ({ 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0, 12800.0 });
-    mt.prepare (sr, 512);
+    SequentialTone st;
+    st.setSegmentDuration (segmentSec);
+    st.setAmplitude (amplitude);
+    st.setFrequencies ({ 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0 });
+    st.prepare (sr, 512);
 
-    const int totalSamples = static_cast<int> (sr * durationSec);
+    const int totalSamples = static_cast<int> (st.getTotalLength());
     juce::AudioBuffer<float> buf (1, totalSamples);
     buf.clear();
-    mt.generate (buf, 0, totalSamples);
+    st.generate (buf, 0, totalSamples);
     return buf;
 }
 
@@ -530,24 +533,22 @@ TEST_CASE ("WavCaptureReader: error paths return false without crashing",
 
 //==============================================================================
 // Child harmonic analysis entry (T1): deterministic WAV → harmonic_analysis
-// JSON. The dry excitation mirrors the host harmonic config (MultiTone, 8
-// octave fundamentals 100..12800 Hz, 3 s, amplitude 0.4); wet applies a
-// KNOWN injection (wet = dry + 0.1·dry², second-order distortion). The
-// octave spacing means every fundamental's H2/H4 IS another fundamental
-// (known tradeoff, analysis/AGENTS.md) — those percents read ~100%+ even
-// with zero distortion. Note also that for octave fundamentals the H3 of
-// every f except the top two cancels in dry² (pairs f+2f and 4f−f both
-// exist and cancel), so the distortion assertions target H5 of 1600 Hz
-// (8000 Hz) and H3 of 6400 Hz (19200 Hz) — both non-colliding, non-cancelling.
+// JSON. The dry excitation mirrors the host harmonic config (SequentialTone,
+// 7 octave fundamentals 100..6400 Hz, 3 s per segment, amplitude 0.4); wet
+// applies a KNOWN injection (wet = dry + 0.1·dry², second-order distortion).
+// Single-tone-per-segment is the issue-#38 fix: each tone's FFT window
+// contains ONLY that tone, so zero-distortion identity yields near-zero
+// harmonics (the old MultiTone excitation collided octave harmonics with
+// co-injected fundamentals → ~100% THD even with zero distortion).
 //==============================================================================
 
 TEST_CASE ("ChildWavAnalyzer: harmonic identity WAV exports 7 clean tones",
            "[childharmonic][wavcapturereader]")
 {
-    // Arrange — clean multi-tone excitation, wet identical to dry (no
-    // distortion): the only harmonics present are the octave collisions.
+    // Arrange — clean sequential single-tone excitation, wet identical to
+    // dry (no distortion): every harmonic must sit at the noise floor.
     constexpr double kSr = 48000.0;
-    const auto dry = generateMultiTone (kSr, 3.0, 0.4);
+    const auto dry = generateSequentialTone (kSr, 3.0, 0.4);
     juce::AudioBuffer<float> wet (dry);
 
     const auto wav = tempWav ("pluginlab_childharmonic_id_");
@@ -577,8 +578,18 @@ TEST_CASE ("ChildWavAnalyzer: harmonic identity WAV exports 7 clean tones",
         REQUIRE (std::abs (f - expectedFundamentals[static_cast<size_t> (i)]) < 10.0);
     }
 
-    // Assert — no distortion: the non-colliding harmonics (H5 of 1600 Hz at
-    // 8000 Hz, H3 of 6400 Hz at 19200 Hz) sit at the noise floor.
+    // Assert — near-zero distortion for EVERY tone (the issue-#38 fix: with
+    // one tone per segment no co-injected fundamental contaminates another
+    // tone's harmonics; the old MultiTone excitation read ~100% THD here).
+    for (const auto& t : *tones)
+    {
+        const double thd = static_cast<double> (t["thd_percent"]);
+        INFO ("tone " << static_cast<double> (t["fundamental_hz"]) << " Hz THD = " << thd);
+        REQUIRE (thd < 0.5);
+    }
+
+    // Assert — specific non-colliding harmonics sit at the noise floor
+    // (H5 of 1600 Hz at 8000 Hz, H3 of 6400 Hz at 19200 Hz).
     auto* tone1600 = findTone (*tones, 1600.0);
     REQUIRE (tone1600 != nullptr);
     auto* h5 = findHarmonic (*tone1600, 8000.0);
@@ -594,15 +605,51 @@ TEST_CASE ("ChildWavAnalyzer: harmonic identity WAV exports 7 clean tones",
     wav.deleteFile();
 }
 
+TEST_CASE ("issue #38: identity sequential-tone WAV yields THD < 1% per tone",
+           "[childharmonic][wavcapturereader][issue38]")
+{
+    // Regression pin for the issue-#38 bug: with the old MultiTone
+    // excitation + whole-recording analysis window, a perfectly linear
+    // pass-through reported per-tone THD of 96.6-195.8% on real plugins
+    // (octave harmonics landing on co-injected fundamentals). Single-tone
+    // excitation + per-segment windowing must bring identity THD below 1%.
+    constexpr double kSr = 48000.0;
+    const auto dry = generateSequentialTone (kSr, 3.0, 0.4);
+    juce::AudioBuffer<float> wet (dry);
+
+    const auto wav = tempWav ("pluginlab_issue38_");
+    REQUIRE (writeTestWav (wav, dry, wet, kSr, 24));
+
+    const auto jsonText = ChildWavAnalyzer::analyzeChildHarmonic (
+        wav, 1, kSr, 512, "TestPlugin", "CLSID", 0);
+    REQUIRE_FALSE (jsonText.isEmpty());
+
+    const auto doc = juce::JSON::parse (jsonText);
+    const auto tones = doc["tones"].getArray();
+    REQUIRE (tones != nullptr);
+    REQUIRE (tones->size() == 7);
+
+    for (const auto& t : *tones)
+    {
+        const double thd = static_cast<double> (t["thd_percent"]);
+        INFO ("tone " << static_cast<double> (t["fundamental_hz"]) << " Hz THD = " << thd);
+        REQUIRE (thd < 1.0);
+    }
+
+    wav.deleteFile();
+}
+
 TEST_CASE ("ChildWavAnalyzer: harmonic distortion WAV shows the injected harmonics",
            "[childharmonic][wavcapturereader]")
 {
     // Arrange — same excitation, wet = dry + 0.1·dry²: a known second-order
-    // distortion. Its H5 of 1600 Hz lands at 8000 Hz and H3 of 6400 Hz at
-    // 19200 Hz — neither collides with a fundamental (H3 of the lower
-    // fundamentals cancels by pair symmetry, see the header comment).
+    // distortion. Per segment, sin²(2πft) = (1 − cos(4πft))/2 — the
+    // square-law injects ONLY an H2 (2f) per tone (plus DC). H3 of any tone
+    // is NOT produced, so it must stay at the noise floor — the key new
+    // assertion (with the old octave-colliding MultiTone excitation every
+    // tone showed ~100% harmonics regardless of what was injected).
     constexpr double kSr = 48000.0;
-    const auto dry = generateMultiTone (kSr, 3.0, 0.4);
+    const auto dry = generateSequentialTone (kSr, 3.0, 0.4);
 
     juce::AudioBuffer<float> wet (1, dry.getNumSamples());
     for (int i = 0; i < dry.getNumSamples(); ++i)
@@ -619,27 +666,39 @@ TEST_CASE ("ChildWavAnalyzer: harmonic distortion WAV shows the injected harmoni
         wav, 1, kSr, 512, "TestPlugin", "CLSID", 0);
     REQUIRE_FALSE (jsonText.isEmpty());
 
-    // Assert — the injected distortion is measured: percents are clearly
-    // above the identity-case noise floor (1600 Hz H5 ~0.56%, 6400 Hz H3
-    // ~0.45% for 0.1·dry² — thresholds stay far below to absorb FFT-bin /
-    // window scalloping differences).
+    // Assert — the injected distortion is measured: 0.1·dry² puts an H2 of
+    // 2% (0.008/0.4) at twice every fundamental. Thresholds stay far below
+    // to absorb FFT-bin / window scalloping differences.
     const auto doc = juce::JSON::parse (jsonText);
     REQUIRE (doc.isObject());
     const auto tones = doc["tones"].getArray();
     REQUIRE (tones != nullptr);
     REQUIRE (tones->size() == 7);
 
-    auto* tone1600 = findTone (*tones, 1600.0);
-    REQUIRE (tone1600 != nullptr);
-    auto* h5 = findHarmonic (*tone1600, 8000.0);
-    REQUIRE (h5 != nullptr);
-    REQUIRE (static_cast<double> ((*h5)["percent"]) > 0.3);
+    // (1) Injected H2 detected: the 100 Hz tone's H2 at 200 Hz ≈ 2%.
+    auto* tone100 = findTone (*tones, 100.0);
+    REQUIRE (tone100 != nullptr);
+    auto* h2 = findHarmonic (*tone100, 200.0);
+    REQUIRE (h2 != nullptr);
+    REQUIRE (static_cast<double> ((*h2)["percent"]) > 0.5);
 
+    // (2) The tone's THD is dominated by the injected H2.
+    REQUIRE (static_cast<double> ((*tone100)["thd_percent"]) > 1.0);
+
+    // (3) A NON-injected harmonic stays at the noise floor: the 100 Hz
+    //     tone's H3 at 300 Hz (square-law produces no H3 — this assertion
+    //     was impossible under the old octave-colliding excitation).
+    auto* h3 = findHarmonic (*tone100, 300.0);
+    REQUIRE (h3 != nullptr);
+    REQUIRE (static_cast<double> ((*h3)["percent"]) < 0.5);
+
+    // (4) Same for a high tone: the 6400 Hz tone's H3 at 19200 Hz stays
+    //     near zero while its injected H2 at 12800 Hz is present.
     auto* tone6400 = findTone (*tones, 6400.0);
     REQUIRE (tone6400 != nullptr);
     auto* h36400 = findHarmonic (*tone6400, 19200.0);
     REQUIRE (h36400 != nullptr);
-    REQUIRE (static_cast<double> ((*h36400)["percent"]) > 0.25);
+    REQUIRE (static_cast<double> ((*h36400)["percent"]) < 0.5);
 
     wav.deleteFile();
 }
