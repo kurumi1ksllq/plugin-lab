@@ -432,7 +432,8 @@ juce::String CommandParser::handleCommand (const juce::String& jsonCommand)
         return handleScanCommands (*obj, cmd);
 
     if (cmd == Protocol::Command::dataset
-        || cmd == Protocol::Command::exportWav)
+        || cmd == Protocol::Command::exportWav
+        || cmd == Protocol::Command::exportCmd)
         return handleDatasetExportCommands (*obj, cmd);
 
     if (cmd == Protocol::Command::recordTimeline
