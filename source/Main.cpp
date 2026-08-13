@@ -269,10 +269,14 @@ public:
         {
             // The scan runs synchronously on the message thread; SweepRunner
             // yields the loop per block so this click is processed mid-scan.
-            // Cancelling the session aborts the in-flight round and ScanEngine
-            // stops at the next round boundary.
-            if (measurementSession)
-                measurementSession->cancel();
+            // Route through the same path as the IPC "stop" command (issue
+            // #3): its cancel callback cancels BOTH the in-process session
+            // and the out-of-process child orchestrator. Cancelling the
+            // session directly would leave a child measurement running while
+            // the GUI shows it stopped (issue #44). The stop handler is a
+            // non-blocking atomic-flag set — safe on the message thread.
+            if (commandParser != nullptr)
+                commandParser->handleCommand (R"({"cmd":"stop"})");
         };
         stopScanButton->setEnabled (false);
         addAndMakeVisible (stopScanButton.get());

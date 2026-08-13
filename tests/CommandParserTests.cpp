@@ -923,6 +923,23 @@ TEST_CASE ("CommandParser: stop is safe when session is null", "[commandparser][
     REQUIRE (response.contains ("\"ok\":true"));
 }
 
+TEST_CASE ("CommandParser: stop invokes the wired cancel request callback", "[commandparser][stop]")
+{
+    ensureMessageManager();
+
+    CommandParser parser;
+    std::atomic<bool> callbackFired { false };
+    parser.setCancelRequestCallback ([&callbackFired] { callbackFired = true; });
+
+    // The GUI stop button routes through this exact command (issue #44) —
+    // the callback is what cancels both the session and the child
+    // orchestrator, so it must fire on every stop.
+    auto response = parser.handleCommand (R"({"cmd":"stop"})");
+
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (callbackFired.load());
+}
+
 //==============================================================================
 // 8. Measure — input source axis (signal | file | noise | dynamic)
 //
