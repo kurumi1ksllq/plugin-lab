@@ -9,6 +9,10 @@
 #include <limits>
 #include <memory>
 
+// CrashLog recording helpers (stubbed in CommandParserStubs.cpp)
+extern void clearCrashLog();
+extern bool crashLogWarnContains (const juce::String& substr);
+
 //==============================================================================
 // Test-local carrier: fills every sample with a constant 1.0 so the envelope
 // value equals the generated output exactly. Has a finite nominal length so
@@ -37,6 +41,43 @@ public:
 private:
     int64_t length;
 };
+
+//==============================================================================
+// Test-local carrier: reports an indefinite length (-1) so EnvelopeSignal
+// takes the CRASH_LOG_WARN fallback path in getTotalLength (issue #44).
+class IndefiniteCarrier final : public SignalGenerator
+{
+public:
+    void generate (juce::AudioBuffer<float>& buffer,
+                   int startSample,
+                   int numSamples) override
+    {
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            std::fill (buffer.getWritePointer (ch) + startSample,
+                       buffer.getWritePointer (ch) + startSample + numSamples,
+                       1.0f);
+    }
+
+    int64_t getTotalLength() const override { return -1; }
+    void reset() override { currentSample = 0.0; }
+};
+
+//==============================================================================
+TEST_CASE ("EnvelopeSignal indefinite carrier returns -1 and logs warning",
+           "[envelope][indefinite-carrier]")
+{
+    // Arrange
+    clearCrashLog();
+    EnvelopeSignal env (std::make_unique<IndefiniteCarrier>());
+
+    // Act
+    const auto len = env.getTotalLength();
+
+    // Assert: -1 sentinel propagates and the indefinite carrier leaves a
+    // warning trail (issue #44) so SweepRunner's 10s fallback is never silent.
+    REQUIRE (len == -1);
+    REQUIRE (crashLogWarnContains ("EnvelopeSignal indefinite carrier"));
+}
 
 //==============================================================================
 TEST_CASE ("EnvelopeSignal without envelope passes carrier through unchanged",

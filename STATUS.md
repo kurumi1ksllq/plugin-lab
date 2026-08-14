@@ -208,7 +208,7 @@ source/
 ├── child/                # 子进程可执行（块 D）：PluginHostChild（VST3 加载 + 测量，stdin/stdout JSON 协议）
 ├── ui/PlotWidget         # 绘图组件
 └── utils/                # FftHelper/MathUtils/CrashLog
-tools/VST3Scanner         # 独立扫描工具（运行时死代码但仍在构建，主进程内扫描）
+tools/VST3Scanner         # 独立扫描工具（运行时死代码，主进程内扫描；构建由 BUILD_VST3SCANNER 门控，默认 OFF 不构建）
 tools/ipc_client.ps1      # NamedPipe 手动客户端（多行读取 + -CancelAfterMs，可配超时）
 tools/monitor.ps1         # 实时监控脚本（2026-08-02 b3e1813 移入 tools/）
 tools/pipe_client.py      # Python NamedPipe 客户端（stdlib + ctypes，batch_collect 依赖）
