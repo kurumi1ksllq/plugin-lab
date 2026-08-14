@@ -65,18 +65,18 @@ struct CrashFilterInstaller
 
 //==============================================================================
 // Block D (out-of-process VST3 host): locate the PluginHostChild executable.
-// The VST3Scanner precedent (tools/CMakeLists.txt) copies the helper exe next
-// to Plugin Lab.exe via a POST_BUILD step; PluginHostChild has no such copy
-// yet (reported to lead), so we also discover the build-tree artefact
-// (<build>/PluginHostChild_artefacts/<config>/PluginHostChild.exe — both the
-// multi-config MSVC and single-config Ninja layouts).
+// Root CMakeLists.txt copies the helper exe next to Plugin Lab.exe via a
+// POST_BUILD step (VST3Scanner precedent, tools/CMakeLists.txt); the
+// build-tree discovery below (<build>/PluginHostChild_artefacts/<config>/
+// PluginHostChild.exe — both the multi-config MSVC and single-config Ninja
+// layouts) covers development runs from the build tree.
 static juce::File locateChildHostExe()
 {
     const auto exeDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile)
                             .getParentDirectory();
 
-    // 1. Sibling of the main exe — matches the VST3Scanner deployment layout;
-    //    zero code change once the lead adds the POST_BUILD copy.
+    // 1. Sibling of the main exe — matches the POST_BUILD deployment layout
+    //    (root CMakeLists.txt copies PluginHostChild.exe there).
     const auto sibling = exeDir.getChildFile ("PluginHostChild.exe");
     if (sibling.existsAsFile())
         return sibling;
@@ -165,8 +165,8 @@ public:
         grPlot->setVisible (false);
 
         // Measurement control row (right panel, above the plots).
-        // Frequency response is wired end-to-end; harmonic/compression are
-        // placeholders until phase 2 (they only report "not wired yet").
+        // All four measurement types are wired end-to-end (freq, harmonic,
+        // compression, GR timeline) — rendered in handleAsyncUpdate.
         measureFreqButton.reset (new juce::TextButton ("Freq Response"));
         measureFreqButton->onClick = [this]
         {
@@ -211,7 +211,7 @@ public:
 
         // Input source selector (signal | file | noise | dynamic). The source
         // decides which signal is generated; non-signal sources are captured
-        // raw (no analysis — that is phase 4).
+        // raw, except the GR timeline analysis (dynamic/file, T4.4).
         sourceCombo.reset (new juce::ComboBox ("Source"));
         sourceCombo->addItem ("Signal", 1);
         sourceCombo->addItem ("File", 2);
@@ -422,8 +422,9 @@ public:
                                       (const juce::String& detail)
         {
             // Bundle-key normalization — same template as PluginManager's
-            // load-timeout path (PluginManager.cpp:497-502): the inner-DLL
-            // path never matches scan enumeration, the bundle path does.
+            // load-timeout blacklist path (PluginManager::loadPlugin): the
+            // inner-DLL path never matches scan enumeration, the bundle path
+            // does.
             juce::String key;
             {
                 std::lock_guard<std::mutex> lock (childPluginPathLock);
@@ -856,8 +857,8 @@ public:
             measureGRButton->setEnabled (true);
 
             // Non-signal sources are captured raw — show the capture summary
-            // instead of analysis plots (analysis is phase 4). Exception: the
-            // GR timeline analysis (dynamic/file) renders its header plot.
+            // instead of analysis plots. Exception: the GR timeline analysis
+            // (dynamic/file) renders its header plot.
             if (measurementResult.source == juce::String (Protocol::Source::signal))
             {
                 switch (measurementResult.type)
@@ -1898,8 +1899,8 @@ private:
             });
     }
 
-    /** Raw capture (non-signal source): clear both plots and show the
-     *  capture summary in the status bar (analysis is phase 4). */
+    /** Raw capture (non-signal, non-GR source): clear both plots and show the
+     *  capture summary in the status bar (GR timeline is analyzed instead). */
     void renderRawCapture() const
     {
         magPlot->clear();
