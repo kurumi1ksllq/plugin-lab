@@ -5,7 +5,9 @@
  * CrashLog is a RECORDING stub: entries are captured (thread-safe) so tests
  * can assert that error paths logged an exception (block C task 1). The
  * test helpers clearCrashLog() / crashLogErrorCount() / crashLogContains()
- * are declared here and consumed via extern in test files.
+ * are declared here and consumed via extern in test files. Warning-level
+ * entries are recorded separately (gCrashLogWarnings) so the CRASH_LOG_WARN
+ * path in EnvelopeSignal::getTotalLength (issue #44) is also assertable.
  *
  * EditorCrashGuard is NOT stubbed here anymore: the real implementation
  * (EditorCrashGuard.cpp) is compiled into the test target (block C task 2).
@@ -21,6 +23,7 @@ namespace
 {
     std::mutex gCrashLogMutex;
     juce::StringArray gCrashLogErrors;
+    juce::StringArray gCrashLogWarnings;
 }
 
 void CrashLog::write (CrashLog::Level level,
@@ -30,8 +33,11 @@ void CrashLog::write (CrashLog::Level level,
                       int)
 {
     std::lock_guard<std::mutex> lock (gCrashLogMutex);
+    const auto entry = operation + (detail.isNotEmpty() ? " | " + detail : juce::String());
     if (level == CrashLog::Error)
-        gCrashLogErrors.add (operation + (detail.isNotEmpty() ? " | " + detail : juce::String()));
+        gCrashLogErrors.add (entry);
+    else if (level == CrashLog::Warning)
+        gCrashLogWarnings.add (entry);
 }
 
 //==============================================================================
@@ -40,6 +46,7 @@ void clearCrashLog()
 {
     std::lock_guard<std::mutex> lock (gCrashLogMutex);
     gCrashLogErrors.clear();
+    gCrashLogWarnings.clear();
 }
 
 int crashLogErrorCount()
@@ -52,6 +59,21 @@ bool crashLogContains (const juce::String& substr)
 {
     std::lock_guard<std::mutex> lock (gCrashLogMutex);
     for (const auto& entry : gCrashLogErrors)
+        if (entry.contains (substr))
+            return true;
+    return false;
+}
+
+int crashLogWarnCount()
+{
+    std::lock_guard<std::mutex> lock (gCrashLogMutex);
+    return gCrashLogWarnings.size();
+}
+
+bool crashLogWarnContains (const juce::String& substr)
+{
+    std::lock_guard<std::mutex> lock (gCrashLogMutex);
+    for (const auto& entry : gCrashLogWarnings)
         if (entry.contains (substr))
             return true;
     return false;
