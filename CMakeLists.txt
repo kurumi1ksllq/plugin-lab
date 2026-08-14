@@ -194,6 +194,48 @@ set_source_files_properties(source/capture/SweepRunner.cpp PROPERTIES
     COMPILE_FLAGS "/EHa"
 )
 
+# ── PluginLabReplica: spec-driven replica VST3 (issue #27, T4) ──────────────
+# A real VST3 that mirrors a chain_doc blueprint (describe_chain.py): spec ->
+# hosted params (classifier-pattern names) -> DSP chain. Built ALWAYS (decision
+# C/U4, no gate): the in-process load test (tests/PluginLabReplicaTests.cpp)
+# and the T5 scan loop need the artifact. Artifact layout (JUCE):
+#   build/PluginLabReplica_artefacts/<CONFIG>/VST3/PluginLabReplica.vst3/
+#       Contents/x86_64-win/PluginLabReplica.vst3
+juce_add_plugin(PluginLabReplica
+    PLUGIN_MANUFACTURER_CODE PLab
+    PLUGIN_CODE Rplc
+    PRODUCT_NAME "PluginLabReplica"
+    FORMATS VST3)
+
+# ReplicaChain.h includes <JuceHeader.h>, so the plugin target needs the
+# generated header (juce_add_plugin does not generate one automatically).
+juce_generate_juce_header(PluginLabReplica)
+
+target_sources(PluginLabReplica PRIVATE
+    source/replica/PluginLabReplica.cpp
+    source/replica/PluginLabReplica.h
+    source/replica/ReplicaSpec.cpp
+    source/replica/ReplicaChain.cpp
+    # CRASH_LOG_WARN on spec-resolution failure (PluginLabReplica.cpp links
+    # CrashLog::write; dual-compiled with unit_tests via its stub instead).
+    source/utils/CrashLog.cpp
+)
+
+target_link_libraries(PluginLabReplica PUBLIC
+    juce::juce_audio_processors
+    juce::juce_dsp
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags
+)
+
+target_compile_definitions(PluginLabReplica PUBLIC
+    JUCE_VST3_CAN_REPLACE_VST2=0
+)
+
+if(MSVC)
+    target_compile_options(PluginLabReplica PRIVATE /W4 /permissive- /WX /utf-8)
+endif()
+
 # ── Tools ───────────────────────────────────────────────────────────────────
 # VST3Scanner is runtime-dead (scanning happens in-process) — kept as a
 # reference build, so it is gated off by default (issue #44).

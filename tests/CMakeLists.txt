@@ -50,6 +50,7 @@ target_sources(unit_tests PRIVATE
     TimeConstantsTests.cpp
     ReplicaSpecTests.cpp
     ReplicaChainTests.cpp
+    PluginLabReplicaTests.cpp
     CompressionFamilyTests.cpp
     ComponentVisibilityTests.cpp
     EditorCrashGuardTests.cpp
@@ -95,6 +96,13 @@ set_source_files_properties(ChildHostParityTests.cpp PROPERTIES
     COMPILE_FLAGS "/EHa"
 )
 
+# PluginLabReplicaTests.cpp loads and processes the REAL replica VST3
+# in-process (issue #27 T4); /EHa matches ChildHostParityTests.cpp so an SEH
+# fault in the plugin DLL is intercepted, not a crash.
+set_source_files_properties(PluginLabReplicaTests.cpp PROPERTIES
+    COMPILE_FLAGS "/EHa"
+)
+
 # ── TestChildProcess: stdin/stdout JSON-line double for the
 #    ChildProcessCoordinator tests (block D1c) ──────────────────────────────
 # Plain exe on purpose: it only uses Win32 console I/O, no JUCE. The exe path
@@ -121,7 +129,12 @@ target_compile_definitions(unit_tests PRIVATE
     #   build/tests/SuicidePlugin_artefacts/<CONFIG>/VST3/SuicidePlugin.vst3
     # A .vst3 is a DIRECTORY — tests use exists() not existsAsFile().
     # Forward slashes throughout (CMake normalizes; avoids MSVC C4129).
-    SUICIDE_PLUGIN="${CMAKE_CURRENT_BINARY_DIR}/SuicidePlugin_artefacts/$<CONFIG>/VST3/SuicidePlugin.vst3")
+    SUICIDE_PLUGIN="${CMAKE_CURRENT_BINARY_DIR}/SuicidePlugin_artefacts/$<CONFIG>/VST3/SuicidePlugin.vst3"
+    # PluginLabReplica artifact (root CMakeLists.txt juce_add_plugin):
+    #   build/PluginLabReplica_artefacts/<CONFIG>/VST3/PluginLabReplica.vst3
+    # A .vst3 is a DIRECTORY — tests use exists() not existsAsFile().
+    # Forward slashes throughout (CMake normalizes; avoids MSVC C4129).
+    REPLICA_PLUGIN="${CMAKE_CURRENT_BINARY_DIR}/../PluginLabReplica_artefacts/$<CONFIG>/VST3/PluginLabReplica.vst3")
 catch_discover_tests(unit_tests)
 
 # ── SuicidePlugin: crash-injection VST3 fixture (block D3b / ADR-D-2) ───────
@@ -158,3 +171,8 @@ endif()
 # VST3 through VST3PluginFormat — guarantee the fixture is built before
 # unit_tests runs (same pattern as TestChildProcess / PluginHostChild).
 add_dependencies(unit_tests SuicidePlugin)
+
+# PluginLabReplicaTests.cpp loads the REAL replica VST3 in-process through
+# VST3PluginFormat — guarantee the fixture is built before unit_tests runs
+# (same pattern as SuicidePlugin).
+add_dependencies(unit_tests PluginLabReplica)
