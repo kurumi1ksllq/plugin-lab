@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；312 个 TEST_CASE（2026-08-14 实测 312/312 绿：基线 208 + 块 D 新增 57 + issue #2/#3 并发改造新增 5 + 子进程测量扩展 T1/T2 新增 10 + #60 无限载波日志路径 1 + #52/#53/#58 各波增量，随 PR 逐次同步）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
+Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；332 个 TEST_CASE（2026-08-14 实测 332/332 绿：基线 208 + 块 D 新增 57 + issue #2/#3 并发改造新增 5 + 子进程测量扩展 T1/T2 新增 10 + #60 无限载波日志路径 1 + T4 复刻插件 20（ReplicaSpec 7 + ReplicaChain 8 + PluginLabReplica 1 + ReplicaMeasurement 4）+ 随 PR 逐次同步）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
 
 ## RUN
 
