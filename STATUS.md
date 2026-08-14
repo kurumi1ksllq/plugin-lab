@@ -79,7 +79,9 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 ## 待办（下一步）—— 以 GitHub issue 为准
 
-> 2026-08-12 更新：原路线图（docs/roadmap-next.md）五块（C/E/A/B/D）已全部完成并删除（内容在 git 历史与 PR 记录中；块 D 进程外托管已完成：harmonic/compression 子进程测量于 #14 交付，gr_timeline 于 #15 交付（PR #19））。**需求与待开发全部走 GitHub issue**（当前 open：#9 AI 反推闭环冲刺、#17 RecorderEngine 上层；#15 已完成（PR #19 合并）、#16 已关闭——子进程测量期间 stop 可达经 #2/#3 并发改造已实现，见已知限制节）；历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成；块 B 记录模式于 2026-08-10 完成，见下方完成记录）。
+> 2026-08-14 更新：**T4 复刻插件（issue #27）已停止**——2026-08-14 用户确认：本工具不做自动复刻插件（PluginLabReplica 等复刻 VST3 不是目标）；工具止步于"测量 + 反推 → 交付可读开发规格"，开发由开发者据此完成（方向修订见 DESIGN.md「开发目标」）。T4 已提交代码（规格解析/DSP/包装）保留于分支，不复入 main。
+>
+> 2026-08-12 更新：原路线图（docs/roadmap-next.md）五块（C/E/A/B/D）已全部完成并删除（内容在 git 历史与 PR 记录中；块 D 进程外托管已完成：harmonic/compression 子进程测量于 #14 交付，gr_timeline 于 #15 交付（PR #19））。**需求与待开发全部走 GitHub issue**（当前 open：#9 AI 反推闭环冲刺（= T5 闭环；2026-08-14 修订：不再依赖 T4 复刻——T4 已停，T5 收敛为"测真机 → 反推 → 描述 → 交付规格"，验证规格可开发性改为人工/后续 issue）、#17 RecorderEngine 上层；#15 已完成（PR #19 合并）、#16 已关闭——子进程测量期间 stop 可达经 #2/#3 并发改造已实现，见已知限制节）；历史待办均已交付（T3 阶段 1-5 见本文件完成记录；T2 稳定加固并入块 C 于 2026-08-08 完成；块 B 记录模式于 2026-08-10 完成，见下方完成记录）。
 
 ## 阶段 1 完成记录（2026-08-02）
 
@@ -269,7 +271,7 @@ DESIGN.md                 # 设计文档
   修复：超时/挂起持久化黑名单的路径全部 setCacheFile(tmp)；changeListenerCallback 改 pending flag + triggerAsyncUpdate（AsyncUpdater ≤50ms 合并刷新）。验证全量绿（commit message 记 158/158），Debug 热扫 ~1s。
 - **`063edf3`** docs：sync AGENTS.md —— 刷新 commit ref + 测试计数对齐（commit message 记 126/126，**实测为 158/158**，后续以 tests/AGENTS.md 158 为准）。
 
-**测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158、186/186、199/199、208/208 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（**280 个 TEST_CASE，2026-08-12 实测**）。
+**测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158、186/186、199/199、208/208 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（**312 个 TEST_CASE：332 含 T4 复刻插件 20，T4 停止后移除，见下方 T4 记录**）。
 
 ## E 块任务 E3 验证记录（2026-08-08）
 
@@ -380,3 +382,29 @@ DESIGN.md                 # 设计文档
 
 - **out/ 历史数据多为默认态 → 报告以 degenerate 标注**（freq/compression/gr 全退化，仅 harmonic 有内容 tones=7；标准库正确行为，非 bug）——**例外：pro-c-3 为真实测量**（freq 28.6dB 峰、压缩 5.2dB GR、tau.valid=true），四段全部 ok
 - **空插件目录不进报告**：无 dataset.json 的目录（auto-tune-pro、uadx-1176-fet-compressor）has_dataset=false 跳过；根级陈旧 summary.json 非插件
+
+## T4 规格驱动复刻插件（issue #27，2026-08-14，分支 feat/replica-spec-vst3）—— **❌ 已停止**
+
+> **2026-08-14 终止声明**：用户确认本工具不做自动复刻插件——T4（规格 → 复刻 VST3）不再纳入设计目标（见 DESIGN.md「开发目标」要点 5）。以下记录为终止前的历史决策与实现状态，保留存档；**分支不复入 main**，issue #27 关闭。复刻插件的替代定位：chain_doc 仍作为**交付给开发者的规格载体**（DESIGN.md「规格交付链路」），但不自动转成可运行 VST3。
+>
+> T4 原定义 = spec-driven 复刻 VST3 测试插件：把 T2 `describe_chain.py` 的 chain_doc JSON（契约 `tools/describe_schema.py` `CONTRACT_VERSION="2"`）变成可被本工具测量的真实插件，闭环 T5（measure 真机 → derive → describe → configure 复刻 → measure → compare_all）。T5 闭环待真机数据。
+
+**决策记录**（2026-08-14 用户确认，全部批准）：
+
+- **A. 规格解析**：`PLUGINLAB_REPLICA_SPEC` 环境变量（主）→ `%APPDATA%/PluginLab/replica_spec.json`（兜底）→ 两者皆无/不可用 → identity 直通（+ CRASH_LOG_WARN）。VST3 在 PluginLab 进程内与子进程宿主内加载，均继承宿主环境变量
+- **B. 参数面（U3）**：真实 hosted 参数——固定 4 个 EQ band 槽位 `Band N Used/Frequency/Gain/Q` + `Threshold/Ratio/Attack/Release/Makeup Gain`；显示名必须匹配 describe_chain 分类器模式（`Band \d+ (Used|Frequency|Q|Gain)`、Threshold/Ratio/Attack/Release/Makeup/Gain）使 T5 对复刻插件分类与原插件一致；参数默认值 = 规格值
+- **C. 位置/门控（U4）**：`source/replica/` 模块；PluginLabReplica target 根 CMakeLists **ALWAYS-ON**（无 BUILD_REPLICA 门控，镜像 PluginHostChild；CI 全量构建覆盖，零 CI 改动）。双编译细节：根槽位是 VST3 target 而非 PluginLab app（app 永不链接复刻代码）
+- **U6 DSP 驱动**：block 起始从实时参数值重建系数（dirty 标志；无锁——参数写、音频线程每 block 读一次）
+- **U7 顺序**：EQ → 压缩器（规范 eq→dyn→eq 坍缩为单次 EQ 通道）
+- **U5 Makeup Gain 固定 0 dB**（chain_doc 无 makeup 字段）
+- **U8 手动 GUI 扫描/安装**：构建产物 .vst3 需复制到 `C:\Program Files\Common Files\VST3`（或 `%APPDATA%\Programs\Common\VST3`）供 PluginLab GUI 扫描发现（扫描目录见 PluginManager.cpp scanSystemDirectories）；进程内加载 + 子进程宿主测量测试证明 load/measure，完整 GUI 扫描为手动步骤
+
+**本分支已实现**（解析器/DSP/包装/VST3 target 已提交；子进程 4 类型测量测试 / 最终验证在途）：
+
+- `a9fbfdc` **ReplicaSpec + fromChainDoc 解析器**（T4 任务 1）：chain_doc → 复刻配置（`ReplicaSpec::fromChainDoc` 取首个 `usable_as_spec==true` 的 plugins[] 条目；eq.sections → 4 槽位 band，dynamics 阈值/比/attack/release ms→s；不可用条目 → identity spec；解析失败/无可用条目 → nullopt，永不抛异常）
+- `7d612c8` **ReplicaChain DSP**（T4 任务 2）：EQ RBJ biquad（每 band makePeakFilter）+ TestCompressorPlugin 模型压缩器（feed-forward、linked-stereo detector、单极方向相关 τ），EQ→压缩器顺序；`configure(ReplicaSpec)` 映射任务 1 规格
+- **PluginLabReplica VST3**（T4 任务 3）：`juce_add_plugin` ALWAYS-ON（决策 C/U4），spec 解析（决策 A：env → %APPDATA% 兜底 → identity 直通 + CRASH_LOG_WARN）+ 21 个 hosted 参数（4 band 槽位 + 压缩器，显示名匹配分类器模式）+ block 起始 dirty 重建（U6）；进程内加载测试证明 spec → 参数 → DSP 穿透真实 VST3 边界（1kHz +6dB）
+- `source/replica/` 6 文件（ReplicaSpec/ReplicaChain/PluginLabReplica 各 .h/.cpp），DSP 核心 .cpp 双编译（unit_tests + VST3 target）
+- **参数显示名约定**（B）：与 describe_chain 分类器模式对齐是 T5 闭环的关键 seam——复刻插件测量 → describe_chain 分类结果必须与原插件一致
+
+**在途（已随 T4 终止作废）**：子进程 4 类型测量测试（child-host，AC1 证据）、最终验证——均为本分支剩余任务，随 T4 停止不再推进。

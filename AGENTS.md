@@ -20,7 +20,7 @@ PluginLab/
 │   ├── ipc/           # Named Pipe 服务器 + 命令解析
 │   ├── ui/            # PlotWidget + PluginEditorWindow
 │   └── utils/         # FftHelper / MathUtils / CrashLog
-├── tests/             # Catch2 单元测试(280/280 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
+├── tests/             # Catch2 单元测试(312/312 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
 ├── tools/             # VST3Scanner(构建可选：-DBUILD_VST3SCANNER=ON，默认关闭) + CMakeLists + PS/Python 工具脚本
 ├── samples/take01.wav # vocal 测试素材（已入库）
 ├── SPEC.md            # 工程文档：8 类导出 JSON schema + IPC 协议契约（原 docs/data-schema.md）
