@@ -335,8 +335,14 @@ TEST_CASE ("scanToJSON output parses with python json.load", "[export][scan-pyth
     ctx.pluginName = "PythonScan";
 
     const auto json = Export::scanToJSON (scan, MeasurementSession::Type::frequencyResponse, ctx);
+    // Per-invocation temp path (issue #55): two concurrent copies of this
+    // test — two worktrees running full ctest at once — must not share one
+    // file, or the sibling's deleteFile() can land between writeToFile and
+    // the python subprocess's open(), failing intermittently under parallel
+    // load. Same Uuid scheme as the other temp-file tests.
     const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                          .getChildFile ("pluginlab_scan_test.json");
+                          .getChildFile ("pluginlab_scan_test_"
+                                         + juce::Uuid().toString() + ".json");
     REQUIRE (Export::writeToFile (json, file));
 
     const auto command = "python -c \"import json,sys; json.load(open(sys.argv[1]))\" "

@@ -50,6 +50,27 @@ static void flushMessageManager (int timeoutMs = 100)
     juce::MessageManager::getInstance()->runDispatchLoopUntil (timeoutMs);
 }
 
+/** Per-invocation-unique temp path (issue #55: ctest full-parallel flakiness).
+ *  The measurement/export tests write real files (export JSON + the
+ *  crash-mirror WAV derived from it) into the user's temp directory. Two
+ *  concurrent copies of the SAME test — e.g. two worktrees running full
+ *  ctest at once (~588 test processes, CPU-saturated) — must never share
+ *  the same paths: one copy's deleteFile()/deleteRecursively() would remove
+ *  the other's files between creation and assert, failing it intermittently
+ *  while a lone re-run passes. A random Uuid (the same scheme the file-source
+ *  helper uses below) gives every run a disjoint namespace; determinism per
+ *  run is unaffected (same bytes, different path).
+ *  CPU contention itself only ever stretches the runs (SweepRunner's 2 ms
+ *  per-block message-loop yield is a floor), so in-process timing assertions
+ *  stay safe — the collision is purely cross-process. */
+static juce::File uniqueTempPath (const juce::String& name)
+{
+    return juce::File::getSpecialLocation (juce::File::tempDirectory)
+               .getChildFile (juce::String ("pluginlab_")
+                              + juce::Uuid().toString()
+                              + "_" + name);
+}
+
 //==============================================================================
 // 1. Measure — happy path: analysis + export + callback
 //==============================================================================
@@ -1152,10 +1173,10 @@ TEST_CASE ("CommandParser: measure with noise source flushes dry/wet capture to 
     parser.setPluginInstance (plugin.get());
     parser.setSession (&session);
 
-    // Explicit export path inside the temp directory; the crash-protection
-    // WAV mirror is derived from it by swapping ".json" for ".wav".
-    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                   .getChildFile ("pluginlab_flush_measure_test");
+    // Explicit export path inside a per-process temp directory; the
+    // crash-protection WAV mirror is derived from it by swapping ".json" for
+    // ".wav".
+    const juce::File tempDir = uniqueTempPath ("flush_measure_test");
     tempDir.createDirectory();
     const juce::File jsonPath = tempDir.getChildFile ("flush_measure_test.json");
     const juce::File wavPath  = tempDir.getChildFile ("flush_measure_test.wav");
@@ -1215,8 +1236,7 @@ TEST_CASE ("CommandParser: exportWav writes dry/wet/bypass tracks from the last 
     parser.setSession (&session);
 
     // 1. Run a real measure first so the session result holds a dry/wet pair.
-    const juce::File measureJson = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                       .getChildFile ("pluginlab_exportwav_measure.json");
+    const juce::File measureJson = uniqueTempPath ("exportwav_measure.json");
     const juce::File measureWav = measureJson.withFileExtension (".wav");
     measureJson.deleteFile();
     measureWav.deleteFile();
@@ -1230,8 +1250,7 @@ TEST_CASE ("CommandParser: exportWav writes dry/wet/bypass tracks from the last 
 
     // 2. exportWav with a fresh .json path in the temp dir (the .wav is
     //    derived by swapping the extension).
-    const juce::File exportJson = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                      .getChildFile ("pluginlab_exportwav_out.json");
+    const juce::File exportJson = uniqueTempPath ("exportwav_out.json");
     const juce::File exportWav = exportJson.withFileExtension (".wav");
     exportJson.deleteFile();
     exportWav.deleteFile();
@@ -1306,8 +1325,7 @@ TEST_CASE ("CommandParser: exportWav fails without a prior measurement",
     parser.setPluginInstance (plugin.get());
     parser.setSession (&session);
 
-    const juce::File exportJson = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                      .getChildFile ("pluginlab_exportwav_noresult.json");
+    const juce::File exportJson = uniqueTempPath ("exportwav_noresult.json");
     const juce::File exportWav = exportJson.withFileExtension (".wav");
     exportJson.deleteFile();
     exportWav.deleteFile();
@@ -2222,10 +2240,9 @@ TEST_CASE ("CommandParser: dataset runs default 4 types and exports dataset JSON
     parser.setPluginInstance (plugin.get());
     parser.setSession (&session);
 
-    // Export under the temp directory; the crash-protection WAV mirror is
-    // derived by swapping ".json" for ".wav".
-    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                   .getChildFile ("pluginlab_dataset_test");
+    // Export under a per-process temp directory; the crash-protection WAV
+    // mirror is derived by swapping ".json" for ".wav".
+    const juce::File tempDir = uniqueTempPath ("dataset_test");
     tempDir.createDirectory();
     const juce::File jsonPath = tempDir.getChildFile ("dataset_default.json");
     const juce::File wavPath  = jsonPath.withFileExtension (".wav");
@@ -2297,8 +2314,7 @@ TEST_CASE ("CommandParser: dataset gr_timeline block matches standalone measure 
     parser.setPluginInstance (plugin.get());
     parser.setSession (&session);
 
-    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                   .getChildFile ("pluginlab_dataset_test");
+    const juce::File tempDir = uniqueTempPath ("dataset_test");
     tempDir.createDirectory();
     const juce::File datasetPath   = tempDir.getChildFile ("dataset_body_equiv.json");
     const juce::File standalonePath = tempDir.getChildFile ("dataset_standalone_gr.json");
@@ -2382,8 +2398,7 @@ TEST_CASE ("CommandParser: dataset with bad scan param_id skips scan and keeps t
     parser.setPluginInstance (plugin.get());
     parser.setSession (&session);
 
-    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                   .getChildFile ("pluginlab_dataset_test");
+    const juce::File tempDir = uniqueTempPath ("dataset_test");
     tempDir.createDirectory();
     const juce::File jsonPath = tempDir.getChildFile ("dataset_scan_bad.json");
     const juce::File wavPath  = jsonPath.withFileExtension (".wav");
@@ -2445,8 +2460,7 @@ TEST_CASE ("CommandParser: dataset with valid scan embeds scan block",
     parser.setPluginInstance (plugin.get());
     parser.setSession (&session);
 
-    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                   .getChildFile ("pluginlab_dataset_test");
+    const juce::File tempDir = uniqueTempPath ("dataset_test");
     tempDir.createDirectory();
     const juce::File jsonPath = tempDir.getChildFile ("dataset_scan_ok.json");
     const juce::File wavPath  = jsonPath.withFileExtension (".wav");
@@ -2511,8 +2525,7 @@ TEST_CASE ("CommandParser: dataset with compression_family embeds grid",
     parser.setPluginInstance (plugin.get());
     parser.setSession (&session);
 
-    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                   .getChildFile ("pluginlab_dataset_test");
+    const juce::File tempDir = uniqueTempPath ("dataset_test");
     tempDir.createDirectory();
     const juce::File jsonPath = tempDir.getChildFile ("dataset_cf.json");
     const juce::File wavPath  = jsonPath.withFileExtension (".wav");
@@ -2571,8 +2584,7 @@ TEST_CASE ("CommandParser: dataset compression_family uses defaults when fields 
     parser.setPluginInstance (plugin.get());
     parser.setSession (&session);
 
-    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                   .getChildFile ("pluginlab_dataset_test");
+    const juce::File tempDir = uniqueTempPath ("dataset_test");
     tempDir.createDirectory();
     const juce::File jsonPath = tempDir.getChildFile ("dataset_cf_defaults.json");
     const juce::File wavPath  = jsonPath.withFileExtension (".wav");
@@ -2756,8 +2768,7 @@ TEST_CASE ("CommandParser: dataset applies excitation to the scan block too",
     parser.setPluginInstance (plugin.get());
     parser.setSession (&session);
 
-    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                   .getChildFile ("pluginlab_dataset_test");
+    const juce::File tempDir = uniqueTempPath ("dataset_test");
     tempDir.createDirectory();
     const juce::File jsonPath = tempDir.getChildFile ("dataset_scan_excitation.json");
     const juce::File wavPath  = jsonPath.withFileExtension (".wav");
@@ -2881,8 +2892,7 @@ TEST_CASE ("CommandParser: recordTimeline/setParam/stopTimeline round-trip expor
     parser.setPluginInstance (plugin.get());
     parser.setSession (&session);
 
-    const juce::File tlPath = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                  .getChildFile ("pluginlab_timeline_roundtrip.json");
+    const juce::File tlPath = uniqueTempPath ("timeline_roundtrip.json");
     tlPath.deleteFile();
 
     // ---- Act ----
@@ -2978,9 +2988,12 @@ TEST_CASE ("CommandParser: playTimeline applies automation, exports WAV and rest
     ParamValueRecorder recorder;
     plugin->addListener (&recorder);
 
-    const juce::File tlPath = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                  .getChildFile ("pluginlab_timeline_play_in.json");
-    const juce::File playJson = tlPath.getSiblingFile ("pluginlab_timeline_play_in_play.json");
+    // Per-process temp paths: the play-result JSON/WAV derive from the
+    // timeline name exactly as CommandParser derives them ("tl.json" →
+    // "tl_play.json" sibling + ".wav"), so the cleanup below always matches
+    // what the command wrote.
+    const juce::File tlPath = uniqueTempPath ("timeline_play_in.json");
+    const juce::File playJson = tlPath.getSiblingFile (tlPath.getFileNameWithoutExtension() + "_play.json");
     const juce::File playWav  = playJson.withFileExtension (".wav");
     tlPath.deleteFile();
     playJson.deleteFile();
@@ -2988,6 +3001,17 @@ TEST_CASE ("CommandParser: playTimeline applies automation, exports WAV and rest
 
     // Timeline: drive jumps to 0.9 at t=0, then to 0.1 at t=1000 ms — both
     // inside the 5 s default sweep run.
+    //
+    // CPU-contention note (issue #55): playback applies events by WALL-CLOCK
+    // elapsed time since the run started (MeasurementSession::run), not by
+    // sample position. Under load the run can only get slower, never faster:
+    // SweepRunner yields the message loop ~2 ms per block (a floor), so the
+    // 5 s @ 48 kHz / 256-block sweep takes at least ~1.9 s wall-clock and
+    // elapsed always crosses 1000 ms mid-run — the 0.1 event and the
+    // progress cursor 2 are guaranteed to fire, on an idle machine and under
+    // CPU saturation alike. This is the production pacing contract the test
+    // pins; the flakiness it guards against is the cross-process temp-file
+    // race, fixed via uniqueTempPath above.
     tlPath.replaceWithText (R"({"type":"parameter_timeline","events":[)"
                             R"({"time_ms":0,"param_id":"drive","value":0.9},)"
                             R"({"time_ms":1000,"param_id":"drive","value":0.1}]})");
@@ -3089,8 +3113,7 @@ TEST_CASE ("CommandParser: timeline commands error paths",
     REQUIRE (recAgain.contains ("\"ok\":false"));
     REQUIRE (recAgain.contains ("already recording"));
     // Un-wind so the parser is left in a clean state.
-    const juce::File unwindTl = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                    .getChildFile ("pluginlab_timeline_cleanup.json");
+    const juce::File unwindTl = uniqueTempPath ("timeline_cleanup.json");
     REQUIRE (parser.handleCommand (juce::String (R"({"cmd":"stopTimeline","path":)")
                                   + juce::JSON::toString (unwindTl.getFullPathName()) + "}")
                  .contains ("\"ok\":true"));
@@ -3102,8 +3125,7 @@ TEST_CASE ("CommandParser: timeline commands error paths",
     REQUIRE (noFile.contains ("file not found"));
 
     // playTimeline with a non-JSON file → invalid timeline json
-    const juce::File badTl = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                 .getChildFile ("pluginlab_timeline_bad.json");
+    const juce::File badTl = uniqueTempPath ("timeline_bad.json");
     badTl.replaceWithText ("this is not json");
     const juce::String badCmd =
         juce::String (R"({"cmd":"playTimeline","path":)")
@@ -3115,8 +3137,7 @@ TEST_CASE ("CommandParser: timeline commands error paths",
 
     // playTimeline with rate <= 0 → invalid rate (valid file required so the
     // rate check is what fails)
-    const juce::File okTl = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                .getChildFile ("pluginlab_timeline_ok.json");
+    const juce::File okTl = uniqueTempPath ("timeline_ok.json");
     okTl.replaceWithText (R"({"type":"parameter_timeline","events":[]})");
     const juce::String badRateCmd =
         juce::String (R"({"cmd":"playTimeline","rate":0,"path":)")
@@ -3125,10 +3146,8 @@ TEST_CASE ("CommandParser: timeline commands error paths",
     REQUIRE (badRate.contains ("\"ok\":false"));
     REQUIRE (badRate.contains ("invalid rate"));
     okTl.deleteFile();
-    juce::File::getSpecialLocation (juce::File::tempDirectory)
-        .getChildFile ("pluginlab_timeline_ok_play.json").deleteFile();
-    juce::File::getSpecialLocation (juce::File::tempDirectory)
-        .getChildFile ("pluginlab_timeline_ok_play.wav").deleteFile();
+    okTl.getSiblingFile (okTl.getFileNameWithoutExtension() + "_play.json").deleteFile();
+    okTl.getSiblingFile (okTl.getFileNameWithoutExtension() + "_play.wav").deleteFile();
 }
 
 //==============================================================================
@@ -3395,8 +3414,7 @@ TEST_CASE ("CommandParser: playTimeline rejects invalid rate",
     parser.setSession (&session);
 
     // Valid (empty) timeline file so the rate check is what fails.
-    const juce::File tlPath = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                  .getChildFile ("pluginlab_timeline_rate_validation.json");
+    const juce::File tlPath = uniqueTempPath ("timeline_rate_validation.json");
     tlPath.deleteFile();
     tlPath.replaceWithText (R"({"type":"parameter_timeline","events":[]})");
 
@@ -3429,10 +3447,8 @@ TEST_CASE ("CommandParser: playTimeline rejects invalid rate",
 
     // Cleanup (play-result JSON + WAV are derived siblings of the timeline).
     tlPath.deleteFile();
-    juce::File::getSpecialLocation (juce::File::tempDirectory)
-        .getChildFile ("pluginlab_timeline_rate_validation_play.json").deleteFile();
-    juce::File::getSpecialLocation (juce::File::tempDirectory)
-        .getChildFile ("pluginlab_timeline_rate_validation_play.wav").deleteFile();
+    tlPath.getSiblingFile (tlPath.getFileNameWithoutExtension() + "_play.json").deleteFile();
+    tlPath.getSiblingFile (tlPath.getFileNameWithoutExtension() + "_play.wav").deleteFile();
 }
 
 TEST_CASE ("CommandParser: exportData re-exports the last measurement result",
@@ -3465,8 +3481,7 @@ TEST_CASE ("CommandParser: exportData re-exports the last measurement result",
     REQUIRE (emptyPath.contains ("invalid path"));
 
     // 3. After a measure: re-export as a dataset JSON (issue #39).
-    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                   .getChildFile ("pluginlab_exportdata_test");
+    const juce::File tempDir = uniqueTempPath ("exportdata_test");
     tempDir.createDirectory();
     const juce::File measureJson = tempDir.getChildFile ("exportdata_measure.json");
     const juce::File dataJson    = tempDir.getChildFile ("exportdata_out.json");
@@ -3569,8 +3584,7 @@ TEST_CASE ("CommandParser: measure and dataset fail when the export write fails"
     // A directory masquerading as the export path: replaceWithText cannot
     // open it, so writeToFile fails. The old code ignored the bool return
     // and answered ok:true (issue #40).
-    const juce::File tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
-                                   .getChildFile ("pluginlab_export_write_fail");
+    const juce::File tempDir = uniqueTempPath ("export_write_fail");
     tempDir.createDirectory();
     const juce::File measureDir = tempDir.getChildFile ("measure_out.json");
     measureDir.createDirectory();
