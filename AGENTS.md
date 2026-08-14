@@ -21,7 +21,7 @@ PluginLab/
 │   ├── ui/            # PlotWidget + PluginEditorWindow
 │   └── utils/         # FftHelper / MathUtils / CrashLog
 ├── tests/             # Catch2 单元测试(280/280 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
-├── tools/             # VST3Scanner(死代码但仍在构建) + CMakeLists + PS/Python 工具脚本
+├── tools/             # VST3Scanner(构建可选：-DBUILD_VST3SCANNER=ON，默认关闭) + CMakeLists + PS/Python 工具脚本
 ├── samples/take01.wav # vocal 测试素材（已入库）
 ├── SPEC.md            # 工程文档：8 类导出 JSON schema + IPC 协议契约（原 docs/data-schema.md）
 ├── DESIGN.md          # 设计文档（方法论 + 开发目标）
@@ -111,7 +111,7 @@ ctest --test-dir build -C Release --timeout 180
 
 ## NOTES
 
-- 模块边界由根 CMakeLists.txt 单一清单强制（目录不自包含）——**例外**：`tools/` 自含 CMakeLists.txt（构建 VST3Scanner，`add_subdirectory(tools)` 无条件）；`VST3Scanner` 运行时死代码（扫描在进程内），但每次构建仍编译并复制到产物目录
+- 模块边界由根 CMakeLists.txt 单一清单强制（目录不自包含）——`tools/` 自含 CMakeLists.txt（构建 VST3Scanner），由根 CMakeLists.txt 的 `option(BUILD_VST3SCANNER)` 门控（默认 OFF，issue #44）；`VST3Scanner` 运行时死代码（扫描在进程内），默认关闭不构建不复制
 - `JUCE_DISABLE_ASSERTIONS=1` 仅 MSVC 下 PluginLab target 全配置生效（JUCE 9 扫描器断言消息线程）；`unit_tests` 不带此定义
 - vocal 素材 `samples/take01.wav`（48k/16bit/stereo/17.0s，**已入库**）
 - 构建产物：`build/`（MSVC）与 `cmake-build-debug/`（CLion Ninja）并存

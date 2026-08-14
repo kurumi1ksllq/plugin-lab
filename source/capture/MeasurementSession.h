@@ -90,8 +90,8 @@ public:
      *  Default (0.02, 0.1, 0.8, 0.2). */
     void setDynamicADSR (double attackSec, double decaySec,
                          double sustain, double releaseSec);
-    /** Sweep start frequency (Hz) of the dynamic carrier. Default 20.0
-     *  (the original 20 Hz..20 kHz sweep). */
+    /** Sweep start frequency (Hz) of the dynamic carrier. Default 10000.0
+     *  (aligned with the IPC command default, issue #44). */
     void setDynamicCarrierStartHz (double hz) { dynamicCarrierStartHz = hz; }
     double getDynamicCarrierStartHz() const   { return dynamicCarrierStartHz; }
 
