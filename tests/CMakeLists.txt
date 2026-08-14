@@ -36,6 +36,7 @@ target_sources(unit_tests PRIVATE
     ../source/host/EditorCrashGuard.cpp
     ../source/host/ChildProcessCoordinator.cpp
     ../source/host/ChildMeasureOrchestrator.cpp
+    ../source/replica/ReplicaSpec.cpp
     CommandParserStubs.cpp
     TestPlugin.h TestPluginTests.cpp TestCompressorPlugin.h TestCompressorPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp CaptureBufferTests.cpp FreqResponseTests.cpp ExportTests.cpp
     CommandParserTests.cpp PipeServerTests.cpp
@@ -46,6 +47,7 @@ target_sources(unit_tests PRIVATE
     FilePlaybackTests.cpp NoiseGeneratorTests.cpp EnvelopeSignalTests.cpp MultiToneTests.cpp SequentialToneTests.cpp
     GainReductionTests.cpp ScanEngineTests.cpp
     TimeConstantsTests.cpp
+    ReplicaSpecTests.cpp
     CompressionFamilyTests.cpp
     ComponentVisibilityTests.cpp
     EditorCrashGuardTests.cpp
