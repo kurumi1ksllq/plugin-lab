@@ -35,7 +35,7 @@
 
 **铁律：THD 与 IMD 信号永不混用**——多音谐波峰与基频峰交叠（2kHz H2=4kHz 落上 4kHz 基频），测得失真无意义（DESIGN.md:102 勿混用）。注意：当前 `harmonicAnalysis` 实现即用 MultiTone 八度基频（100/200/.../12800），低频基频的高次谐波会落在高频基频上——这是已知实现取舍，分析器逐基频独立取峰，勿把该信号再当 IMD 用。
 
-已知限制：`carrier_start_hz` 已暴露到 IPC（957e597，IPC 解析默认 10000 Hz 匹配 CompressionFamily；MeasurementSession 成员默认 20.0，CompressionFamily 固定 10000）——动态源 GR τ 估计在真实插件上有效（Pro-C 3 实测 attack=3.9ms/release=39.7ms, tau.valid=true）。EnvelopeSignal::getTotalLength 对无限载波返回 -1（EnvelopeSignal.cpp:86，代码路径存在但当前载波全为有限 SineSweep，不触发 10s 兜底）。
+已知限制：`carrier_start_hz` 已暴露到 IPC（957e597，IPC 解析默认 10000 Hz 匹配 CompressionFamily；MeasurementSession 成员默认 **10000**（issue #44 对齐），CompressionFamily 固定 10000）——动态源 GR τ 估计在真实插件上有效（Pro-C 3 实测 attack=3.9ms/release=39.7ms, tau.valid=true）。EnvelopeSignal::getTotalLength 对无限载波返回 -1（EnvelopeSignal.cpp，代码路径存在但当前载波全为有限 SineSweep，不触发 10s 兜底；**该路径已加 CRASH_LOG_WARN（issue #44），一旦触发必留日志**）。
 
 ## EXTENDING
 

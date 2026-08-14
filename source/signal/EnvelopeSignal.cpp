@@ -1,5 +1,7 @@
 #include "EnvelopeSignal.h"
 
+#include "../utils/CrashLog.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -83,7 +85,15 @@ int64_t EnvelopeSignal::getTotalLength() const
 {
     const auto carrierLen = carrier->getTotalLength();
     if (carrierLen < 0)
-        return -1;   // indefinite carrier
+    {
+        // Indefinite carrier (issue #44): -1 is the "infinite" sentinel
+        // SweepRunner depends on (silent 10 s fallback). The semantics stay
+        // as-is, but the fallback must never be silent again — log it so an
+        // infinite carrier always leaves a trail.
+        CRASH_LOG_WARN ("EnvelopeSignal indefinite carrier",
+                        "getTotalLength() returning -1 (SweepRunner applies the 10s fallback)");
+        return -1;
+    }
 
     return static_cast<int64_t> (std::llround (static_cast<double> (carrierLen) / speed));
 }

@@ -205,9 +205,12 @@ private:
     double dynamicCarrierFreq = 1000.0;
 
     // T4.3: dynamic-source configuration (defaults = original signal).
+    // dynamicCarrierStartHz is aligned with the IPC command default (10000 Hz,
+    // issue #44) so callers that never call setDynamicCarrierStartHz are
+    // unambiguous — the command side and the session can no longer disagree.
     double dynamicAmplitude = 0.5;
     double dynamicSpeed = 1.0;
-    double dynamicCarrierStartHz = 20.0;
+    double dynamicCarrierStartHz = 10000.0;
     double dynamicADSR[4] = { 0.02, 0.1, 0.8, 0.2 };
 
     // Source metadata populated by run() (file playback only).
