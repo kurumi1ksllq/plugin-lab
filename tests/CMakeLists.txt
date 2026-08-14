@@ -51,6 +51,7 @@ target_sources(unit_tests PRIVATE
     ReplicaSpecTests.cpp
     ReplicaChainTests.cpp
     PluginLabReplicaTests.cpp
+    ReplicaMeasurementTests.cpp
     CompressionFamilyTests.cpp
     ComponentVisibilityTests.cpp
     EditorCrashGuardTests.cpp
