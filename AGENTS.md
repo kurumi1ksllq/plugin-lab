@@ -10,7 +10,7 @@ VST3 插件黑盒测量实验室（Windows 桌面 GUI，C++20 + JUCE 9 + CMake +
 
 ```
 PluginLab/
-├── source/            # 全部生产代码（77 文件，9 模块，含块 D 新增 child/）——见 source/AGENTS.md
+├── source/            # 全部生产代码（83 文件，10 模块，含块 D 新增 child/ 与 T4 新增 replica/）——见 source/AGENTS.md
 │   ├── Main.cpp       # 入口 + 装配中枢（2301 行 god file）
 │   ├── host/          # VST3 扫描/加载（/EHa 崩溃保护 + 黑名单）
 │   ├── signal/        # 信号生成器接口 + 8 生成器
@@ -18,6 +18,7 @@ PluginLab/
 │   ├── scan/          # 参数扫描引擎 ScanEngine
 │   ├── analysis/      # 6 分析器 + Export JSON 层
 │   ├── ipc/           # Named Pipe 服务器 + 命令解析
+│   ├── replica/       # 规格驱动复刻 VST3（T4：ReplicaSpec 解析 + ReplicaChain DSP + PluginLabReplica 包装）
 │   ├── ui/            # PlotWidget + PluginEditorWindow
 │   └── utils/         # FftHelper / MathUtils / CrashLog
 ├── tests/             # Catch2 单元测试(280/280 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
@@ -47,6 +48,7 @@ PluginLab/
 | 导出 JSON 反推验证        | `tools/reverse_derive.py`、`tools/verify_export.py` | stdlib-only Python                         |
 | 批量聚合报告（out/ 扫描） | `tools/aggregate_report.py`                          | CLI 聚合 markdown+json 报告；默认态标 degenerate |
 | 处理链路描述生成          | `tools/describe_chain.py`                            | 反推报告 → markdown+json 处理链路描述（EQ/动态/非线性/顺序推断）；#17 决策 |
+| 规格驱动复刻插件（T4）    | `source/replica/`                                   | 复刻 VST3：参数由 T2 chain_doc 驱动（env `PLUGINLAB_REPLICA_SPEC`）；EQ→压缩 DSP |
 | 四类型导出对比               | `tools/compare_all.py`                               | CLI: freq/compression/gr/harmonic 对比         |
 | IPC 手动客户端            | `tools/ipc_client.ps1`                               | NamedPipe 客户端，可配超时                  |
 | 测试设施（假插件）        | `tests/TestPlugin.h`、`tests/TestCompressorPlugin.h` | 确定性 ground truth                         |
@@ -63,6 +65,9 @@ PluginLab/
 | `SweepRunner`                                   | class        | `source/capture/`  | 冻结的 generate→process→capture 管线（不改）                         |
 | `ScanEngine`                                    | class        | `source/scan/`     | 参数多轮扫描，返回曲线族                                             |
 | `Export` / `datasetToJSON`                      | namespace/fn | `source/analysis/` | 手写 JSON + 数据包聚合                                               |
+| `ReplicaSpec` / `fromChainDoc`                  | struct/fn    | `source/replica/`  | chain_doc → 复刻配置解析（首条 usable_as_spec 条目；EQ/动态/τ）      |
+| `ReplicaChain`                                  | class        | `source/replica/`  | 复刻 DSP 核心（EQ RBJ biquads + TestCompressorPlugin 模型压缩器）    |
+| `PluginLabReplica`                              | class        | `source/replica/`  | 规格驱动复刻 VST3（chain_doc → hosted 参数 → DSP；env 规格源）      |
 | `PlotWidget`                                    | class        | `source/ui/`       | EQ/压缩/谐波/GR 四种图                                               |
 
 ## COMMANDS
@@ -118,6 +123,8 @@ ctest --test-dir build -C Release --timeout 180
 - 知识库分层：本文件（根）+ `source/AGENTS.md` + 各模块子文件 + `tests/AGENTS.md`
 - **插件缓存**：`%APPDATA%/PluginLab/pluginlist.xml`（根 `version=1`；`loadCache/saveCache` 见 PluginManager；原子写 temp+replaceFileIn）；**黑名单随缓存往返**（`<BLACKLISTED>` 子元素）；**死马踏板** `%APPDATA%/PluginLab/deadMansPedal`（挂起/崩溃插件下次自动黑名单）
 - 扫描/加载线程模型：专用一次性 `std::thread`（**析构不 join**，放弃用 `release()`）；worker 不触碰宿主成员（shared_ptr 状态 + callAsync alive-guard）；扫描看门狗（无进展 60s→黑名单+abandon，上限 3 次）；热扫增量靠 `cacheIsCurrent()`（内层 DLL mtime 基准）
+- **复刻插件规格源**（T4，`source/replica/`）：`PLUGINLAB_REPLICA_SPEC` 环境变量（主）→ `%APPDATA%/PluginLab/replica_spec.json`（兜底）→ 皆无/不可用 → identity 直通（+ CRASH_LOG_WARN）；进程内与子进程宿主加载均继承宿主环境
+- **复刻插件手动 GUI 验证**（T4 U8）：构建产物 .vst3 需手动复制到 `C:\Program Files\Common Files\VST3`（或 `%APPDATA%\Programs\Common\VST3`）供 PluginLab GUI 扫描发现（扫描目录见 PluginManager.cpp scanSystemDirectories）；进程内加载 + 子进程测量测试证明 load/measure，完整 GUI 扫描为手动步骤
 
 ## Agent skills
 
