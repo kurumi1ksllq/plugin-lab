@@ -15,7 +15,7 @@ Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`ju
 ## LAYOUT
 
 - 命名 1:1 镜像生产模块：`tests/<Module>Tests.cpp` ↔ `source/<module>/X.cpp`（如 `CommandParser.cpp` → `CommandParserTests.cpp`）；无同目录测试、无 `__tests__`
-- 20 个源文件：17 个 test .cpp + `CommandParserStubs.cpp` + `TestPlugin.h` + `TestCompressorPlugin.h`
+- 24 个源文件：21 个 test .cpp（含 T4 新增 ReplicaSpecTests/ReplicaChainTests/PluginLabReplicaTests/ReplicaMeasurementTests）+ `CommandParserStubs.cpp` + `TestPlugin.h` + `TestCompressorPlugin.h`
 - 覆盖映射：除 `ui/`、`utils/`（FftHelper/MathUtils/CrashLog 无直接测试文件）和 `Main.cpp` 外每个生产模块都有测试文件
   - signal → ToneBurst/NoiseGenerator/EnvelopeSignal/FilePlayback
   - capture → SweepRunner/CaptureBuffer（2026-08-03 新增，WAV flush）
