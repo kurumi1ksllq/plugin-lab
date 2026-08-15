@@ -271,7 +271,7 @@ DESIGN.md                 # 设计文档
   修复：超时/挂起持久化黑名单的路径全部 setCacheFile(tmp)；changeListenerCallback 改 pending flag + triggerAsyncUpdate（AsyncUpdater ≤50ms 合并刷新）。验证全量绿（commit message 记 158/158），Debug 热扫 ~1s。
 - **`063edf3`** docs：sync AGENTS.md —— 刷新 commit ref + 测试计数对齐（commit message 记 126/126，**实测为 158/158**，后续以 tests/AGENTS.md 158 为准）。
 
-**测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158、186/186、199/199、208/208 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（**312 个 TEST_CASE：332 含 T4 复刻插件 20，T4 停止后移除，见下方 T4 记录**）。
+**测试计数口径**：STATUS.md 历史记录中的 155/155、116/116、113/113、107/107、158/158、186/186、199/199、208/208 均为对应时点值；当前权威计数以 tests/AGENTS.md 为准（**312 个 TEST_CASE：T4 停止前 332（含 T4 复刻插件 20），T4 停止后移除 20 → 312，见下方 T4 记录**）。
 
 ## E 块任务 E3 验证记录（2026-08-08）
 
