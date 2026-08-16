@@ -34,7 +34,7 @@ source/
 
 - **SweepRunner**：不感知"测量目的"，只做 generate→process→capture I/O → **冻结不改**
 - **MeasurementSession**：感知"测什么"（type + sourceType）→ 扩展点
-- **上层（RecorderEngine 概念）**：感知"为什么测"→ 尚未实现，未来扩展放上层，不要下探
+- **上层（RecorderEngine 概念）**：感知"为什么测"→ 2026-08-15 判定**不实现独立类**（ADR 0002：职责被 `dataset` 批量编排 + #9 AI 侧承接），未来扩展放上层，不要下探
 
 ## SOURCE-UNIQUE CONVENTIONS
 
