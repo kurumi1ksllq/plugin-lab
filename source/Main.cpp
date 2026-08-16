@@ -662,7 +662,11 @@ public:
             std::lock_guard<std::mutex> lock (listLock);
             return pluginManager ? pluginManager->getKnownPlugins().getNumTypes() : 0;
         }
-        catch (...) { return 0; }
+        catch (...)
+        {
+            CRASH_LOG_ERR ("List rows", "exception caught");
+            return 0;
+        }
     }
 
     void paintListBoxItem (int row, juce::Graphics& g,
@@ -677,7 +681,10 @@ public:
             if (juce::isPositiveAndBelow (row, types.size()))
                 name = types.getReference (row).name;
         }
-        catch (...) {}
+        catch (...)
+        {
+            CRASH_LOG_ERR ("List paint", "exception caught");
+        }
 
         g.fillAll (selected ? juce::Colours::darkblue : juce::Colours::transparentBlack);
         g.setColour (juce::Colours::white);

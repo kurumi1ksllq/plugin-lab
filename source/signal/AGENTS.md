@@ -44,4 +44,4 @@
 1. 实现 `SignalGenerator` 接口（新 .h/.cpp 对）。
 2. 注册到根 `CMakeLists.txt` target_sources，**同时**加进 `tests/CMakeLists.txt`（双编译）。
 3. 新增 `tests/<Name>Tests.cpp`（确定性 ground truth 断言）。
-4. 按需接线：`MeasurementSession::Source` enum、`Protocol.h` source 轴（signal|file|noise|dynamic）、`CommandParser::parseSource`、`docs/data-schema.md`。
+4. 按需接线：`MeasurementSession::Source` enum、`Protocol.h` source 轴（signal|file|noise|dynamic）、`CommandParser::parseSource`、`SPEC.md`。

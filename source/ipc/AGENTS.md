@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-`source/ipc/` 是 AI/脚本与 GUI 的唯一通信入口：Named Pipe 收 JSON 行 → `CommandParser::handleCommand` 统一路由 → 返回 JSON。协议即契约，改协议必须同步 `docs/data-schema.md`。
+`source/ipc/` 是 AI/脚本与 GUI 的唯一通信入口：Named Pipe 收 JSON 行 → `CommandParser::handleCommand` 统一路由 → 返回 JSON。协议即契约，改协议必须同步 `SPEC.md`。
 
 ## PROTOCOL
 
@@ -31,8 +31,8 @@
 - 频响激励（块 E 任务 1）：measure 命令可选 `excitation:"sweep"|"mls"`（缺省 sweep，向后兼容）；未知值 → `{"ok":false,"error":"unknown excitation ..."}`。dataset 命令同字段：同一 dataset 内全部 frequency_response 测量（battery freq 块 + scan 块）用同一激励；未知值 → 跳过 freq 块（确定性部分失败，与 scan/compression_family 块校验语义一致）。导出 `context.measurement.excitation` 仅非缺省值（mls）时输出
 - dataset 可选块：`scan`（`param_id`+`values` 必填；`type` 省略默认 frequency_response，拒绝 gr_timeline）与 `compression_family`（`levels_db`/`speeds` 可省略，内部默认 `[-12,0]` × `[0.5,1,2]`）；校验失败仅跳过该块，其余照常执行
 - JSON 手写 raw string literal + `escapeJsonString`；`Protocol.h` 持消息类型常量与响应辅助函数
-- exportWav（块 B 任务 1）：离线全量导出上次测量 dry/wet——**3×插件声道**布局 `[dry, wet, bypass=dry 副本]`（立体声 → 6 声道 24-bit），与下节崩溃镜像（**2×声道**增量）是两种不同产物；实现 `WavExporter`，契约见 `docs/data-schema.md` §9
-- 参数时间线（块 B 任务 2）：`CommandParser` 持 `ParameterTimeline timeline;` 做录制（recordTimeline/stopTimeline，非阻塞事件录制）；`playTimeline` 走 `session->setTimelinePlayback`（会话持回放时间线，逐 block 应用 + R2 恢复）；播放结果 JSON 路径 = 输入 timeline 的 sibling `*_play.json`（手工拼接，`withFileExtension("_play.json")` 会产出 `tl._play.json` 故不可用），WAV 复用 `wavPathFor`；契约见 `docs/data-schema.md` §10
+- exportWav（块 B 任务 1）：离线全量导出上次测量 dry/wet——**3×插件声道**布局 `[dry, wet, bypass=dry 副本]`（立体声 → 6 声道 24-bit），与下节崩溃镜像（**2×声道**增量）是两种不同产物；实现 `WavExporter`，契约见 `SPEC.md` §9
+- 参数时间线（块 B 任务 2）：`CommandParser` 持 `ParameterTimeline timeline;` 做录制（recordTimeline/stopTimeline，非阻塞事件录制）；`playTimeline` 走 `session->setTimelinePlayback`（会话持回放时间线，逐 block 应用 + R2 恢复）；播放结果 JSON 路径 = 输入 timeline 的 sibling `*_play.json`（手工拼接，`withFileExtension("_play.json")` 会产出 `tl._play.json` 故不可用），WAV 复用 `wavPathFor`；契约见 `SPEC.md` §10
 
 ## RAW-CAPTURE WAV MIRROR（已接 IPC）
 
@@ -67,4 +67,4 @@
 1. `Protocol.h` 加常量
 2. `CommandParser::handleCommand` 加 case
 3. `tests/CommandParserStubs.cpp` 加 stub + `tests/CommandParserTests.cpp` 加用例
-4. 新导出走 `docs/data-schema.md` 补 schema
+4. 新导出走 `SPEC.md` 补 schema

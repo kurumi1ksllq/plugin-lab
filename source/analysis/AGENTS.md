@@ -38,12 +38,12 @@
 - **格式**：44 字节手写 RIFF 头 + 24-bit PCM（`jlimit(-1,1,sample) * 8388607`，小端 3 字节）——量化与 CaptureBuffer 增量镜像逐位一致（镜像 AudioBuffer.cpp writeWavHeader/flush 风格）；先算尺寸后写真实头（全内存，无占位回填）。
 - **错误**：文件创建/写入失败 → CRASH_LOG_WARN（含路径）+ return false；无 C++ 异常。
 - **接线**：IPC `exportWav` 命令（CommandParser.cpp）→ 会话结果 → 本模块；路径 `.json→.wav` 复用 `wavPathFor` 规则。
-- **协议契约**：docs/data-schema.md §9（二进制导出，不入 JSON schema）。
+- **协议契约**：SPEC.md §9（二进制导出，不入 JSON schema）。
 - **测试**：tests/WavExporterTests.cpp（round-trip 逐采样比对）+ tests/CommandParserTests.cpp [exportwav]（命令级）。
 
 ## SCHEMA CONTRACT
 
-`docs/data-schema.md` 是权威导出契约，8 类：context / raw_capture / frequency_response / scan / gr_timeline / compression_family / dataset / note。导出必须含：
+`SPEC.md` 是权威导出契约，8 类：context / raw_capture / frequency_response / scan / gr_timeline / compression_family / dataset / note。导出必须含：
 
 - 插件元数据：class_id（FUID）、manufacturer、version、latency_samples
 - 测量配置：generator 参数、sample_rate、block_size、fft_size、smoothing
@@ -54,4 +54,4 @@
 
 - 改导出先改 body-equiv 测试，再动 Export.cpp。
 - 分析器 Result struct 默认构造为空，MeasurementResults 每类型仅一个被填充。
-- 改 schema 顺序：docs/data-schema.md → Export.cpp → 测试（契约驱动）。
+- 改 schema 顺序：SPEC.md → Export.cpp → 测试（契约驱动）。

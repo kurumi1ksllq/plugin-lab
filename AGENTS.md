@@ -1,6 +1,6 @@
 # Plugin Lab — 项目知识库
 
-**更新:** 2026-08-11 · **Commit:** 020e798 · **Branch:** main
+**更新:** 2026-08-15 · **Commit:** 71f1388 · **Branch:** docs/doc-maintenance
 
 ## OVERVIEW
 
@@ -11,7 +11,7 @@ VST3 插件黑盒测量实验室（Windows 桌面 GUI，C++20 + JUCE 9 + CMake +
 ```
 PluginLab/
 ├── source/            # 全部生产代码（77 文件，9 模块，含块 D 新增 child/）——见 source/AGENTS.md
-│   ├── Main.cpp       # 入口 + 装配中枢（2301 行 god file）
+│   ├── Main.cpp       # 入口 + 装配中枢（2313 行 god file）
 │   ├── host/          # VST3 扫描/加载（/EHa 崩溃保护 + 黑名单）
 │   ├── signal/        # 信号生成器接口 + 8 生成器
 │   ├── capture/       # 采集管线（SweepRunner 冻结 / MeasurementSession）
@@ -20,7 +20,7 @@ PluginLab/
 │   ├── ipc/           # Named Pipe 服务器 + 命令解析
 │   ├── ui/            # PlotWidget + PluginEditorWindow
 │   └── utils/         # FftHelper / MathUtils / CrashLog
-├── tests/             # Catch2 单元测试(280/280 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
+├── tests/             # Catch2 单元测试(312/312 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
 ├── tools/             # VST3Scanner(构建可选：-DBUILD_VST3SCANNER=ON，默认关闭) + CMakeLists + PS/Python 工具脚本
 ├── samples/take01.wav # vocal 测试素材（已入库）
 ├── SPEC.md            # 工程文档：8 类导出 JSON schema + IPC 协议契约（原 docs/data-schema.md）
@@ -100,7 +100,7 @@ ctest --test-dir build -C Release --timeout 180
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
-- **空 catch / 吞异常**——违规点 `MainContentComponent::getNumRows`（`catch(...){return 0;}`）与 `MainContentComponent::paintListBoxItem`（空 catch，ListBox 回调）；每个 catch 必须 CRASH_LOG（参照 `PluginManager::scanDirectory` 扫描循环内与 `PluginManager::scanSystemDirectories` 的 catch+CRASH_LOG 模式）
+- **空 catch / 吞异常**——每个 catch 必须 CRASH_LOG（参照 `PluginManager::scanDirectory` 扫描循环内与 `PluginManager::scanSystemDirectories` 的 catch+CRASH_LOG 模式）；`MainContentComponent::getNumRows` / `paintListBoxItem` 曾是无 CRASH_LOG 的 ListBox 回调（静默吞异常），2026-08-15 已修复
 - **递归锁同一 mutex**（曾致 std::system_error 必现崩溃）——锁内只拷贝，锁外加载
 - **`JUCE_TRY`/`JUCE_CATCH_EXCEPTION`**——会重抛，禁止（用 /EHa + catch(...)）
 - **`getTotalLength()` 返回 -1**——无限长会触发 SweepRunner 静默 10s 兜底

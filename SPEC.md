@@ -3,9 +3,18 @@
 > **定位**（2026-08-11 定）：本地三文档体系之一——`SPEC.md`（工程：8 类导出 JSON schema + IPC 协议契约，原 `docs/data-schema.md`）、`DESIGN.md`（设计）、`STATUS.md`（状态）；`AGENTS.md` 为开发约束。需求与待开发走 GitHub issue。
 >
 > 2026-08-02（T5.2）编写。定义 `source/analysis/Export.h` 导出的全部 JSON 文档结构。
-> 消费者：AI 建模（DESIGN.md §9——用测量数据复刻插件行为）。所有导出都必须能被
+> 消费者：开发者/建模——用测量数据反推插件处理方式、开发效果一致的插件（DESIGN.md 开发目标）。
+> 所有导出都必须能被
 > `juce::JSON::parse` 与 python `json.load` 解析，且携带完整测量上下文以便复现。
 > 实现与测试：`source/analysis/Export.cpp`、`tests/ExportTests.cpp`（测试锁定字段与精度）。
+>
+> 2026-08-14 变更记录：新增 §11「处理顺序反推（processing order 探测）」——黑盒判定 EQ/压缩器
+> 模块顺序的设计契约（未实现，待开 issue）；产出并入 chain_doc `processing_order`，不新增导出
+> schema 类型（复用 §5 scan + §6 gr_timeline + §7 compression_family 数据）。
+>
+> 2026-08-14 定位更新：本文件（测量导出 8 类 JSON + WAV）是"可带走开发规格"的**数据侧**；
+> 反推结论侧（chain_doc 处理链路描述）契约见 `tools/describe_schema.py`（`CONTRACT_VERSION="2"`，
+> 由 `describe_chain.py` 生成）——两者合起来构成交付给开发者的完整规格，见 DESIGN.md 开发目标「规格交付链路」。
 >
 > 2026-08-04 变更记录：新增 IPC 协议命令 `getScanStatus`（扫描状态快照，见
 > `source/ipc/AGENTS.md` 协议表）——属**协议命令**而非导出文档，不入 §9 导出 schema。
@@ -72,7 +81,7 @@
 | `parameter_snapshot` | object | 测量时全部参数归一化值快照（可复现参数状态）。键为参数显示名（display name），非 param_id（param_id 经 getParams 响应暴露）                                   |
 | `source`             | object | 输入源元数据：`type`（signal/noise/file/dynamic）、`file_path`、`sample_rate`、`resample_ratio`、`duration_sec`、`noise_type`、`seed`（固定种子，噪声可复现） |
 
-**为什么需要**：AI 复刻插件行为时，同一插件的同一参数状态在不同采样率/块大小/源下表现不同；
+**为什么需要**：开发者开发效果一致的插件时，同一插件的同一参数状态在不同采样率/块大小/源下表现不同；
 上下文使数据包自洽——单文件即可精确复现测量条件。
 
 ### 数值精度
@@ -372,7 +381,7 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
 
 ## 8. dataset（建模数据包，T5.1）
 
-**单一自洽 JSON**：整合参数扫描族 + 压缩响应族 + GR 时间线 + 拟合建议，一个文件包含 AI 建模所需的全部数据与元数据（DESIGN.md §9 核心需求）。
+**单一自洽 JSON**：整合参数扫描族 + 压缩响应族 + GR 时间线 + 拟合建议，一个文件包含开发者建模所需的全部数据与元数据（DESIGN.md 开发目标核心需求）。
 
 ```json
 {
@@ -455,7 +464,7 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
 
 **可选语义**：`Dataset` 各字段均为"可选测量"——调用方只填已完成的测量，未提供项在 JSON 中**整体省略**（空 dataset 仅含 `type` + `context`）。`grTau` 与 `grTimeline` 同现。
 
-### dataset 如何支撑 AI 建模（自洽性）
+### dataset 如何支撑开发者建模（自洽性）
 
 1. **一个文件、零外部依赖**：`context` 内嵌插件标识、延迟、采样率/块大小、参数快照与输入源元数据——消费方无需查询任何外部状态即可精确复现测量条件。
 2. **四维覆盖**：
@@ -581,6 +590,71 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
 
 **回放音频**：`wav_path` 指向的 WAV（布局同 §9，dry/wet/bypass 三路）供 AI 对比
 "自动化驱动下的插件输出 vs 输入"，从而反推参数→处理的动态关系。
+
+---
+
+## 11. 处理顺序反推（processing order 探测）
+
+> 2026-08-14 定稿（设计契约；**未实现**，待开 issue）。目的：黑盒判定插件处理链的
+> **模块顺序**（EQ 在压缩器前还是后）——规格可开发性的关键缺口（DESIGN.md 开发目标）。
+> 产出并入 chain_doc `processing_order`（从"永远 unknown + canonical 建议"升级为
+> "实测 + 证据列表"）。不新增 IPC measure 类型：复用 ScanEngine（扫参数）+
+> CompressionFamily/GR 时间线（观 GR）+ 既有 latency 补偿。
+
+### 11.1 判定原理（可观测信号）
+
+顺序的可观测信号 = **扫 EQ 增益，GR/压缩曲线动不动**：
+
+```
+EQ → Dyn（压缩器前有 EQ）：压缩器检测信号已过 EQ → 改 EQ 增益，GR 跟着变
+Dyn → EQ（EQ 在压缩器后）：压缩器检测原始信号 → 改 EQ 增益，GR 不变
+```
+
+### 11.2 探测方案（三个，可组合交叉验证）
+
+| 方案 | 做法 | 判定 |
+| ---- | ---- | ---- |
+| **A. gain sweep × GR（主）** | 压缩器设明显工作区（低 threshold/高 ratio，GR 显著非零）→ EQ band 提升（+6dB @ 某频点）→ ScanEngine 扫 EQ gain 0→+12dB 每轮测 GR | GR 随 gain 单调增 → EQ→Dyn；GR 不变 → Dyn→EQ |
+| **B. 频率选择性** | band 内频点 vs band 外频点等幅注入，比较 GR | GR 差异曲线与 EQ 形状吻合 → EQ→Dyn；与任何 EQ band 无关 → 压缩器自身频率依赖侧链（非顺序证据） |
+| **C. 压缩曲线指纹（静态）** | 扫 EQ gain，拟合 compression_curve `fitted` 参数族 | threshold 漂移 → EQ→Dyn；threshold 不动仅输出整体增益变 → Dyn→EQ |
+
+**交叉验证要求**：三方案一致才给高置信；方案 A/B/C 冲突 → 降置信或 unknown。
+
+### 11.3 输出契约（并入 chain_doc.processing_order）
+
+```json
+{
+  "order": "eq->dyn",
+  "confidence": "high",
+  "basis": [
+    { "probe": "gain_sweep", "param": "Band 1 Gain", "gr_delta_db": 6.2 },
+    { "probe": "freq_selective", "in_band_gr_db": 8.1, "out_band_gr_db": 0.4 },
+    { "probe": "curve_fit", "threshold_shift_db": 5.8 }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| `order` | string | `"eq->dyn"` / `"dyn->eq"` / `"unknown"`（可扩展 `"eq->dyn->eq"` 等多段） |
+| `confidence` | string | `"high"` / `"medium"` / `"low"`——多信号一致才 high；判定不了给 `"low"` + `order:"unknown"` |
+| `basis[]` | array | 每项一个探测证据：`{probe, ...观测值}`——probe 取 `gain_sweep` / `freq_selective` / `curve_fit`，观测值字段见上表，供开发者复核 |
+
+### 11.4 已知陷阱与排除
+
+| 陷阱 | 排除方法 |
+| ---- | -------- |
+| 频率依赖侧链（现代压缩器常见） | 方案 B：GR 曲线形状与 EQ 曲线吻合才视为顺序证据 |
+| 并行压缩 / dry-wet mix | 混合比稀释 GR——多方案交叉 + 多信号验证 |
+| 多段压缩 | band 恰匹配某段 → 混淆；多 band 探测，单 band 结论仅 medium |
+| lookahead / 平滑 | 稳态测量（每轮测量达稳态后取 GR）+ 既有 latency 补偿 |
+| detector 类型（peak/RMS） | 单音 + ToneBurst + 宽带多信号交叉，结论取交集 |
+
+### 11.5 验证方案（先验已知顺序）
+
+用 `TestCompressorPlugin`（可配置 EQ→压缩器顺序）作为 ground truth 验证探测有效性：
+扫描其 EQ band gain → GR 响应必须与真实顺序一致，三方案判定全对才视为探测可靠；
+再以真机插件（如 FabFilter Pro-Q 4 + Pro-C 3 组合）实测校准 confidence 阈值。
 
 ---
 
