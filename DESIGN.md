@@ -367,7 +367,7 @@ RecorderEngine (新增, source/capture/RecorderEngine.h/cpp)   ← 顶层协调:
 - `RecorderEngine` 感知"为什么测"（批量扫描/多轮对比），管理 session 生命周期 → 新增
 - 新组件就这三个（RecorderEngine / ParameterTimeline / AnalysisStrategy）+ 两个输入/导出扩展，**不做过度设计**
 
-> **2026-08-08 实现状态注记**：上述 §8.2 为 2026-08-02 定稿设计。实际执行中按阶段 2-5 计划（git 历史：`docs/archive/plan-phase2-5.md`）P2-13 决定，**RecorderEngine / ParameterTimeline / WavExporter 显式延后未实现**；AnalysisStrategy 亦未以独立类出现（分析分流由 `MeasurementSession` 的 type+source 二维 + CommandParser 显式 source 指定承担）。阶段 2-5 实际落地为：FilePlayback/NoiseGenerator/EnvelopeSignal（signal 层）、ScanEngine（scan 层）、CompressionFamily 网格 + GR 时间线 + τ 估计（analysis 层）、datasetToJSON 数据包（见 STATUS.md 阶段 2-5 记录）。
+> **2026-08-08 实现状态注记**：上述 §8.2 为 2026-08-02 定稿设计。实际执行中按阶段 2-5 计划（git 历史：`docs/archive/plan-phase2-5.md`）P2-13 决定，**RecorderEngine / ParameterTimeline / WavExporter 显式延后未实现**；AnalysisStrategy 亦未以独立类出现（分析分流由 `MeasurementSession` 的 type+source 二维 + CommandParser 显式 source 指定承担）。阶段 2-5 实际落地为：FilePlayback/NoiseGenerator/EnvelopeSignal（signal 层）、ScanEngine（scan 层）、CompressionFamily 网格 + GR 时间线 + τ 估计（analysis 层）、datasetToJSON 数据包（见 STATUS.md 阶段 2-5 记录）。**RecorderEngine 概念 2026-08-15 判定不实现独立类（ADR 0002——职责被 `dataset` + #9 AI 侧吸收），§8.2 保留为设计方法论历史。**
 
 ### 8.3 FilePlayback 复用 SignalGenerator 接口
 
