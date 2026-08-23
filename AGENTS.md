@@ -110,6 +110,7 @@ ctest --test-dir build -C Release --timeout 180
 - **每 block 刷 UI**——必须 AsyncUpdater ~50ms 节流
 - **混用 THD/IMD 信号**（多音谐波峰交叠）、**过度设计**（"不做过度设计"为明示原则）
 - **/WX 下的任何编译警告**——提交门禁
+- **shell 文本命令写 UTF-8 中文文档**（曾致 STATUS.md T5 节 755 处 U+FFFD 乱码随 PR #71 入库，git 无完好副本只能依证据重建）——含中文的文件一律用 write/edit 工具直写、禁走 shell 重定向/heredoc/文本 cmdlet；凡写入中文内容，提交前扫 `\uFFFD` 必须为 0
 
 ## NOTES
 
