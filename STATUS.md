@@ -409,25 +409,25 @@ DESIGN.md                 # 设计文档
 
 **在途（已随 T4 终止作废）**：子进程 4 类型测量测试（child-host，AC1 证据）、最终验证——均为本分支剩余任务，随 T4 停止不再推进。
 
+## T5 真机闭环验收（issue #28，2026-08-23，分支 feat/t5-closed-loop）—— ✅ 闭环达成
 
-## T5 ����ջ����գ�issue #28��2026-08-23����֧ feat/t5-closed-loop������ ? �ջ����
+> 注：本节原文因写入编码损坏不可恢复（随 PR #71 提交时已乱码），2026-08-23 依据 commit 8db0aac message、issue #28 正文与 `out/pro-q4-t5-run{1,2}/` 实测产物逐项核对重建。
 
-**��Χ�޶���2026-08-23 �û�������**��T4 ��ͣ�����Ͻڣ���#28 ���հ� 2026-08-14 T5 ������Χִ�С���������� �� ���� �� ���� �� �������+ ͬ��������Աȣ�������ʵ�֣�T4���Աȡ�һ����������Ƴ������ɿ�������֤·���� issue #67����#28 �����ı���ͬ���޶���
+**范围修订（2026-08-23 用户确认）**：T4 复刻已停止，#28 按收敛后 2026-08-14 T5 修订范围执行——「测真机 → 反推 → 描述 → 交付规格」+ 同条件复测对比；原「复刻实现（T4）对比」一项随 T4 停止移除，规格可开发性验证路径移至 issue #67。#28 关闭时正文已同步修订。
 
-**�ջ����ݣ�FabFilter Pro-Q 4 bell��Band 1 Used=on��1kHz��+6dB��**��
+**闭环对象**：FabFilter Pro-Q 4 bell（Band 1 Used=on，1kHz，+6dB）：
 
-- **�ɼ�**��`.scratch/t5_drive.py` һ����������launch �� scan wait �� loadPlugin �� setParam Band1 �� dataset ������ + Band-1-Gain ����ɨ���� �� reverse_derive����run1/run2 ��һ��ȫ�½��̣��ű�Ϊ out/ ͬ������� glue������ batch_collect �ܼ���
-- **������S1��**��dataset.json ������ȫ ok��reverse_derive ALL CHECKS PASSED����freq 981.40 Hz�������� 1 kHz ƫ�� ?1.86% < �����ݲ� 5%��/ gain +6.00 dB��0 ��/ Q 0.6945
-- **���֣�S2��**��`compare_all.py` ������ run1 vs run2 ȫ PASS exit 0����freq/compression/gr_timeline mean |��| = 0.0000 dB��< 0.5 dB ��׼����harmonic THD mean |��| = 0.0000%��7 tones matched����gr tau SKIP��˫��һ�� invalid������ EQ �޶�̬����ȷ�ںн��ۣ�
-- **���ƾۺϣ�T1��**��aggregate_report ok=1 / degenerate=0��freq/compression/harmonic ok��gr �ΰ��α� degenerate��
-- **���T2/S3��**��describe_chain chain_doc **usable_as_spec=true**����EQ �μ� VST �������981.4 Hz / +6.0 dB / Q 0.6945 �� band peak��
-- **����ȱ���޸���TDD������֧Я����**��describe_chain �Դ� EQ ����������С���(a) ˫�� ratio ��Ϊ unity ʱ threshold ��ϲ������� fit conflict��(b) degenerate GR �ε� tau implausible �������������ԡ��޸���no-compression ����Ϊ dynamics note + `gr.section_usable` �ſ� `_why_not_spec`��pytest tools ȫ�� 174 �̣�describe_chain 31��33��
+- **采集**：`.scratch/t5_drive.py` 一键驱动脚本（launch → scan wait → loadPlugin → setParam Band 1 → dataset 四类型测量 + Band-1-Gain 参数扫描族 → reverse_derive），run1/run2 各一次全新进程复测；脚本为一次性验收驱动 glue（复用 batch_collect 装载管线），未入库
+- **反推（S1）**：dataset.json 校验全 ok，reverse_derive **ALL CHECKS PASSED**——freq 981.40 Hz（相对设定 1 kHz 偏差 −1.86% < 容差 5%）/ gain +6.00 dB（0 误差）/ Q 0.6945
+- **复现（S2）**：`compare_all.py` run1 vs run2 全 PASS exit 0——freq/compression/gr_timeline mean |Δ| = 0.0000 dB（< 0.5 dB 基准）；harmonic THD mean |Δ| = 0.0000%（7 tones matched）；gr tau SKIP（双跑一致 invalid——纯 EQ 无动态压缩，结论正确）
+- **证据聚合（T1）**：aggregate_report ok=1 / degenerate=0——freq/compression/harmonic 三段 ok，gr 段标记 degenerate
+- **描述（T2/S3）**：describe_chain chain_doc **usable_as_spec=true**（EQ 段可作 VST 开发规格：981.4 Hz / +6.0 dB / Q 0.6945 band peak）
+- **顺带缺陷修复（TDD，随 PR #71 交付）**：describe_chain 对 EQ-only 插件两处误判：(a) 双侧 ratio 归一 unity（无压缩证据）时 threshold 拟合不可辨识被误报 fit conflict；(b) degenerate GR 段的 tau implausible 判定经 `_why_not_spec` 误拦 usable_as_spec。修复：no-compression 降级为 dynamics note + `gr.section_usable=false` 门控。pytest tools 全绿 **174 通过**（describe_chain 31→33）
 
-**Pro-Q 4 ����ӳ��ʵ��У׼**����¼�� t5_drive.py ע�ͣ���`Band N Used` = ��λ����أ�`Enabled` ������ 1.0������ Used ��Ƶ��ȫƽ�����ײɽ�ѵ����Gain ���� ��30 dB��0.6 �� +6.00 dB ʵ�⣩��Frequency ���� [10 Hz, 30 kHz]������ֵ 0.5752 �� 1 kHz��0.535 �� 711.9 Hz У׼�㣩
+**Pro-Q 4 参数映射实测校准**（记录于 t5_drive.py 注释）：`Band N Used` 为槽位使能开关（区别于恒读 1.0 的 `Enabled`）；Band Gain 为线性 ±30 dB 映射（0.500→0.00 dB、0.750→+15.00 dB，故 +6 dB == 0.6）；Frequency 为 [10 Hz, 30 kHz] 对数映射（默认值 0.5752 ↔ 1 kHz，0.535 ↔ 实测 711.9 Hz 校准点）
 
-**����**��`out/pro-q4-t5-run{1,2}/`��dataset.json + report.txt + `_reports/{aggregate_report.md|json, chain_doc.md|json}`�����Ա��ж� `out/pro-q4-t5-run1/_reports/compare_run1_vs_run2.txt`��out/ ����⣬�������棩
+**产物**：`out/pro-q4-t5-run{1,2}/`（dataset.json + report.txt + `_reports/{aggregate_report.md|json, chain_doc.md|json}`；对比判读 `out/pro-q4-t5-run1/_reports/compare_run1_vs_run2.txt`）（out/ 不入库，仅本地留存）
 
-**���ն��գ�#28 �޶���**��? ��� ���������ơ�����������Ա� ȫ��· �� ? ȫ���� T3 ��׼ͨ�� �� ? ���Ʊ��� + chain_doc �ɸ���Ϊ VST ������� �� ? ��֧ �� PR �� CI �� �� ? #9 ��¼�ջ������ر�
+**最终判定（#28 验收清单全勾）**：✅ 至少 1 个真实插件跑通 测量→反推→描述→对比 全闭环 → ✅ 四类型 run1 vs run2 对比通过 T3 基准（mean |Δ| 全 = 0.0000）→ ✅ chain_doc usable_as_spec=true 可复用为 VST 开发规格 → ✅ 分支 → PR #71 → CI 绿（build-and-test / gui-tests / python-tools）→ squash 合并 8db0aac → ✅ #9 记录闭环结果并关闭（2026-08-23）
 
-**��֪����**��COMP ���ڴ� EQ �����ʧ�ܻ� unity-ratio ��Ԥ�ڣ���ѹ������ϣ�������ʵ��ע����plugin_type �������� Pro-Q 4 ��Ϊ eq-dynamics�������溬��̬ EQ ��������Ӱ�����ж���
-
+**已知限制**：COMP 段在纯 EQ 下为 unity-ratio 符合预期（无压缩器可测）；plugin_type 分类器将 Pro-Q 4 判为 eq-dynamics（参数面含动态 EQ 键所致，不影响规格判定——issue #73）
