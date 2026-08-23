@@ -41,6 +41,16 @@ jobs:
         if: always()
         run: ctest --test-dir build -C Release --timeout 180 --output-on-failure
 
+      # gui-tests job 复用本次构建的 exe（避免二次 30 分钟 MSVC 构建）
+      - name: Upload app artifact (for gui-tests)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pluginlab-app
+          path: |
+            build/PluginLab_artefacts/Release/Plugin Lab.exe
+            build/PluginLab_artefacts/Release/PluginHostChild.exe
+          retention-days: 1
+
   # tools/ Python 工具 pytest 套件（stdlib-only，无 requirements.txt）。
   # 独立轻量 job 与 C++ 构建并行——不必等 30 分钟 MSVC 构建。
   python-tools:
@@ -55,6 +65,32 @@ jobs:
       - name: Install pytest
         run: python -m pip install pytest
 
-      # 145 个用例（T1/T2/T3 七套 pytest 套件）——失败即 CI 失败
+      # 145 个用例（T1/T2/T3 七套 pytest 套件）——失败即 CI 失败。
+      # （gui_test.py 在此 job 模块级 skip：无 pywinauto——真 GUI 测试在 gui-tests job）
       - name: Test (pytest tools/)
         run: python -m pytest tools/ -q
+
+  # GUI 点击路径回归（issue #66）：复用 build-and-test 的 exe artifact。
+  # CI 无插件缓存 → S3-S5 自动 skip，S1/S2 实跑；本地真机全链路。
+  gui-tests:
+    name: gui-tests
+    needs: build-and-test
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download app artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pluginlab-app
+          path: build/PluginLab_artefacts/Release/
+
+      - name: Install pytest + pywinauto
+        run: python -m pip install pytest pywinauto
+
+      - name: GUI click-path tests (S1/S2; S3-S5 auto-skip without plugins)
+        env:
+          PLUGINLAB_EXE: ${{ github.workspace }}\build\PluginLab_artefacts\Release\Plugin Lab.exe
+        run: python -m pytest tools/gui_test.py -q

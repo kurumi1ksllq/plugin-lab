@@ -49,6 +49,7 @@ PluginLab/
 | 处理链路描述生成          | `tools/describe_chain.py`                            | 反推报告 → markdown+json 处理链路描述（EQ/动态/非线性/顺序推断）；#17 决策 |
 | 四类型导出对比               | `tools/compare_all.py`                               | CLI: freq/compression/gr/harmonic 对比         |
 | IPC 手动客户端            | `tools/ipc_client.ps1`                               | NamedPipe 客户端，可配超时                  |
+| GUI 点击路径回归测试      | `tools/gui_test.py`                                  | issue #66；pywinauto UIA invoke-only；测试 seam `PLUGINLAB_GUI_MEASURE_DELAY_MS`；CI `gui-tests` job |
 | 测试设施（假插件）        | `tests/TestPlugin.h`、`tests/TestCompressorPlugin.h` | 确定性 ground truth                         |
 
 ## CODE MAP
@@ -75,7 +76,8 @@ build\PluginLab_artefacts\Release\Plugin Lab.exe
 # 测试（BUILD_TESTS 默认 OFF；连跑 2 次验稳定）
 cmake -S . -B build -DBUILD_TESTS=ON && cmake --build build --config Release
 ctest --test-dir build -C Release --timeout 180
-# CI 见 .github/workflows/build.yml（build-and-test：Windows/MSVC 构建 + 测试，PR 门禁）
+# CI 见 .github/workflows/build.yml（build-and-test：Windows/MSVC 构建 + 测试，PR 门禁；
+#   gui-tests：GUI 点击路径回归，needs build-and-test 复用 artifact，软门禁）
 # 无 Makefile、无 package.json scripts（勿引用）
 ```
 

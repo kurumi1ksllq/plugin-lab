@@ -304,6 +304,13 @@ public:
         timelineProgress.reset (new juce::ProgressBar (timelineProgressValue));
         addAndMakeVisible (timelineProgress.get());
 
+        // Issue #66: drive the timeline button enable states at construction
+        // (no plugin loaded → Record/Play/Stop TL start disabled). Previously
+        // setTimelineButtons() only ran at the end of the three timeline
+        // actions, so the buttons stayed enabled (JUCE default) until the
+        // first Record/Stop/Play interaction.
+        setTimelineButtons();
+
         pluginManager = std::make_shared<PluginManager>();
         scanAlive = std::make_shared<std::atomic<bool>> (true);
         loadAlive = std::make_shared<std::atomic<bool>> (true);
@@ -1387,6 +1394,19 @@ private:
         measureGRButton->setEnabled (false);
         statusLabel->setText ("Measuring...", juce::dontSendNotification);
 
+        // Issue #66 test seam: measurements process offline (a 5 s sweep
+        // finishes in well under a second), so the "measuring" window above
+        // is too short for automated UI tests to observe deterministically.
+        // PLUGINLAB_GUI_MEASURE_DELAY_MS stretches exactly this window
+        // (guard armed + buttons disabled) without reordering any state
+        // transitions. Pumped, not slept: the message loop must keep
+        // servicing UIA queries and re-entrant clicks (which the shared
+        // guard rejects) — same contract as SweepRunner's yield-per-block.
+        // Default unset/0 — zero impact on normal runs.
+        if (const auto delayMs = juce::SystemStats::getEnvironmentVariable (
+                "PLUGINLAB_GUI_MEASURE_DELAY_MS", "0").getIntValue(); delayMs > 0)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (delayMs);
+
         // T4.4 live GR header: accumulate the streamed dry/wet blocks and
         // show the partial timeline while a GR measurement runs.
         grLiveActive = (type == juce::String (Protocol::MeasureType::grTimeline));
@@ -2026,6 +2046,9 @@ private:
             CRASH_LOG_WARN ("Load failed", name);
             statusLabel->setText ("Failed: " + name, juce::dontSendNotification);
             loadingRunning = false;
+            // Issue #66: a failed reload must re-disable the timeline buttons
+            // (they were enabled by the previously loaded plugin).
+            setTimelineButtons();
             return;
         }
 
@@ -2063,6 +2086,10 @@ private:
             measurementSession->setPluginInstance (rawInstance);
             livePlugin = rawInstance;
             pluginLoaded = true;
+
+            // Issue #66: a successful load must enable Record/Play (they
+            // started disabled; setTimelineButtons reads pluginLoaded).
+            setTimelineButtons();
 
             // Populate the scan parameter combo from the loaded plugin.
             fillScanParamCombo (rawInstance);
@@ -2123,6 +2150,9 @@ private:
         detachCurrentPlugin();
         pluginLoaded = false;
         livePlugin = nullptr;
+
+        // Issue #66: unloading must re-disable Record/Play.
+        setTimelineButtons();
 
         // The scan parameter combo needs a plugin — empty + disable it.
         scanParamCombo->clear();

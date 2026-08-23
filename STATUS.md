@@ -65,7 +65,7 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 - **UDP 实时流**：127.0.0.1:43210
 - **minidump**：`%TEMP%\pluginlab_crash.dmp`（崩溃时自动生成）
 - **监控脚本**：`D:\Documents\PluginLab\monitor.ps1`
-- **GUI 自动化验收**：`C:\Users\admin\AppData\Local\Temp\opencode\gui_test_full8.py`（UIA select + 日志解析 + 崩溃重启）
+- **GUI 自动化验收**：`tools/gui_test.py`（issue #66，2026-08-23 入库；pywinauto UIA invoke-only + 崩溃重启；旧临时脚本 gui_test_full8.py 已废弃）
 
 ## 阶段 2-5 计划（2026-08-03，Momus 审查定稿）
 
@@ -314,7 +314,7 @@ DESIGN.md                 # 设计文档
 
 **已知限制**：
 
-- **GUI 点击路径未自动化验证**（2026-08-10 真机时前台有全屏游戏遮挡窗口，置顶失败；按钮为 IPC 已验证命令的薄包装 + 构建 clean + 审查通过；产物 `cwd/pluginlab_timeline.json`）
+- ~~**GUI 点击路径未自动化验证**~~（已解决：2026-08-22 issue #66——`tools/gui_test.py` 五场景回归套件（S1 初始状态/S2 无插件守卫/S3 加载+测量/S4 记录-停止-回放/S5 重入守卫），pywinauto UIA invoke-only 不抢鼠标焦点；顺带修复按钮使能生命周期缺陷 ×4（构造时/加载成功/加载失败/卸载未同步 setTimelineButtons）；测量离线亚秒完成致瞬态窗口不可观察 → 生产侧测试 seam `PLUGINLAB_GUI_MEASURE_DELAY_MS`（默认 0 零影响）拉伸 Measuring 窗口；CI `gui-tests` job 复用构建 artifact，无插件缓存时 S3-S5 自动 skip）
 - **UADx 系列不可测**：processBlock 抛未知异常（块 C 保护兜底，测量返回失败不崩宿主）；magic.CURVE 编辑器消息重入致静默退出——真机验收统一用 Pro-Q 4（UADx 1176/LA-2A 等加载 OK 但测量不可用）
 - ~~回放进度为 spinner~~（已解决：2026-08-11 issue #2，GUI「事件 N/M」+ IPC 进度行）
 
