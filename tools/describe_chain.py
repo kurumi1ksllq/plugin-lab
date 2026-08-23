@@ -18,7 +18,7 @@ is pinned and consumed by describe_render.py (Wave-1 T3):
      dynamics:{present,compression:{threshold_derived,ratio_derived,
              threshold_json?,ratio_json?,knee_json?,conflict,conflict_note?},
              gr:{attack_ms,release_ms,attack_plausible,release_plausible,
-             release_flag?,note?},notes[]},
+             release_flag?,note?,section_usable},notes[]},
      nonlinearity:{verdict,thd_range_pct?,description?,reason?},
      processing_order:{order,confidence,basis[],suggested?,suggestion_note?},
      usable_as_spec:bool, why_not_spec[]}
@@ -307,10 +307,15 @@ def build_dynamics(compression_row, gr_row, ctx):
     dB) OR ratio percent difference exceeds
     LOCKED_TOLERANCES["ratio_pct"] (20%, error math mirrors
     aggregate_report._check: pct relative to the json fit). A conflict
-    note names both fits so a reader can judge them.
+    note names both fits so a reader can judge them. Exception (issue #28
+    T5): when BOTH ratios are unity within the locked tolerance there is
+    no compression evidence — the threshold fit is not identifiable and a
+    mismatch downgrades to a dynamics note instead of a conflict.
 
     gr: attack/release plausibility via describe_quality.tau_sanity
-    (locked TAU bounds + release extreme-mismatch flag).
+    (locked TAU bounds + release extreme-mismatch flag); section_usable
+    reports whether the GR section carried a usable fit at all (False for
+    degenerate/invalid rows — _why_not_spec skips its tau verdicts then).
 
     `ctx` (the enrichment dict) is accepted for signature uniformity with
     build_eq; it currently carries nothing dynamics needs.
@@ -341,13 +346,32 @@ def build_dynamics(compression_row, gr_row, ctx):
             threshold_json = json_fitted.get("threshold_db")
             ratio_json = json_fitted.get("ratio")
             knee_json = json_fitted.get("knee_db")
+
+            # No-compression evidence (issue #28 T5): when BOTH fits agree on
+            # a unity ratio (each within the locked ratio tolerance of 1.0),
+            # the plugin has no dynamics stage and its curve never crosses a
+            # threshold — the fitted threshold is not identifiable, so a
+            # derived-vs-json threshold mismatch is noise, not a conflict.
+            # Downgraded to a note; ratio-vs-ratio still compares (unity vs
+            # unity passes trivially).
+            def _unity(value):
+                return (value is not None
+                        and abs(value - 1.0) / 1.0 * 100.0
+                        <= LOCKED_TOLERANCES["ratio_pct"])
+
+            no_compression = _unity(ratio_derived) and _unity(ratio_json)
             parts = []
-            if (threshold_derived is not None and threshold_json is not None
-                    and abs(threshold_derived - threshold_json)
-                    > LOCKED_TOLERANCES["threshold_db"]):
-                parts.append(
-                    f"derived vs json threshold differ: {threshold_derived:g} "
-                    f"vs {threshold_json:g} dB")
+            if no_compression:
+                notes.append(
+                    f"no compression (derived ratio {ratio_derived:g} = json "
+                    f"{ratio_json:g}) — threshold fit not identifiable")
+            else:
+                if (threshold_derived is not None and threshold_json is not None
+                        and abs(threshold_derived - threshold_json)
+                        > LOCKED_TOLERANCES["threshold_db"]):
+                    parts.append(
+                        f"derived vs json threshold differ: {threshold_derived:g} "
+                        f"vs {threshold_json:g} dB")
             if (ratio_derived is not None and ratio_json is not None):
                 if ratio_json:
                     ratio_pct = (abs(ratio_derived - ratio_json)
@@ -381,7 +405,12 @@ def build_dynamics(compression_row, gr_row, ctx):
     gr = {"attack_ms": attack_ms, "release_ms": release_ms,
           "attack_plausible": sanity["attack_plausible"],
           "release_plausible": sanity["release_plausible"],
-          "release_flag": sanity["flag"], "note": sanity["note"]}
+          "release_flag": sanity["flag"], "note": sanity["note"],
+          # Issue #28 T5: an unusable GR section (degenerate/invalid fit —
+          # e.g. an EQ-only plugin has no gain reduction at all) carries no
+          # judgable time constants; _why_not_spec gates on this so missing
+          # dynamics evidence does not block an otherwise-clean spec.
+          "section_usable": gr_ok}
     return {"present": comp_ok or gr_ok, "compression": compression,
             "gr": gr, "notes": notes}
 
@@ -483,16 +512,21 @@ def infer_order(plugin_type, eq, dynamics, snapshot):
 def _why_not_spec(eq, dynamics, nonlinearity):
     """Reasons a plugin's measurements cannot yet drive a spec, in a fixed
     order: eq artifact, fit conflicts, implausible time constants, harmonic
-    artifact."""
+    artifact.
+
+    GR time constants block only when the GR section itself is usable
+    (issue #28 T5): a degenerate/invalid GR section (e.g. an EQ-only plugin
+    has no gain reduction to fit) carries no judgable taus, so its
+    implausibility flags are noise, not spec blockers."""
     reasons = []
     if eq["overall"] == "artifact":
         reasons.append("eq artifact")
     if dynamics["compression"]["conflict"]:
         reasons.append("compression fit conflict")
     gr = dynamics["gr"]
-    if not gr["attack_plausible"]:
+    if gr.get("section_usable", True) and not gr["attack_plausible"]:
         reasons.append("attack implausible")
-    if not gr["release_plausible"]:
+    if gr.get("section_usable", True) and not gr["release_plausible"]:
         reasons.append("release implausible")
     if nonlinearity["verdict"] == "artifact":
         reasons.append("harmonic artifact")

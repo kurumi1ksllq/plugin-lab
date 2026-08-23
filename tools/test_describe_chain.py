@@ -36,6 +36,7 @@ from test_data.chain_fixtures import (  # noqa: E402
     make_compression_clean,
     make_compression_conflict,
     make_compression_degenerate,
+    make_compression_unity_threshold_mismatch,
     make_compressor_snapshot,
     make_eq_dynamic_snapshot,
     make_eq_unused_snapshot,
@@ -271,7 +272,7 @@ def test_build_dynamics_clean():
 
 
 def test_build_dynamics_absent():
-    """Degenerate compression + invalid GR → present False, no fits."""
+    """Degenerate compression + invalid GR — present False, no fits."""
     dynamics = dc.build_dynamics(make_compression_degenerate(),
                                  make_gr_invalid(), {})
     assert dynamics["present"] is False
@@ -281,6 +282,43 @@ def test_build_dynamics_absent():
     assert compression["threshold_json"] is None
     assert dynamics["gr"]["release_plausible"] is False
     assert dynamics["notes"]
+
+
+def test_build_dynamics_unity_ratio_threshold_mismatch():
+    """Issue #28 T5: an EQ-only plugin (pro-q-4 bell) fits ratio 1.0 on BOTH
+    sides — no compression evidence — so the unidentifiable threshold fit
+    difference must NOT be a conflict. Downgraded to a note; the unusable GR
+    section carries section_usable=False so spec gating can skip it."""
+    dynamics = dc.build_dynamics(make_compression_unity_threshold_mismatch(),
+                                 make_gr_invalid(), {})
+    assert dynamics["present"] is True
+    compression = dynamics["compression"]
+    assert compression["ratio_derived"] == 1.0
+    assert compression["ratio_json"] == 1.0
+    assert compression["conflict"] is False
+    assert compression["conflict_note"] is None
+    assert any("no compression" in note for note in dynamics["notes"])
+    gr = dynamics["gr"]
+    assert gr["section_usable"] is False
+
+
+def test_why_not_spec_eq_only_usable():
+    """Issue #28 T5 end-to-end: a clean bell EQ with unity-ratio compression
+    and a degenerate GR section yields NO why_not_spec reasons -> the
+    chain_doc is usable as a VST development spec."""
+    row = {"slug": "pro-q-4", "plugin": "Pro-Q 4", "has_freq": True,
+           "has_compression": True, "has_gr": True, "has_harmonic": True,
+           "freq": make_freq_clean(),
+           "compression": make_compression_unity_threshold_mismatch(),
+           "gr": make_gr_invalid(),
+           "harmonic": make_harmonic_clean(),
+           "status": "ok"}
+    doc = dc.build_chain_doc([row], _META)
+    plugin = doc["plugins"][0]
+    assert plugin["eq"]["overall"] == "clean"
+    assert plugin["dynamics"]["compression"]["conflict"] is False
+    assert plugin["usable_as_spec"] is True, plugin["why_not_spec"]
+    assert plugin["why_not_spec"] == []
 
 
 # ---------------------------------------------------------------------------
