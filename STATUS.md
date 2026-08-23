@@ -408,3 +408,26 @@ DESIGN.md                 # è®¾è®¡æ–‡æ¡£
 - **å‚æ•°æ˜¾ç¤ºåçº¦å®š**ï¼ˆBï¼‰ï¼šä¸Ž describe_chain åˆ†ç±»å™¨æ¨¡å¼å¯¹é½æ˜¯ T5 é—­çŽ¯çš„å…³é”® seamâ€”â€”å¤åˆ»æ’ä»¶æµ‹é‡ â†’ describe_chain åˆ†ç±»ç»“æžœå¿…é¡»ä¸ŽåŽŸæ’ä»¶ä¸€è‡´
 
 **åœ¨é€”ï¼ˆå·²éš T4 ç»ˆæ­¢ä½œåºŸï¼‰**ï¼šå­è¿›ç¨‹ 4 ç±»åž‹æµ‹é‡æµ‹è¯•ï¼ˆchild-hostï¼ŒAC1 è¯æ®ï¼‰ã€æœ€ç»ˆéªŒè¯â€”â€”å‡ä¸ºæœ¬åˆ†æ”¯å‰©ä½™ä»»åŠ¡ï¼Œéš T4 åœæ­¢ä¸å†æŽ¨è¿›ã€‚
+
+
+## T5 Õæ»ú±Õ»·ÑéÊÕ£¨issue #28£¬2026-08-23£¬·ÖÖ§ feat/t5-closed-loop£©¡ª¡ª ? ±Õ»·´ï³É
+
+**·¶Î§ÐÞ¶©£¨2026-08-23 ÓÃ»§¶¨°¸£©**£ºT4 ÒÑÍ££¨¼ûÉÏ½Ú£©£¬#28 ÑéÊÕ°´ 2026-08-14 T5 ÊÕÁ²·¶Î§Ö´ÐÐ¡ª¡ª¡¸²âÕæ»ú ¡ú ·´ÍÆ ¡ú ÃèÊö ¡ú ½»¸¶¹æ¸ñ¡¹+ Í¬Ìõ¼þ¸´²â¶Ô±È£»¡¸¸´¿ÌÊµÏÖ£¨T4£©¶Ô±È¡¹Ò»Ïî´ÓÑéÊÕÖÐÒÆ³ý£¨¹æ¸ñ¿É¿ª·¢ÐÔÑéÖ¤Â·¾¶¼û issue #67£©¡£#28 ÑéÊÕÎÄ±¾ÒÑÍ¬²½ÐÞ¶©¡£
+
+**±Õ»·Êý¾Ý£¨FabFilter Pro-Q 4 bell£ºBand 1 Used=on¡¢1kHz¡¢+6dB£©**£º
+
+- **²É¼¯**£º`.scratch/t5_drive.py` Ò»´ÎÐÔÇý¶¯£¨launch ¡ú scan wait ¡ú loadPlugin ¡ú setParam Band1 ¡ú dataset ËÄÀàÐÍ + Band-1-Gain ÈýµãÉ¨Ãè×å ¡ú reverse_derive£©£¬run1/run2 ¸÷Ò»´ÎÈ«ÐÂ½ø³Ì£»½Å±¾Îª out/ Í¬¼¶²»Èë¿â glue£¨¸´ÓÃ batch_collect ¹Ü¼þ£©
+- **²âÁ¿£¨S1£©**£ºdataset.json ËÄÀàÐÍÈ« ok£»reverse_derive ALL CHECKS PASSED¡ª¡ªfreq 981.40 Hz£¨¶ÔÆÚÍû 1 kHz Æ«²î ?1.86% < Ëø¶¨ÈÝ²î 5%£©/ gain +6.00 dB£¨0 Îó²î£©/ Q 0.6945
+- **¸´ÏÖ£¨S2£©**£º`compare_all.py` ËÄÀàÐÍ run1 vs run2 È« PASS exit 0¡ª¡ªfreq/compression/gr_timeline mean |¦¤| = 0.0000 dB£¨< 0.5 dB »ù×¼£©¡¢harmonic THD mean |¦¤| = 0.0000%£¨7 tones matched£©£»gr tau SKIP£¨Ë«²àÒ»ÖÂ invalid¡ª¡ª´¿ EQ ÎÞ¶¯Ì¬ÊôÕýÈ·ºÚºÐ½áÂÛ£©
+- **·´ÍÆ¾ÛºÏ£¨T1£©**£ºaggregate_report ok=1 / degenerate=0£¨freq/compression/harmonic ok£¬gr ¶Î°´¶Î±ê degenerate£©
+- **¹æ¸ñ£¨T2/S3£©**£ºdescribe_chain chain_doc **usable_as_spec=true**¡ª¡ªEQ ¶Î¼´ VST ¿ª·¢¹æ¸ñ£¨981.4 Hz / +6.0 dB / Q 0.6945 µ¥ band peak£©
+- **¹¤¾ßÈ±ÏÝÐÞ¸´£¨TDD£¬±¾·ÖÖ§Ð¯´ø£©**£ºdescribe_chain ¶Ô´¿ EQ ²å¼þÁ½¸öÎóÅÐ¡ª¡ª(a) Ë«²à ratio ¾ùÎª unity Ê± threshold ÄâºÏ²îÒìÎóÅÐ fit conflict£»(b) degenerate GR ¶ÎµÄ tau implausible Îó×èÈû¹æ¸ñ¿ÉÓÃÐÔ¡£ÐÞ¸´£ºno-compression ½µ¼¶Îª dynamics note + `gr.section_usable` ÃÅ¿Ø `_why_not_spec`¡£pytest tools È«Á¿ 174 ÂÌ£¨describe_chain 31¡ú33£©
+
+**Pro-Q 4 ²ÎÊýÓ³ÉäÊµ²âÐ£×¼**£¨¼ÇÂ¼ÓÚ t5_drive.py ×¢ÊÍ£©£º`Band N Used` = ²ÛÎ»¼¤»î¿ª¹Ø£¨`Enabled` ³ö³§¼´ 1.0£¬²»Éè Used ÔòÆµÏìÈ«Æ½¡ª¡ªÊ×²É½ÌÑµ£©£»Gain ÏßÐÔ ¡À30 dB£¨0.6 ¡Ô +6.00 dB Êµ²â£©£»Frequency ¶ÔÊý [10 Hz, 30 kHz]£¨³ö³§Öµ 0.5752 ¡Ô 1 kHz£»0.535 ¡ú 711.9 Hz Ð£×¼µã£©
+
+**Áô´æ**£º`out/pro-q4-t5-run{1,2}/`£¨dataset.json + report.txt + `_reports/{aggregate_report.md|json, chain_doc.md|json}`£©£¬¶Ô±ÈÅÐ¶¨ `out/pro-q4-t5-run1/_reports/compare_run1_vs_run2.txt`£¨out/ ²»Èë¿â£¬±¾µØÁô´æ£©
+
+**ÑéÊÕ¶ÔÕÕ£¨#28 ÐÞ¶©ºó£©**£º? Õæ»ú ²âÁ¿¡ú·´ÍÆ¡úÃèÊö¡ú¸´²â¶Ô±È È«Á´Â· ¡¤ ? È«ÀàÐÍ T3 »ù×¼Í¨¹ý ¡¤ ? ·´ÍÆ±¨¸æ + chain_doc ¿É¸´ÓÃÎª VST ¿ª·¢¹æ¸ñ ¡¤ ? ·ÖÖ§ ¡ú PR ¡ú CI ÂÌ ¡¤ ? #9 ¼ÇÂ¼±Õ»·½á¹ûºó¹Ø±Õ
+
+**ÒÑÖªÏÞÖÆ**£ºCOMP ¶ÎÔÚ´¿ EQ ÉÏÄâºÏÊ§°Ü»ò unity-ratio ÊôÔ¤ÆÚ£¨ÎÞÑ¹Ëõ¿ÉÄâºÏ£¬±¨¸æÈçÊµ±ê×¢£©£»plugin_type ·ÖÀàÆ÷½« Pro-Q 4 ÅÐÎª eq-dynamics£¨²ÎÊýÃæº¬¶¯Ì¬ EQ ¼ü£©£¬²»Ó°Ïì¹æ¸ñÅÐ¶¨¡£
+

@@ -178,6 +178,16 @@ def make_compression_degenerate():
             "json_fitted": {}}
 
 
+def make_compression_unity_threshold_mismatch():
+    """T5 pro-q-4 bell-EQ shape (issue #28): both fits agree ratio == 1.0
+    (no compression) but the threshold fits differ (-9.03 vs 0.0 dB). On a
+    curve that never compresses the threshold is not identifiable, so this
+    is NOT a fit conflict — build_dynamics must downgrade it to a note."""
+    return {"threshold_db": -9.03, "ratio": 1.0, "status": "ok",
+            "json_fitted": {"threshold_db": 0.0, "ratio": 1.0,
+                            "knee_db": 0.0}}
+
+
 # ======================= aggregate report rows ===============================
 
 
