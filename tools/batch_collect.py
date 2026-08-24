@@ -25,12 +25,15 @@ summary still written).
 Config schema (validated in --dry-run; unknown keys anywhere -> error):
     {"plugins": {
         "<PLUGIN name>": {
+            "setup": [{"name": "...", "value": 0.5}, {"param_id": "...", "value": 0.5}],
             "scan": {"param_id": "...", "values": [0.0, 1.0], "type": "frequency_response"},
             "compression_family": {"levels_db": [-12, 0], "speeds": [0.5, 1, 2]},
             "expected": {"freq": 1000, "gain": 6, "q": 1}
         }}}
-Plugin keys match the cache PLUGIN name case-insensitively; "expected" keys
-are a subset of freq/gain/q/threshold/ratio/attack_ms/release_ms.
+Plugin keys match the cache PLUGIN name case-insensitively; "setup" entries
+are applied as setParam presets after load, before the dataset battery
+(param_id preferred over name; value normalized 0..1); "expected" keys are
+a subset of freq/gain/q/threshold/ratio/attack_ms/release_ms.
 """
 import argparse
 import csv
@@ -62,7 +65,8 @@ LOAD_TIMEOUT_SEC = 60.0
 DATASET_TIMEOUT_SEC = 600.0
 RD_TIMEOUT_SEC = 60.0
 
-PLUGIN_ENTRY_KEYS = {"scan", "compression_family", "expected"}
+PLUGIN_ENTRY_KEYS = {"setup", "scan", "compression_family", "expected"}
+SETUP_KEYS = {"name", "param_id", "value"}
 SCAN_KEYS = {"param_id", "values", "type"}
 SCAN_TYPES = {"frequency_response", "harmonic", "compression"}   # gr_timeline rejected by app
 CF_KEYS = {"levels_db", "speeds"}
@@ -187,6 +191,7 @@ def validate_config(data: object) -> dict:
         unknown = set(entry) - PLUGIN_ENTRY_KEYS
         if unknown:
             raise ValueError(f"plugin {name!r}: unknown key(s): {sorted(unknown)}")
+        _validate_setup(name, entry.get("setup"))
         _validate_scan(name, entry.get("scan"))
         _validate_compression_family(name, entry.get("compression_family"))
         _validate_expected(name, entry.get("expected"))
@@ -196,6 +201,33 @@ def validate_config(data: object) -> dict:
 def _is_number(value: object) -> bool:
     """True for int/float excluding bool (bool is an int subclass)."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _validate_setup(name: str, setup: object) -> None:
+    """Validate a plugin's setup preset list (issue #72).
+
+    A null block is skipped (compression_family semantics); an empty list is
+    a valid no-op. Each entry must be an object with exactly one of name or
+    param_id and a finite value in [0, 1] (the setParam contract).
+    """
+    if setup is None:
+        return
+    if not isinstance(setup, list):
+        raise ValueError(f"plugin {name!r}: 'setup' must be a list")
+    for i, item in enumerate(setup):
+        if not isinstance(item, dict):
+            raise ValueError(f"plugin {name!r}: setup[{i}] must be an object")
+        unknown = set(item) - SETUP_KEYS
+        if unknown:
+            raise ValueError(f"plugin {name!r}: unknown setup key(s) in "
+                             f"setup[{i}]: {sorted(unknown)}")
+        value = item.get("value")
+        if not _is_number(value) or not (0.0 <= value <= 1.0):
+            raise ValueError(f"plugin {name!r}: setup[{i}].value must be a "
+                             "number in [0, 1]")
+        if ("name" in item) == ("param_id" in item):
+            raise ValueError(f"plugin {name!r}: setup[{i}] must have exactly "
+                             "one of 'name' or 'param_id'")
 
 
 def _validate_scan(name: str, scan: object) -> None:
@@ -577,6 +609,23 @@ def process_one(pc: types.ModuleType, handle: int, entry: PlanEntry,
         except RuntimeError as exc:
             return _fail_entry(entry, f"loadPlugin: {exc}", started)
 
+        # Apply measurement-preset setParams (issue #72): each setup entry in
+        # order, param_id preferred over name. A failing setParam fails the
+        # entry; timeouts/exceptions fall through to the handler below.
+        for item in entry.cfg.get("setup") or []:
+            payload: dict = {"cmd": "setParam", "value": item["value"]}
+            if "param_id" in item:
+                payload["param_id"] = item["param_id"]
+                ident = f"param_id {item['param_id']!r}"
+            else:
+                payload["name"] = item["name"]
+                ident = f"name {item['name']!r}"
+            resp = request(pc, handle, payload, timeout_sec=30.0)
+            if not resp.get("ok"):
+                return _fail_entry(entry, f"setup {ident}: "
+                                          f"{resp.get('error') or 'failed'}",
+                                   started)
+
         payload: dict = {"cmd": "dataset", "path": str(dataset_path)}
         if types_override is not None:
             payload["types"] = types_override
@@ -689,10 +738,13 @@ def run_dry_run(args: argparse.Namespace) -> int:
         scan = cfg.get("scan")
         scan_str = (f"scan {scan['param_id']} x{len(scan['values'])}" if scan else "-")
         cf_str = "compression_family" if cfg.get("compression_family") else "-"
+        setup = cfg.get("setup")
+        setup_str = str(len(setup)) if setup else "-"
         expected = cfg.get("expected")
         exp_str = ",".join(sorted(expected)) if expected else "-"
         print(f"  [{i:>2}] {entry.name:<30} -> {entry.slug:<26} "
-              f"types={types_str} scan={scan_str} cf={cf_str} expected={exp_str}")
+              f"types={types_str} scan={scan_str} cf={cf_str} "
+              f"setup={setup_str} expected={exp_str}")
 
     known = {p.name.lower() for p in plugins}
     for key in plugins_cfg:
