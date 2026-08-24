@@ -96,6 +96,20 @@ def make_harmonic_clean():
     ]}
 
 
+def make_harmonic_clean_low_thd():
+    """Return a clean 3-tone harmonic section with LOW THD (0.01-0.5%) —
+    the compressor-like profile (compression distortion stays under ~1%),
+    which must NOT trigger the saturation downgrade (issue #79)."""
+    return {"tones_count": 3, "status": "ok", "summary": [
+        {"fundamental_hz": 1000.0, "thd_percent": 0.05, "dominant_order": 3,
+         "dominant_mag_db": -40.0},
+        {"fundamental_hz": 2000.0, "thd_percent": 0.01, "dominant_order": 2,
+         "dominant_mag_db": -45.0},
+        {"fundamental_hz": 3000.0, "thd_percent": 0.5, "dominant_order": 2,
+         "dominant_mag_db": -38.0},
+    ]}
+
+
 def make_harmonic_artifact():
     """Return the verified pro-c-3 7-tone artifact (THD 96.6-195.9%)."""
     return {"tones_count": len(_PRO_C3_TONES), "status": "ok",

@@ -377,14 +377,54 @@ def test_why_not_spec_eq_only_usable():
            "freq": make_freq_clean(),
            "compression": make_compression_unity_threshold_mismatch(),
            "gr": make_gr_invalid(),
-           "harmonic": make_harmonic_clean(),
-           "status": "ok"}
+"harmonic": make_harmonic_clean(),
+            "status": "ok"}
     doc = dc.build_chain_doc([row], _META)
     plugin = doc["plugins"][0]
     assert plugin["eq"]["overall"] == "clean"
     assert plugin["dynamics"]["compression"]["conflict"] is False
     assert plugin["usable_as_spec"] is True, plugin["why_not_spec"]
     assert plugin["why_not_spec"] == []
+
+
+def _conflict_dynamics():
+    """A dynamics block with a compression fit conflict + implausible
+    release on a usable GR section (the pro-c-3 / uadx-vibe shape)."""
+    return {"present": True,
+            "compression": {"threshold_derived": -13.47, "ratio_derived": 3.27,
+                            "threshold_json": -9.03, "ratio_json": 3.33,
+                            "knee_json": 3.0, "conflict": True,
+                            "conflict_note": "test conflict"},
+            "gr": {"attack_ms": 1.0, "release_ms": 39676.69,
+                   "attack_plausible": True, "release_plausible": False,
+                   "section_usable": True, "note": None},
+            "notes": []}
+
+
+def test_why_not_spec_saturating_downgraded():
+    """Issue #79: high-THD saturation (THD max 2.1%) with a compression fit
+    conflict + implausible release → NOT a spec blocker; a saturator's
+    compression curve is a mis-fit, not evidence against the spec."""
+    dynamics = _conflict_dynamics()
+    nonlinearity = {"verdict": "clean", "thd_range_pct": [0.8, 2.1],
+                    "description": "THD 0.8-2.1%", "reason": None}
+    eq = {"present": False, "overall": "none", "sections": [], "notes": []}
+    reasons = dc._why_not_spec(eq, dynamics, nonlinearity)
+    assert "compression fit conflict" not in reasons
+    assert "release implausible" not in reasons
+    assert reasons == []
+
+
+def test_why_not_spec_compressor_conflict_kept():
+    """Issue #79: low-THD (max 0.5%) — the compressor profile — a fit
+    conflict and implausible release DO block the spec."""
+    dynamics = _conflict_dynamics()
+    nonlinearity = {"verdict": "clean", "thd_range_pct": [0.01, 0.5],
+                    "description": "THD 0.01-0.5%", "reason": None}
+    eq = {"present": False, "overall": "none", "sections": [], "notes": []}
+    reasons = dc._why_not_spec(eq, dynamics, nonlinearity)
+    assert "compression fit conflict" in reasons
+    assert "release implausible" in reasons
 
 
 # ---------------------------------------------------------------------------

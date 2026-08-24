@@ -69,6 +69,13 @@ _NONLINEAR_SUBSTRINGS = ("Power", "Machine", "Param", "Drive", "Character",
 # blocked by a section that was never expected to fit an EQ model.
 _NON_EQ_KINDS = ("compressor", "dynamics-only", "saturation", "analyzer")
 
+# Issue #79: a saturator's THD (strong non-linearity, typically > 1%) marks
+# the plugin as non-linear dominant; its "compression" reverse-fit (and any
+# GR time constants) is a mis-fit of the saturation curve, not evidence
+# against a spec. Compressors keep THD under ~1% (soft non-linearity), so
+# their fit conflicts/implausible taus stay spec blockers.
+_SATURATION_THD_MAX_PCT = 1.0
+
 # Canonical, never-asserted processing order suggestion (eq -> dyn -> eq).
 _SUGGESTED_ORDER = "eq -> dyn -> eq"
 _SUGGESTION_NOTE = "canonical, not measured"
@@ -578,12 +585,22 @@ def _why_not_spec(eq, dynamics, nonlinearity):
     reasons = []
     if eq["overall"] == "artifact":
         reasons.append("eq artifact")
-    if dynamics["compression"]["conflict"]:
+    # Issue #79: saturation-dominant plugins (THD peak above the saturator
+    # threshold) get their compression-fit conflict / GR time-constant
+    # verdicts downgraded — the compression model does not apply to a
+    # saturation curve, so those cannot block the spec.
+    saturating = (nonlinearity.get("verdict") == "clean"
+                  and isinstance(nonlinearity.get("thd_range_pct"), list)
+                  and len(nonlinearity["thd_range_pct"]) == 2
+                  and nonlinearity["thd_range_pct"][1] > _SATURATION_THD_MAX_PCT)
+    if dynamics["compression"]["conflict"] and not saturating:
         reasons.append("compression fit conflict")
     gr = dynamics["gr"]
-    if gr.get("section_usable", True) and not gr["attack_plausible"]:
+    if (gr.get("section_usable", True) and not gr["attack_plausible"]
+            and not saturating):
         reasons.append("attack implausible")
-    if gr.get("section_usable", True) and not gr["release_plausible"]:
+    if (gr.get("section_usable", True) and not gr["release_plausible"]
+            and not saturating):
         reasons.append("release implausible")
     if nonlinearity["verdict"] == "artifact":
         reasons.append("harmonic artifact")
