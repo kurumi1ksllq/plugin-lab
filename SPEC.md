@@ -46,6 +46,10 @@
 > `stopTimeline` / `playTimeline`——参数自动化（automation）的录制与回放。录制产物为
 > `parameter_timeline` JSON（见 §10），回放产物为 `parameter_timeline_play` JSON +
 > dry/wet WAV。属协议命令 + 新导出文档，见 §10。
+>
+> 2026-08-24 变更记录（issue #65）：`loadPlugin` 命令新增多级名称寻址——第 2 级文件名
+> 去扩展名匹配、第 3 级模糊双向包含（唯一候选加载 / 多候选返回 `ambiguous plugin name`
+> + `candidates` 数组）。属协议命令寻址语义扩展，不新增导出 schema，契约见 §12。
 
 ## 导出类型一览
 
@@ -655,6 +659,44 @@ Dyn → EQ（EQ 在压缩器后）：压缩器检测原始信号 → 改 EQ 增�
 用 `TestCompressorPlugin`（可配置 EQ→压缩器顺序）作为 ground truth 验证探测有效性：
 扫描其 EQ band gain → GR 响应必须与真实顺序一致，三方案判定全对才视为探测可靠；
 再以真机插件（如 FabFilter Pro-Q 4 + Pro-C 3 组合）实测校准 confidence 阈值。
+
+---
+
+## 12. loadPlugin 命令（插件寻址契约）
+
+issue #65：`loadPlugin` 是 AI/脚本加载被测插件的唯一入口（GUI 按钮同路径，经
+`CommandParser::handleCommand` 汇聚）。实现：`source/ipc/CommandParser.cpp`。
+命中后经 `loadPluginCallback` 异步派发到消息线程（`callAsync`），响应携带插件显示名——
+本契约只扩展**匹配规则**与**歧义响应**，加载/回调语义不变。
+
+### 12.1 命令契约
+
+| 请求 | 成功响应 | 失败响应 |
+| ---- | -------- | -------- |
+| `{"cmd":"loadPlugin","path":<插件路径或名称>}` | `{"ok":true,"name":<显示名>}`；黑名单命中额外带 `"blacklisted":true` | `{"ok":false,"error":...}` |
+
+- `path` 必填；缺失 → `path required`；未接线插件管理器 → `no plugin manager`
+
+### 12.2 寻址阶梯（按顺序尝试，命中即停）
+
+| 级 | 匹配规则 | 示例 |
+| -- | -------- | ---- |
+| 1 | `fileOrIdentifier` 精确匹配，或显示名 `equalsIgnoreCase` | `"Pro-Q 4.vst3"` / `"pro-q 4"` |
+| 2 | 文件名去扩展名 `equalsIgnoreCase`（`juce::File(fileOrIdentifier).getFileNameWithoutExtension()`） | `"Pro-Q 4"` ↔ `"Pro-Q 4.vst3"` |
+| 3 | 模糊双向包含：显示名或文件名去扩展名 `containsIgnoreCase(path)`，或 `path.containsIgnoreCase(显示名)`（厂商前缀场景） | `"uadx-vibe"` → 长 id 插件；`"FabFilter Pro-Q 4"` → 显示名 `"Pro-Q 4"` |
+| 回退 | 黑名单（精确路径 / 文件名去扩展名，大小写不敏感） | `"Pianoteq 9"` ↔ 黑名单 `"Pianoteq 9.vst3"`（响应带 `blacklisted:true`） |
+| 兜底 | 以上均不中 | `{"ok":false,"error":"plugin not found"}` |
+
+### 12.3 歧义响应
+
+第 3 级恰好命中 1 个候选 → 正常加载；命中多个 → **不加载**，返回候选显示名数组
+（`escapeJsonString` 转义；数组顺序为已知插件表顺序，非契约内容）：
+
+```json
+{"ok":false,"error":"ambiguous plugin name","candidates":["Compressor One","Opto Compressor"]}
+```
+
+客户端应读取 `candidates` 后用第 1 级精确名或完整路径重试。
 
 ---
 
