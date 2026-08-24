@@ -61,6 +61,14 @@ _DYNAMICS_SUBSTRINGS = ("Threshold", "Ratio", "Attack", "Release", "Makeup",
 _NONLINEAR_SUBSTRINGS = ("Power", "Machine", "Param", "Drive", "Character",
                          "Saturation", "Tape")
 
+# Plugin families for which the EQ single-peak fit model does not apply
+# (issue #78): a non-EQ plugin's frequency response reverse-derived as one
+# EQ peak routinely lands outside sane ranges (a compressor or saturator
+# has no bell to fit). An implausible fit on these is a model mismatch,
+# not an EQ artifact — build_eq downgrades it so usable_as_spec is not
+# blocked by a section that was never expected to fit an EQ model.
+_NON_EQ_KINDS = ("compressor", "dynamics-only", "saturation", "analyzer")
+
 # Canonical, never-asserted processing order suggestion (eq -> dyn -> eq).
 _SUGGESTED_ORDER = "eq -> dyn -> eq"
 _SUGGESTION_NOTE = "canonical, not measured"
@@ -311,6 +319,22 @@ def build_eq(freq_row, ctx):
 
     verdict = dq.classify_freq_peak(freq_row,
                                     nyquist=(ctx or {}).get("sample_rate"))
+    if not verdict["plausible"]:
+        # Issue #78: an implausible single-peak EQ fit on a NON-EQ plugin
+        # (compressor / saturator / analyzer — judged from the parameter
+        # snapshot when present) is the model not applying, not bad data.
+        # Downgrade to "no resolvable EQ" so usable_as_spec is not blocked
+        # by a section that was never expected to fit an EQ model.
+        snapshot = (ctx or {}).get("parameter_snapshot")
+        if isinstance(snapshot, dict) and snapshot:
+            kind = classify_plugin_type(snapshot).get("kind")
+            if kind in _NON_EQ_KINDS:
+                return {"present": False, "overall": "none", "sections": [],
+                        "notes": [
+                            f"freq fit implausible for {kind} plugin "
+                            f"({verdict['flag']}); EQ single-peak model "
+                            "not applicable"]}
+
     section = {"freq_hz": freq_row.get("freq_hz"),
                "gain_db": freq_row.get("gain_db"),
                "q": freq_row.get("q"),

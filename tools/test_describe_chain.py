@@ -238,6 +238,39 @@ def test_build_eq_artifact():
     assert section["freq_hz"] == 18840.8
 
 
+def test_build_eq_artifact_non_eq_downgraded():
+    """Issue #78: an implausible freq fit on a NON-EQ plugin (compressor
+    snapshot) is a single-peak-model mismatch, not an EQ artifact — downgrade
+    to present False / overall none so usable_as_spec is not blocked."""
+    eq = dc.build_eq(make_freq_artifact(),
+                     {"parameter_snapshot": make_compressor_snapshot()})
+    assert eq["present"] is False
+    assert eq["overall"] == "none"
+    assert eq["sections"] == []
+    assert any("not applicable" in note for note in eq["notes"])
+
+
+def test_build_eq_artifact_eq_kept():
+    """Issue #78: an implausible fit on an EQ-plugin (eq-dynamics snapshot)
+    IS an EQ artifact — kept, so the unreliable EQ spec is not emitted."""
+    eq = dc.build_eq(make_freq_artifact(),
+                     {"parameter_snapshot": make_eq_dynamic_snapshot()})
+    assert eq["present"] is True
+    assert eq["overall"] == "artifact"
+    assert len(eq["sections"]) == 1
+    assert eq["sections"][0]["plausible"] is False
+
+
+def test_build_eq_saturation_downgraded():
+    """Issue #78: saturation plugin (uadx-vibe gain 31.61 dB out of range)
+    → none, not artifact."""
+    eq = dc.build_eq({"freq_hz": 18858.4, "gain_db": 31.61, "q": None,
+                      "status": "ok"},
+                     {"parameter_snapshot": make_saturation_snapshot()})
+    assert eq["present"] is False
+    assert eq["overall"] == "none"
+
+
 def test_build_eq_clean():
     """Sane bell → overall clean, plausible section, nyquist from ctx."""
     eq = dc.build_eq(make_freq_clean(), {"sample_rate": 48000.0})
