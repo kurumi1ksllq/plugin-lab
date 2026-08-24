@@ -415,11 +415,23 @@ def load_plugin(pc: types.ModuleType, handle: int, file: str) -> tuple[bool, str
 
 
 def launch_app() -> int:
-    """Popen the app executable (cwd = repo root); returns the PID."""
+    """Popen the app executable (cwd = repo root); returns the PID.
+
+    Windows: STARTUPINFO with SW_SHOWNOACTIVATE (4) so the app's first
+    window is shown WITHOUT activating it — launching must not steal
+    foreground focus from the user (issue #83). A plain Popen activates
+    the new GUI window and yanks focus mid-measurement.
+    """
     if not APP_EXE.exists():
         print(f"ERROR: app executable not found: {APP_EXE}")
         sys.exit(1)
-    proc = subprocess.Popen([str(APP_EXE)], cwd=str(REPO_ROOT))
+    startupinfo = None
+    if os.name == "nt":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 4  # SW_SHOWNOACTIVATE
+    proc = subprocess.Popen([str(APP_EXE)], cwd=str(REPO_ROOT),
+                            startupinfo=startupinfo)
     print(f"launched {APP_EXE.name} (PID {proc.pid})")
     return proc.pid
 
