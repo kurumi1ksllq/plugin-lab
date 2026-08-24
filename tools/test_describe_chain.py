@@ -52,6 +52,7 @@ from test_data.chain_fixtures import (  # noqa: E402
     make_multiband_comp_snapshot,
     make_pro_c3_row,
     make_pro_q4_row,
+    make_saturation_snapshot,
     make_scepter_row,
 )
 
@@ -185,6 +186,15 @@ def test_classify_unknown_row_with_one_block():
     """Degenerate row (single real block) + no snapshot → still unknown."""
     result = dc.classify_plugin_type(None, row=make_scepter_row())
     assert result["kind"] == "unknown"
+
+
+def test_classify_saturation_snapshot():
+    """Generic non-linear keys (Power/Machine/Param 1) → saturation, low
+    confidence (weak parameter-face evidence alone), basis names the keys."""
+    result = dc.classify_plugin_type(make_saturation_snapshot())
+    assert result["kind"] == "saturation"
+    assert result["confidence"] == "low"
+    assert any("Power" in item for item in result["basis"])
 
 
 # ---------------------------------------------------------------------------

@@ -288,6 +288,14 @@ def make_multiband_comp_snapshot():
             "Band 2 Attack": 0.1, "Band 2 Release": 0.2}
 
 
+def make_saturation_snapshot():
+    """Return the uadx-vibe saturation snapshot: generic non-linear keys
+    (Power / Machine / Param 1) plus a host bypass — no EQ-band or
+    dynamics keys, which classify_plugin_type must report as saturation."""
+    return {"Power": 1.0, "Machine": 0.6667, "Param 1": 0.4,
+            "Master Bypass": 0.0}
+
+
 # ======================= chain_doc builders ==================================
 
 

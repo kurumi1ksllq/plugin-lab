@@ -55,6 +55,11 @@ _ANALYZER_KEYS = ("FFT Size", "Hold Peaks", "Smoothing")
 _BAND_KEY_RE = re.compile(r"Band \d+ (Used|Frequency|Q|Gain)")
 _DYNAMICS_SUBSTRINGS = ("Threshold", "Ratio", "Attack", "Release", "Makeup",
                         "Gain")
+# Weak non-linear/saturation family markers (checked AFTER eq/dynamics, so
+# an EQ or compressor that also exposes a Drive/Character key keeps its
+# stronger classification).
+_NONLINEAR_SUBSTRINGS = ("Power", "Machine", "Param", "Drive", "Character",
+                         "Saturation", "Tape")
 
 # Canonical, never-asserted processing order suggestion (eq -> dyn -> eq).
 _SUGGESTED_ORDER = "eq -> dyn -> eq"
@@ -246,6 +251,13 @@ def classify_plugin_type(snapshot, row=None):
         if bands:
             basis.append("EQ band keys also present (multiband processor)")
         return {"kind": kind, "confidence": "high", "basis": basis}
+
+    nonlinear_keys = [key for key in snapshot
+                      if any(sub in key for sub in _NONLINEAR_SUBSTRINGS)]
+    if nonlinear_keys:
+        return {"kind": "saturation", "confidence": "low",
+                "basis": ["nonlinear/saturation keys present: "
+                          + ", ".join(sorted(nonlinear_keys))]}
 
     return {"kind": "unknown", "confidence": "low",
             "basis": ["no recognized parameter keys"]}
