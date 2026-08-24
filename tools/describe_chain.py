@@ -513,10 +513,21 @@ def build_nonlinearity(harmonic_row, all_fingerprints):
         canonical = json.dumps(raw, sort_keys=True, default=str).encode()
         fingerprint = hashlib.sha1(canonical).hexdigest()
         if fingerprint in all_fingerprints:
-            verdict = {"verdict": "artifact", "thd_range_pct": thd_range_pct,
-                       "reasons": reasons + [
-                           "identical harmonic fingerprint shared across "
-                           "plugins (shared chain suspected)"]}
+            if (thd_range_pct is not None and thd_range_pct[1] == 0.0):
+                # Issue #86: multiple clean-passthrough plugins (scepter,
+                # auto-key-2, a clean EQ) legitimately share an identical
+                # zero-THD fingerprint. That is clean behavior, NOT the
+                # rig-artifact shared-chain signal (which carries
+                # impossible THD). Keep the verdict clean and say so.
+                verdict = {"verdict": "clean", "thd_range_pct": thd_range_pct,
+                           "reasons": reasons + [
+                               "zero-THD fingerprint shared across plugins "
+                               "(clean passthrough)"]}
+            else:
+                verdict = {"verdict": "artifact", "thd_range_pct": thd_range_pct,
+                           "reasons": reasons + [
+                               "identical harmonic fingerprint shared across "
+                               "plugins (shared chain suspected)"]}
 
     description = None
     if thd_range_pct is not None:

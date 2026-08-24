@@ -488,6 +488,27 @@ def test_build_nonlinearity_artifact_shared_fingerprint():
     assert "fingerprint" in result["reason"]
 
 
+def test_build_nonlinearity_zero_thd_shared_fingerprint():
+    """Issue #86: clean-passthrough plugins (scepter / auto-key-2) share an
+    identical zero-THD fingerprint (all thd == 0.0) — that is legitimate
+    clean behavior, NOT the rig-artifact shared-chain signal. Verdict must
+    stay clean, with an explanatory reason."""
+    raw = [{"fundamental_hz": 100.0, "thd_percent": 0.0,
+            "dominant_order": 2, "dominant_mag_db": -60.0},
+           {"fundamental_hz": 200.0, "thd_percent": 0.0,
+            "dominant_order": 3, "dominant_mag_db": -70.0}]
+    groups = dq.detect_duplicate_fingerprints(
+        [{"slug": "a", "harmonic_raw": raw},
+         {"slug": "b", "harmonic_raw": raw}])
+    assert groups  # the fingerprint is genuinely shared
+    row = {"tones_count": 2, "status": "ok",
+           "summary": [dict(t) for t in raw], "harmonic_raw": raw}
+    result = dc.build_nonlinearity(row, set(groups))
+    assert result["verdict"] == "clean"
+    assert result["reason"] is not None
+    assert "zero-THD" in result["reason"]
+
+
 # ---------------------------------------------------------------------------
 # infer_order
 # ---------------------------------------------------------------------------
