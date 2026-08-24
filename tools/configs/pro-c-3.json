@@ -1,0 +1,16 @@
+{
+  "plugins": {
+    "Pro-C 3": {
+      "setup": [
+        {"param_id": "1", "value": 0.5},
+        {"param_id": "4", "value": 0.7},
+        {"param_id": "19", "value": 0.0}
+      ],
+      "scan": {
+        "param_id": "4",
+        "values": [0.56, 0.7, 0.85],
+        "type": "frequency_response"
+      }
+    }
+  }
+}

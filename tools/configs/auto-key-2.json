@@ -1,0 +1,9 @@
+{
+  "plugins": {
+    "Auto-Key 2": {
+      "setup": [
+        {"param_id": "686884362", "value": 0.0}
+      ]
+    }
+  }
+}

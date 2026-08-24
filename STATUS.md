@@ -431,3 +431,27 @@ DESIGN.md                 # 设计文档
 **最终判定（#28 验收清单全勾）**：✅ 至少 1 个真实插件跑通 测量→反推→描述→对比 全闭环 → ✅ 四类型 run1 vs run2 对比通过 T3 基准（mean |Δ| 全 = 0.0000）→ ✅ chain_doc usable_as_spec=true 可复用为 VST 开发规格 → ✅ 分支 → PR #71 → CI 绿（build-and-test / gui-tests / python-tools）→ squash 合并 8db0aac → ✅ #9 记录闭环结果并关闭（2026-08-23）
 
 **已知限制**：COMP 段在纯 EQ 下为 unity-ratio 符合预期（无压缩器可测）；plugin_type 分类器将 Pro-Q 4 判为 eq-dynamics（参数面含动态 EQ 键所致，不影响规格判定——issue #73）
+
+## 全量重采（issue #54，2026-08-24，分支 chore/remeasure-preset-configs）—— ✅ 数据层达成
+
+**背景**：#38 单音 THD 修复后 `out/` 全部历史数据失效（THD 恒 [195.8,163.0,164.9] rig 伪影，无判别力）；uadx-vibe 旧 dataset.json 为 scepter 字节副本。本重采基于修复后管线（#38）+ 非默认态预设（#72 `setup` 段）重新采集 5 插件全语料。
+
+**前置**：#72 `batch_collect` setup 预设已合并（PR #75，Pro-Q 4 T5 bell 纯配置 bit-identical 复现）；重采配置沉淀在 `tools/configs/*.json`（可复用资产）。
+
+**探参发现（关键）**：多插件同实例顺序加载时 getParams 会串扰（前插件 pluginPtr 未换、`wait_plugin_loaded` 早退返回旧插件参数）——**规避策略：每插件独立 app 实例**（一条 `batch_collect --plugin X --launch --quit` 一次），不跑 `--all` 同实例。各插件真实参数面（独立实例探得）：
+
+- **Pro-Q 4**：737 参数，Band N Used/Enabled/Frequency/Gain（映射见上节 T5 记录）
+- **Pro-C 3**：237 参数，Threshold(1)/Ratio(4)/Attack(7)/Auto Gain(19) 等——压缩器参数面完整
+- **UADx Vibe**：2084 参数，仅 Power(48)/Machine(49)/Param 1(50) 有意义（其余大量 MIDI CC）——饱和/特性机
+- **Scepter**：仅 10 参数全为分析/显示（FFT Size/Tilt/Range/Hold/Freeze/Mode）——**透明 passthrough 频谱分析器，无处理参数**，无法做非默认处理预设
+- **Auto-Key 2**：仅 3 参数（Master Bypass/Send/Key-Scale）——音高修正，无处理参数
+
+**采集结果**：5 插件全 `[ok] 4/4 types`，`out/` 全新 dataset.json（2026-08-24 23:31–23:35）。THD 已不再为恒定伪影、具判别力：UADx Vibe 2.23%（饱和，最高）＞ Pro-C 3 0.997%（压缩谐波）＞ Pro-Q 4/Scepter/Auto-Key 2 = 0.0（干净直通，物理正确）。**uadx-vibe ≠ scepter（字节不相等，md5 不同）**——旧「uadx-vibe=scepter 副本」缺陷已消除。
+
+**校准（#37 首次真机）**：`aggregate_report.py --calibrate out` —— THD lock 全 PASS（max 2.229% < 20%）；Pro-C 3 threshold/ratio/attack/release 全 PASS（真实压缩参数反推成功）。**FAIL 3 项**（pro-q-4 threshold、uadx-vibe threshold/ratio）均为**非压缩插件上 reverse_derive 参数反推不可辨识**（EQ/饱和无真实压缩阈值比，反推给出假值），非数据损坏——#54 R2 预设的首次校准探索性结果，非压缩器插件阈值/比反推意义有限。
+
+**aggregate_report**：5 plugins **ok=5 / degenerate=0 / no-data=0**——全语料非退化（对比旧数据全退化）。
+
+**describe_chain（全语料，交付物）**：pro-c-3 判为 **compressor（confidence high）**、THD clean；uadx-vibe THD clean 但 plugin_type unknown（泛化参数名）；eq 段多标 artifact（EQ 拟合保守判定）、compression fit conflict/release implausible（压缩反推对非压缩/饱和插件不可靠）。`usable_as_spec` 多为 false 反映 **describe_chain 反推工具的保守局限**（EQ 拟合与压缩反推精度），非数据退化——数据层（#54）已达成，反推精度为后续分析工程课题。
+
+**交付**：`tools/configs/*.json` 5 份非默认态预设（chore/remeasure-preset-configs 分支）+ `out/` 全新语料 + `out/_reports/{aggregate_report,chain_description}.{md,json}`（out/ 不入库）。#54 数据层验收达成，校准/describe_chain 局限记为已知限制。

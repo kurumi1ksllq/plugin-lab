@@ -1,0 +1,9 @@
+{
+  "plugins": {
+    "Scepter": {
+      "setup": [
+        {"param_id": "1652125811", "value": 0.0}
+      ]
+    }
+  }
+}

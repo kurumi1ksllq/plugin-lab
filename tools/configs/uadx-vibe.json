@@ -1,0 +1,16 @@
+{
+  "plugins": {
+    "UADx Vibe Analog Machines Essentials": {
+      "setup": [
+        {"param_id": "48", "value": 1.0},
+        {"param_id": "49", "value": 0.6667},
+        {"param_id": "50", "value": 0.7}
+      ],
+      "scan": {
+        "param_id": "50",
+        "values": [0.4, 0.7, 1.0],
+        "type": "harmonic"
+      }
+    }
+  }
+}

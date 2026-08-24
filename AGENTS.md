@@ -111,6 +111,7 @@ ctest --test-dir build -C Release --timeout 180
 - **混用 THD/IMD 信号**（多音谐波峰交叠）、**过度设计**（"不做过度设计"为明示原则）
 - **/WX 下的任何编译警告**——提交门禁
 - **shell 文本命令写 UTF-8 中文文档**（曾致 STATUS.md T5 节 755 处 U+FFFD 乱码随 PR #71 入库，git 无完好副本只能依证据重建）——含中文的文件一律用 write/edit 工具直写、禁走 shell 重定向/heredoc/文本 cmdlet；凡写入中文内容，提交前扫 `\uFFFD` 必须为 0
+- **多插件同实例顺序加载时 getParams 串扰**（#54 重采探参实测：`loadPlugin` 异步，`wait_plugin_loaded` 只轮询 getParams ok——前插件 pluginPtr 未换时早退，返回**旧插件参数**；曾致 5 插件探参全显示同一 3 通用参数 + UADx Vibe 串出 Pro-Q 4 参数）——**批量探参/测量须每插件独立 app 实例**（一条 `batch_collect --plugin X --launch --quit` 一次），勿同实例连续加载依赖 getParams 的流程
 
 ## NOTES
 
