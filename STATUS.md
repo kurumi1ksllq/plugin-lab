@@ -455,3 +455,29 @@ DESIGN.md                 # 设计文档
 **describe_chain（全语料，交付物）**：pro-c-3 判为 **compressor（confidence high）**、THD clean；uadx-vibe THD clean 但 plugin_type unknown（泛化参数名）；eq 段多标 artifact（EQ 拟合保守判定）、compression fit conflict/release implausible（压缩反推对非压缩/饱和插件不可靠）。`usable_as_spec` 多为 false 反映 **describe_chain 反推工具的保守局限**（EQ 拟合与压缩反推精度），非数据退化——数据层（#54）已达成，反推精度为后续分析工程课题。
 
 **交付**：`tools/configs/*.json` 5 份非默认态预设（chore/remeasure-preset-configs 分支）+ `out/` 全新语料 + `out/_reports/{aggregate_report,chain_description}.{md,json}`（out/ 不入库）。#54 数据层验收达成，校准/describe_chain 局限记为已知限制。
+
+## describe_chain 反推精度提升（issue #73/#78/#79/#80/#86，2026-08-24，PR #85/#87）—— ✅ usable 1 → 4/5
+
+**背景**：#54 语料重跑显示 describe_chain 对非 EQ 插件的模型失配误拦 usable_as_spec（eq artifact / compression fit conflict / 泛化参数名 unknown / 零 THD 指纹误判），5 插件仅 Pro-Q 4 可用。
+
+**五票修复**（全部 TDD RED→GREEN，工具链 pytest 194+ 绿）：
+
+- **#73**（PR #85）：classify_plugin_type 的 eq-dynamics 分支结合测量结论——dynamics 未被行使（compression ratio unity / GR 无效）→ confidence 降 low + "dynamics not exercised in measurement"。Pro-Q 4 现标 eq-dynamics (low)，不再虚标能力面
+- **#78**（PR #85）：build_eq 对非 EQ 主导插件（compressor/saturation/analyzer，由 parameter_snapshot 分类判定）的 freq 拟合 implausible 降级 eq none（single-peak 模型不适用）——pro-c-3（Q=6509 荒谬）/uadx-vibe（gain=31.6dB 越界）的 eq artifact 消除
+- **#79**（PR #85）：_why_not_spec 对饱和机（THD max > 1%，非线性主导）的 compression fit conflict / GR tau 判据降级——压缩模型不适用于饱和曲线
+- **#80**（PR #85）：classify_plugin_type 加非线性特征键表（Power/Machine/Param/Drive/Character/Saturation/Tape），置于 eq/dynamics 判定之后防误伤——uadx-vibe 从 unknown → saturation
+- **#86**（PR #87）：build_nonlinearity 对零 THD 共享指纹（所有 tone thd==0.0，干净直通插件）豁免 artifact——合法零 THD 共享指纹是 clean 行为，非 rig 伪影（伪影携带不可能 THD）；scepter/auto-key-2 解除误判
+
+**真机语料重跑（out/）**：usable_as_spec 1 → **4/5**——
+
+| 插件 | 修复前 | 修复后 |
+|---|---|---|
+| Pro-Q 4 | usable（eq clean） | usable（eq-dynamics low + dynamics not exercised） |
+| Pro-C 3 | eq artifact 拦 | eq none；release implausible **保留**（真压缩器 GR 数据差，正确拦截）|
+| UADx Vibe | unknown + artifact + conflict 拦 | **saturation + eq none → usable** |
+| Scepter | harmonic artifact 误判拦 | **clean → usable**（透明直通）|
+| Auto-Key 2 | harmonic artifact 误判拦 | **clean → usable**（音高修正直通）|
+
+**副产品**：#82 规格样板核对（Pro-Q 4 chain_doc 981.4 Hz/+6 dB/Q 0.6945 逐项 PASS，`out/_reports/spec_sample_proq4.md`）——#67 规格可开发性验证路径的第一步落地。
+
+**已知边界**：pro-c-3 的 release implausible 拦截保留（真压缩器但 GR 反推质量差，单独分析课题）；单峰 EQ 模型每 band 需一次测量；处理顺序仍为 canonical 建议非实测。
