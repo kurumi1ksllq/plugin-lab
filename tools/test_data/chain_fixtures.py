@@ -296,6 +296,30 @@ def make_saturation_snapshot():
             "Master Bypass": 0.0}
 
 
+def make_pro_q4_measured_row():
+    """Return the pro-q-4 measured row (issue #54 corpus): clean bell EQ,
+    compression both fits unity (dynamics NOT exercised), invalid GR
+    (no gain reduction), clean THD 0 — the shape classify must use to
+    downgrade eq-dynamics confidence to 'dynamics not exercised'."""
+    return {"slug": "pro-q-4", "plugin": "Pro-Q 4", "has_freq": True,
+            "has_compression": True, "has_gr": True, "has_harmonic": True,
+            "freq": make_freq_clean(),
+            "compression": make_compression_unity_threshold_mismatch(),
+            "gr": make_gr_invalid(), "harmonic": make_harmonic_clean(),
+            "status": "ok"}
+
+
+def make_dyn_active_row():
+    """Return a row where dynamics ARE exercised: compression ratio 2.5
+    (both fits) + valid GR with sane taus — eq-dynamics must keep high
+    confidence."""
+    return {"slug": "dyn-active", "plugin": "Dyn Active", "has_freq": True,
+            "has_compression": True, "has_gr": True, "has_harmonic": True,
+            "freq": make_freq_clean(),
+            "compression": make_compression_clean(), "gr": make_gr_clean(),
+            "harmonic": make_harmonic_clean(), "status": "ok"}
+
+
 # ======================= chain_doc builders ==================================
 
 

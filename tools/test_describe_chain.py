@@ -38,6 +38,7 @@ from test_data.chain_fixtures import (  # noqa: E402
     make_compression_degenerate,
     make_compression_unity_threshold_mismatch,
     make_compressor_snapshot,
+    make_dyn_active_row,
     make_eq_dynamic_snapshot,
     make_eq_unused_snapshot,
     make_freq_artifact,
@@ -51,6 +52,7 @@ from test_data.chain_fixtures import (  # noqa: E402
     make_harmonic_none,
     make_multiband_comp_snapshot,
     make_pro_c3_row,
+    make_pro_q4_measured_row,
     make_pro_q4_row,
     make_saturation_snapshot,
     make_scepter_row,
@@ -195,6 +197,27 @@ def test_classify_saturation_snapshot():
     assert result["kind"] == "saturation"
     assert result["confidence"] == "low"
     assert any("Power" in item for item in result["basis"])
+
+
+def test_classify_eq_dynamic_measured_not_exercised():
+    """eq-dynamics snapshot + measurement showing NO dynamics exercised
+    (both compression fits unity + invalid GR) → confidence low, basis
+    notes the dynamics were not exercised (issue #73)."""
+    result = dc.classify_plugin_type(make_eq_dynamic_snapshot(),
+                                     row=make_pro_q4_measured_row())
+    assert result["kind"] == "eq-dynamics"
+    assert result["confidence"] == "low"
+    assert any("not exercised" in item for item in result["basis"])
+
+
+def test_classify_eq_dynamic_measured_active():
+    """eq-dynamics snapshot + measurement with ACTIVE dynamics (ratio 2.5,
+    valid GR) → confidence stays high (issue #73)."""
+    result = dc.classify_plugin_type(make_eq_dynamic_snapshot(),
+                                     row=make_dyn_active_row())
+    assert result["kind"] == "eq-dynamics"
+    assert result["confidence"] == "high"
+    assert all("not exercised" not in item for item in result["basis"])
 
 
 # ---------------------------------------------------------------------------

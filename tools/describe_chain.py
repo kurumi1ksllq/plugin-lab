@@ -226,7 +226,28 @@ def classify_plugin_type(snapshot, row=None):
                 basis.append(f"all {len(used_keys)} bands unused "
                              "(Used == 0.0)")
             basis.append("no ratio keys (dynamic-EQ pattern)")
-            return {"kind": "eq-dynamics", "confidence": "high",
+            confidence = "high"
+            # Issue #73: the parameter face only proves the ABILITY to do
+            # per-band dynamics; the measurement may show the dynamics were
+            # never exercised (a static EQ run: compression ratio unity or
+            # a degenerate/no GR fit). Downgrade confidence then — the
+            # label reflects the active behavior, not just the capability.
+            if isinstance(row, dict):
+                comp = row.get("compression")
+                gr = row.get("gr")
+                comp_degenerate = (not isinstance(comp, dict)
+                                   or comp.get("status")
+                                   in _DEGENERATE_STATUSES)
+                ratio = comp.get("ratio") if isinstance(comp, dict) else None
+                ratio_unity = (ratio is not None
+                               and abs(ratio - 1.0) / 1.0 * 100.0
+                               <= LOCKED_TOLERANCES["ratio_pct"])
+                gr_invalid = (isinstance(gr, dict)
+                              and gr.get("valid", True) is False)
+                if comp_degenerate or ratio_unity or gr_invalid:
+                    confidence = "low"
+                    basis.append("dynamics not exercised in measurement")
+            return {"kind": "eq-dynamics", "confidence": confidence,
                     "basis": basis}
         # Ratio present → multiband compressor: fall through to the
         # dynamics branch below (compressor / dynamics-only).
