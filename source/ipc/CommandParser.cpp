@@ -489,19 +489,77 @@ juce::String CommandParser::handleControlCommands (const juce::DynamicObject& ob
         auto& knownPlugins = pluginManager->getKnownPlugins();
         auto types = knownPlugins.getTypes();
 
+        // A hit — whichever addressing level found it — dispatches identically:
+        // the description is copied, posted to the message thread, and the
+        // response answers ok with the display name. (Issue #65: this lambda
+        // keeps the original single-level response/callback semantics
+        // byte-identical; only the matching rules are extended.)
+        const auto dispatchHit = [this] (const juce::PluginDescription& d)
+        {
+            if (loadPluginCallback)
+            {
+                auto descCopy = d;
+                juce::MessageManager::callAsync ([this, descCopy] { loadPluginCallback (descCopy); });
+            }
+            return Protocol::makeResponse (true, R"("name":")" + escapeJsonString (d.name) + "\"");
+        };
+
+        // Level 1 (unchanged): fileOrIdentifier matches exactly (it is a
+        // canonical path/ID); the display name matches case-insensitively so
+        // callers can address a plugin by a loosely-cased name.
+        // Level 2 (issue #65): the file name without its extension, also
+        // case-insensitive — a caller who only knows the installer file name
+        // ("Pro-Q 4.vst3") can address the plugin as "Pro-Q 4".
         for (auto& d : types)
         {
-            // fileOrIdentifier matches exactly (it is a canonical path/ID);
-            // the display name matches case-insensitively so callers can
-            // address a plugin by a loosely-cased name.
-            if (d.fileOrIdentifier == path || d.name.equalsIgnoreCase (path))
+            const juce::String fileStem =
+                juce::File (d.fileOrIdentifier).getFileNameWithoutExtension();
+            if (d.fileOrIdentifier == path || d.name.equalsIgnoreCase (path)
+                || fileStem.equalsIgnoreCase (path))
+                return dispatchHit (d);
+        }
+
+        // Level 3 (issue #65): fuzzy bidirectional substring. A candidate is
+        // a plugin whose display name or file stem containsIgnoreCase (path),
+        // or whose display name is contained in path (vendor-prefixed queries
+        // like "FabFilter Pro-Q 4" hitting display name "Pro-Q 4"). Exactly
+        // one candidate loads; several are reported as ambiguous with their
+        // display names (the caller then disambiguates); none falls through
+        // to the blacklist fallback below.
+        {
+            juce::StringArray candidates;
+            int singleCandidate = -1;
+            for (int i = 0; i < types.size(); ++i)
             {
-                if (loadPluginCallback)
+                const auto& d = types[i];
+                const juce::String fileStem =
+                    juce::File (d.fileOrIdentifier).getFileNameWithoutExtension();
+                // The reverse direction guards against empty display names —
+                // containsIgnoreCase ("") is true for any path, which would
+                // make every nameless plugin a candidate for every request.
+                if (d.name.containsIgnoreCase (path) || fileStem.containsIgnoreCase (path)
+                    || (! d.name.isEmpty() && path.containsIgnoreCase (d.name)))
                 {
-                    auto descCopy = d;
-                    juce::MessageManager::callAsync ([this, descCopy] { loadPluginCallback (descCopy); });
+                    candidates.add (d.name);
+                    singleCandidate = i;
                 }
-                return Protocol::makeResponse (true, R"("name":")" + escapeJsonString (d.name) + "\"");
+            }
+
+            if (candidates.size() == 1)
+                return dispatchHit (types[singleCandidate]);
+
+            if (candidates.size() > 1)
+            {
+                juce::String candidateList = "[";
+                for (int i = 0; i < candidates.size(); ++i)
+                {
+                    if (i > 0)
+                        candidateList += ",";
+                    candidateList += "\"" + escapeJsonString (candidates[i]) + "\"";
+                }
+                candidateList += "]";
+                return Protocol::makeResponse (false,
+                    R"("error":"ambiguous plugin name","candidates":)" + candidateList);
             }
         }
 

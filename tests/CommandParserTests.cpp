@@ -658,6 +658,267 @@ TEST_CASE ("CommandParser: loadPlugin requires path parameter", "[commandparser]
 }
 
 //==============================================================================
+// 3c. Multi-level name resolution (issue #65) — beyond the exact path / exact
+// name match (level 1, unchanged), loadPlugin resolves a request through two
+// further addressing levels before falling back to the blacklist:
+//   level 2: fileOrIdentifier's file name without its extension,
+//            case-insensitive ("Pro-Q 4" <-> "Pro-Q 4.vst3")
+//   level 3: fuzzy bidirectional substring — display name or file stem
+//            containsIgnoreCase(path), or path containsIgnoreCase(display
+//            name) (vendor-prefixed queries like "FabFilter Pro-Q 4" hitting
+//            display name "Pro-Q 4"). Exactly one candidate loads; several
+//            are reported as ambiguous with their display names; none falls
+//            through to the blacklist fallback and "plugin not found".
+//==============================================================================
+
+TEST_CASE ("CommandParser: loadPlugin resolves by file name without extension (issue 65)",
+           "[commandparser][loadPlugin][resolution]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // The display name carries a vendor prefix; the file stem is the address
+    // a caller would guess from the installer file name.
+    PluginManager pm;
+    juce::PluginDescription desc;
+    desc.name             = "FabFilter Pro-Q 4";
+    desc.pluginFormatName = "VST3";
+    desc.fileOrIdentifier = "Pro-Q 4.vst3";
+    desc.uniqueId         = 0xABCD1234;
+    desc.numInputChannels  = 2;
+    desc.numOutputChannels = 2;
+    pm.getKnownPlugins().addType (desc);
+
+    CommandParser parser;
+    parser.setPluginManager (&pm);
+
+    std::atomic<bool> callbackFired { false };
+    juce::PluginDescription capturedDesc;
+    parser.setLoadPluginCallback ([&] (const juce::PluginDescription& d) {
+        callbackFired.store (true);
+        capturedDesc = d;
+    });
+
+    // ---- Act: address by the .vst3 file name without its extension ----
+    auto response = parser.handleCommand (R"({"cmd":"loadPlugin","path":"Pro-Q 4"})");
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (callbackFired.load());
+    REQUIRE (capturedDesc.name == "FabFilter Pro-Q 4");
+    REQUIRE (capturedDesc.fileOrIdentifier == "Pro-Q 4.vst3");
+}
+
+TEST_CASE ("CommandParser: loadPlugin file-stem match is case-insensitive (issue 65)",
+           "[commandparser][loadPlugin][resolution]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // The display name is unrelated to the file name — only level 2 can hit.
+    PluginManager pm;
+    juce::PluginDescription desc;
+    desc.name             = "ProQ4Killer";
+    desc.pluginFormatName = "VST3";
+    desc.fileOrIdentifier = "Pro-Q 4.vst3";
+    desc.uniqueId         = 0xABCD1234;
+    desc.numInputChannels  = 2;
+    desc.numOutputChannels = 2;
+    pm.getKnownPlugins().addType (desc);
+
+    CommandParser parser;
+    parser.setPluginManager (&pm);
+
+    std::atomic<bool> callbackFired { false };
+    juce::PluginDescription capturedDesc;
+    parser.setLoadPluginCallback ([&] (const juce::PluginDescription& d) {
+        callbackFired.store (true);
+        capturedDesc = d;
+    });
+
+    // ---- Act: lowercase file stem ----
+    auto response = parser.handleCommand (R"({"cmd":"loadPlugin","path":"pro-q 4"})");
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (callbackFired.load());
+    REQUIRE (capturedDesc.name == "ProQ4Killer");
+    REQUIRE (capturedDesc.fileOrIdentifier == "Pro-Q 4.vst3");
+}
+
+TEST_CASE ("CommandParser: loadPlugin resolves unique substring candidate (issue 65)",
+           "[commandparser][loadPlugin][resolution]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // Long vendor-style plugin id; the request is a unique substring of the
+    // display name ("uadx-vibe" <-> "uadx-vibe-analog-machines-essentials").
+    PluginManager pm;
+    juce::PluginDescription desc;
+    desc.name             = "uadx-vibe-analog-machines-essentials";
+    desc.pluginFormatName = "VST3";
+    desc.fileOrIdentifier = "uadx-vibe-analog-machines-essentials.vst3";
+    desc.uniqueId         = 0xABCD1234;
+    desc.numInputChannels  = 2;
+    desc.numOutputChannels = 2;
+    pm.getKnownPlugins().addType (desc);
+
+    CommandParser parser;
+    parser.setPluginManager (&pm);
+
+    std::atomic<bool> callbackFired { false };
+    juce::PluginDescription capturedDesc;
+    parser.setLoadPluginCallback ([&] (const juce::PluginDescription& d) {
+        callbackFired.store (true);
+        capturedDesc = d;
+    });
+
+    // ---- Act: substring that names exactly one plugin ----
+    auto response = parser.handleCommand (R"({"cmd":"loadPlugin","path":"uadx-vibe"})");
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains (R"("name":"uadx-vibe-analog-machines-essentials")"));
+    REQUIRE (callbackFired.load());
+    REQUIRE (capturedDesc.name == "uadx-vibe-analog-machines-essentials");
+}
+
+TEST_CASE ("CommandParser: loadPlugin reports ambiguous substring with candidates (issue 65)",
+           "[commandparser][loadPlugin][resolution]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // Two plugins whose display names both contain the request substring.
+    PluginManager pm;
+    {
+        juce::PluginDescription d;
+        d.name             = "Compressor One";
+        d.pluginFormatName = "VST3";
+        d.fileOrIdentifier = "CompressorOne.vst3";
+        d.uniqueId         = 0xABCD1234;
+        pm.getKnownPlugins().addType (d);
+    }
+    {
+        juce::PluginDescription d;
+        d.name             = "Opto Compressor";
+        d.pluginFormatName = "VST3";
+        d.fileOrIdentifier = "OptoCompressor.vst3";
+        d.uniqueId         = 0xDCBA4321;
+        pm.getKnownPlugins().addType (d);
+    }
+
+    CommandParser parser;
+    parser.setPluginManager (&pm);
+
+    std::atomic<bool> callbackFired { false };
+    parser.setLoadPluginCallback ([&] (const juce::PluginDescription&) {
+        callbackFired.store (true);
+    });
+
+    // ---- Act: "comp" is contained in both display names ----
+    auto response = parser.handleCommand (R"({"cmd":"loadPlugin","path":"comp"})");
+    flushMessageManager (200);
+
+    // ---- Assert: no load, both candidates reported ----
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("ambiguous plugin name"));
+    REQUIRE_FALSE (callbackFired.load());
+
+    // The candidates array strict-parses and carries both display names
+    // (order is the known-plugin-list order, not part of the contract).
+    auto json = juce::JSON::parse (response);
+    REQUIRE (! json.isUndefined());
+    auto* candidatesArray = json["candidates"].getArray();
+    REQUIRE (candidatesArray != nullptr);
+    REQUIRE (candidatesArray->size() == 2);
+    juce::StringArray candidateNames;
+    for (const auto& c : *candidatesArray)
+        candidateNames.add (c.toString());
+    REQUIRE (candidateNames.contains ("Compressor One"));
+    REQUIRE (candidateNames.contains ("Opto Compressor"));
+}
+
+TEST_CASE ("CommandParser: loadPlugin resolves vendor-prefixed request via display name (issue 65)",
+           "[commandparser][loadPlugin][resolution]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // Request "FabFilter Pro-Q 4" vs display name "Pro-Q 4": the third level's
+    // reverse direction — path.containsIgnoreCase (display name).
+    PluginManager pm;
+    juce::PluginDescription desc;
+    desc.name             = "Pro-Q 4";
+    desc.pluginFormatName = "VST3";
+    desc.fileOrIdentifier = "Pro-Q 4.vst3";
+    desc.uniqueId         = 0xABCD1234;
+    desc.numInputChannels  = 2;
+    desc.numOutputChannels = 2;
+    pm.getKnownPlugins().addType (desc);
+
+    CommandParser parser;
+    parser.setPluginManager (&pm);
+
+    std::atomic<bool> callbackFired { false };
+    juce::PluginDescription capturedDesc;
+    parser.setLoadPluginCallback ([&] (const juce::PluginDescription& d) {
+        callbackFired.store (true);
+        capturedDesc = d;
+    });
+
+    // ---- Act: vendor-prefixed name contains the display name ----
+    auto response = parser.handleCommand (R"({"cmd":"loadPlugin","path":"FabFilter Pro-Q 4"})");
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (callbackFired.load());
+    REQUIRE (capturedDesc.name == "Pro-Q 4");
+    REQUIRE (capturedDesc.fileOrIdentifier == "Pro-Q 4.vst3");
+}
+
+TEST_CASE ("CommandParser: loadPlugin with no fuzzy candidate falls through to not found (issue 65)",
+           "[commandparser][loadPlugin][resolution]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    // Non-empty known list — the lookup must still miss instead of
+    // fuzzy-matching some unrelated substring.
+    PluginManager pm;
+    juce::PluginDescription desc;
+    desc.name             = "FabFilter Pro-Q 4";
+    desc.pluginFormatName = "VST3";
+    desc.fileOrIdentifier = "Pro-Q 4.vst3";
+    desc.uniqueId         = 0xABCD1234;
+    desc.numInputChannels  = 2;
+    desc.numOutputChannels = 2;
+    pm.getKnownPlugins().addType (desc);
+
+    CommandParser parser;
+    parser.setPluginManager (&pm);
+
+    std::atomic<bool> callbackFired { false };
+    parser.setLoadPluginCallback ([&] (const juce::PluginDescription&) {
+        callbackFired.store (true);
+    });
+
+    // ---- Act: a request matching nothing at any level ----
+    auto response = parser.handleCommand (R"({"cmd":"loadPlugin","path":"Pro Tools"})");
+    flushMessageManager (200);
+
+    // ---- Assert: unchanged error vocabulary, no callback ----
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("plugin not found"));
+    REQUIRE_FALSE (callbackFired.load());
+}
+
+//==============================================================================
 // 4. setParam — sets plugin parameter
 //==============================================================================
 
