@@ -38,6 +38,7 @@ from test_data.chain_fixtures import (  # noqa: E402
     make_compression_degenerate,
     make_compression_unity_threshold_mismatch,
     make_compressor_snapshot,
+    make_dyn_active_row,
     make_eq_dynamic_snapshot,
     make_eq_unused_snapshot,
     make_freq_artifact,
@@ -51,6 +52,7 @@ from test_data.chain_fixtures import (  # noqa: E402
     make_harmonic_none,
     make_multiband_comp_snapshot,
     make_pro_c3_row,
+    make_pro_q4_measured_row,
     make_pro_q4_row,
     make_saturation_snapshot,
     make_scepter_row,
@@ -197,6 +199,27 @@ def test_classify_saturation_snapshot():
     assert any("Power" in item for item in result["basis"])
 
 
+def test_classify_eq_dynamic_measured_not_exercised():
+    """eq-dynamics snapshot + measurement showing NO dynamics exercised
+    (both compression fits unity + invalid GR) → confidence low, basis
+    notes the dynamics were not exercised (issue #73)."""
+    result = dc.classify_plugin_type(make_eq_dynamic_snapshot(),
+                                     row=make_pro_q4_measured_row())
+    assert result["kind"] == "eq-dynamics"
+    assert result["confidence"] == "low"
+    assert any("not exercised" in item for item in result["basis"])
+
+
+def test_classify_eq_dynamic_measured_active():
+    """eq-dynamics snapshot + measurement with ACTIVE dynamics (ratio 2.5,
+    valid GR) → confidence stays high (issue #73)."""
+    result = dc.classify_plugin_type(make_eq_dynamic_snapshot(),
+                                     row=make_dyn_active_row())
+    assert result["kind"] == "eq-dynamics"
+    assert result["confidence"] == "high"
+    assert all("not exercised" not in item for item in result["basis"])
+
+
 # ---------------------------------------------------------------------------
 # build_eq
 # ---------------------------------------------------------------------------
@@ -213,6 +236,39 @@ def test_build_eq_artifact():
     assert section["flag"] == "q_out_of_range"
     assert section["reason"] is not None
     assert section["freq_hz"] == 18840.8
+
+
+def test_build_eq_artifact_non_eq_downgraded():
+    """Issue #78: an implausible freq fit on a NON-EQ plugin (compressor
+    snapshot) is a single-peak-model mismatch, not an EQ artifact — downgrade
+    to present False / overall none so usable_as_spec is not blocked."""
+    eq = dc.build_eq(make_freq_artifact(),
+                     {"parameter_snapshot": make_compressor_snapshot()})
+    assert eq["present"] is False
+    assert eq["overall"] == "none"
+    assert eq["sections"] == []
+    assert any("not applicable" in note for note in eq["notes"])
+
+
+def test_build_eq_artifact_eq_kept():
+    """Issue #78: an implausible fit on an EQ-plugin (eq-dynamics snapshot)
+    IS an EQ artifact — kept, so the unreliable EQ spec is not emitted."""
+    eq = dc.build_eq(make_freq_artifact(),
+                     {"parameter_snapshot": make_eq_dynamic_snapshot()})
+    assert eq["present"] is True
+    assert eq["overall"] == "artifact"
+    assert len(eq["sections"]) == 1
+    assert eq["sections"][0]["plausible"] is False
+
+
+def test_build_eq_saturation_downgraded():
+    """Issue #78: saturation plugin (uadx-vibe gain 31.61 dB out of range)
+    → none, not artifact."""
+    eq = dc.build_eq({"freq_hz": 18858.4, "gain_db": 31.61, "q": None,
+                      "status": "ok"},
+                     {"parameter_snapshot": make_saturation_snapshot()})
+    assert eq["present"] is False
+    assert eq["overall"] == "none"
 
 
 def test_build_eq_clean():
@@ -321,14 +377,54 @@ def test_why_not_spec_eq_only_usable():
            "freq": make_freq_clean(),
            "compression": make_compression_unity_threshold_mismatch(),
            "gr": make_gr_invalid(),
-           "harmonic": make_harmonic_clean(),
-           "status": "ok"}
+"harmonic": make_harmonic_clean(),
+            "status": "ok"}
     doc = dc.build_chain_doc([row], _META)
     plugin = doc["plugins"][0]
     assert plugin["eq"]["overall"] == "clean"
     assert plugin["dynamics"]["compression"]["conflict"] is False
     assert plugin["usable_as_spec"] is True, plugin["why_not_spec"]
     assert plugin["why_not_spec"] == []
+
+
+def _conflict_dynamics():
+    """A dynamics block with a compression fit conflict + implausible
+    release on a usable GR section (the pro-c-3 / uadx-vibe shape)."""
+    return {"present": True,
+            "compression": {"threshold_derived": -13.47, "ratio_derived": 3.27,
+                            "threshold_json": -9.03, "ratio_json": 3.33,
+                            "knee_json": 3.0, "conflict": True,
+                            "conflict_note": "test conflict"},
+            "gr": {"attack_ms": 1.0, "release_ms": 39676.69,
+                   "attack_plausible": True, "release_plausible": False,
+                   "section_usable": True, "note": None},
+            "notes": []}
+
+
+def test_why_not_spec_saturating_downgraded():
+    """Issue #79: high-THD saturation (THD max 2.1%) with a compression fit
+    conflict + implausible release → NOT a spec blocker; a saturator's
+    compression curve is a mis-fit, not evidence against the spec."""
+    dynamics = _conflict_dynamics()
+    nonlinearity = {"verdict": "clean", "thd_range_pct": [0.8, 2.1],
+                    "description": "THD 0.8-2.1%", "reason": None}
+    eq = {"present": False, "overall": "none", "sections": [], "notes": []}
+    reasons = dc._why_not_spec(eq, dynamics, nonlinearity)
+    assert "compression fit conflict" not in reasons
+    assert "release implausible" not in reasons
+    assert reasons == []
+
+
+def test_why_not_spec_compressor_conflict_kept():
+    """Issue #79: low-THD (max 0.5%) — the compressor profile — a fit
+    conflict and implausible release DO block the spec."""
+    dynamics = _conflict_dynamics()
+    nonlinearity = {"verdict": "clean", "thd_range_pct": [0.01, 0.5],
+                    "description": "THD 0.01-0.5%", "reason": None}
+    eq = {"present": False, "overall": "none", "sections": [], "notes": []}
+    reasons = dc._why_not_spec(eq, dynamics, nonlinearity)
+    assert "compression fit conflict" in reasons
+    assert "release implausible" in reasons
 
 
 # ---------------------------------------------------------------------------

@@ -96,6 +96,20 @@ def make_harmonic_clean():
     ]}
 
 
+def make_harmonic_clean_low_thd():
+    """Return a clean 3-tone harmonic section with LOW THD (0.01-0.5%) —
+    the compressor-like profile (compression distortion stays under ~1%),
+    which must NOT trigger the saturation downgrade (issue #79)."""
+    return {"tones_count": 3, "status": "ok", "summary": [
+        {"fundamental_hz": 1000.0, "thd_percent": 0.05, "dominant_order": 3,
+         "dominant_mag_db": -40.0},
+        {"fundamental_hz": 2000.0, "thd_percent": 0.01, "dominant_order": 2,
+         "dominant_mag_db": -45.0},
+        {"fundamental_hz": 3000.0, "thd_percent": 0.5, "dominant_order": 2,
+         "dominant_mag_db": -38.0},
+    ]}
+
+
 def make_harmonic_artifact():
     """Return the verified pro-c-3 7-tone artifact (THD 96.6-195.9%)."""
     return {"tones_count": len(_PRO_C3_TONES), "status": "ok",
@@ -294,6 +308,30 @@ def make_saturation_snapshot():
     dynamics keys, which classify_plugin_type must report as saturation."""
     return {"Power": 1.0, "Machine": 0.6667, "Param 1": 0.4,
             "Master Bypass": 0.0}
+
+
+def make_pro_q4_measured_row():
+    """Return the pro-q-4 measured row (issue #54 corpus): clean bell EQ,
+    compression both fits unity (dynamics NOT exercised), invalid GR
+    (no gain reduction), clean THD 0 — the shape classify must use to
+    downgrade eq-dynamics confidence to 'dynamics not exercised'."""
+    return {"slug": "pro-q-4", "plugin": "Pro-Q 4", "has_freq": True,
+            "has_compression": True, "has_gr": True, "has_harmonic": True,
+            "freq": make_freq_clean(),
+            "compression": make_compression_unity_threshold_mismatch(),
+            "gr": make_gr_invalid(), "harmonic": make_harmonic_clean(),
+            "status": "ok"}
+
+
+def make_dyn_active_row():
+    """Return a row where dynamics ARE exercised: compression ratio 2.5
+    (both fits) + valid GR with sane taus — eq-dynamics must keep high
+    confidence."""
+    return {"slug": "dyn-active", "plugin": "Dyn Active", "has_freq": True,
+            "has_compression": True, "has_gr": True, "has_harmonic": True,
+            "freq": make_freq_clean(),
+            "compression": make_compression_clean(), "gr": make_gr_clean(),
+            "harmonic": make_harmonic_clean(), "status": "ok"}
 
 
 # ======================= chain_doc builders ==================================

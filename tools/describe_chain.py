@@ -61,6 +61,21 @@ _DYNAMICS_SUBSTRINGS = ("Threshold", "Ratio", "Attack", "Release", "Makeup",
 _NONLINEAR_SUBSTRINGS = ("Power", "Machine", "Param", "Drive", "Character",
                          "Saturation", "Tape")
 
+# Plugin families for which the EQ single-peak fit model does not apply
+# (issue #78): a non-EQ plugin's frequency response reverse-derived as one
+# EQ peak routinely lands outside sane ranges (a compressor or saturator
+# has no bell to fit). An implausible fit on these is a model mismatch,
+# not an EQ artifact — build_eq downgrades it so usable_as_spec is not
+# blocked by a section that was never expected to fit an EQ model.
+_NON_EQ_KINDS = ("compressor", "dynamics-only", "saturation", "analyzer")
+
+# Issue #79: a saturator's THD (strong non-linearity, typically > 1%) marks
+# the plugin as non-linear dominant; its "compression" reverse-fit (and any
+# GR time constants) is a mis-fit of the saturation curve, not evidence
+# against a spec. Compressors keep THD under ~1% (soft non-linearity), so
+# their fit conflicts/implausible taus stay spec blockers.
+_SATURATION_THD_MAX_PCT = 1.0
+
 # Canonical, never-asserted processing order suggestion (eq -> dyn -> eq).
 _SUGGESTED_ORDER = "eq -> dyn -> eq"
 _SUGGESTION_NOTE = "canonical, not measured"
@@ -226,7 +241,28 @@ def classify_plugin_type(snapshot, row=None):
                 basis.append(f"all {len(used_keys)} bands unused "
                              "(Used == 0.0)")
             basis.append("no ratio keys (dynamic-EQ pattern)")
-            return {"kind": "eq-dynamics", "confidence": "high",
+            confidence = "high"
+            # Issue #73: the parameter face only proves the ABILITY to do
+            # per-band dynamics; the measurement may show the dynamics were
+            # never exercised (a static EQ run: compression ratio unity or
+            # a degenerate/no GR fit). Downgrade confidence then — the
+            # label reflects the active behavior, not just the capability.
+            if isinstance(row, dict):
+                comp = row.get("compression")
+                gr = row.get("gr")
+                comp_degenerate = (not isinstance(comp, dict)
+                                   or comp.get("status")
+                                   in _DEGENERATE_STATUSES)
+                ratio = comp.get("ratio") if isinstance(comp, dict) else None
+                ratio_unity = (ratio is not None
+                               and abs(ratio - 1.0) / 1.0 * 100.0
+                               <= LOCKED_TOLERANCES["ratio_pct"])
+                gr_invalid = (isinstance(gr, dict)
+                              and gr.get("valid", True) is False)
+                if comp_degenerate or ratio_unity or gr_invalid:
+                    confidence = "low"
+                    basis.append("dynamics not exercised in measurement")
+            return {"kind": "eq-dynamics", "confidence": confidence,
                     "basis": basis}
         # Ratio present → multiband compressor: fall through to the
         # dynamics branch below (compressor / dynamics-only).
@@ -290,6 +326,22 @@ def build_eq(freq_row, ctx):
 
     verdict = dq.classify_freq_peak(freq_row,
                                     nyquist=(ctx or {}).get("sample_rate"))
+    if not verdict["plausible"]:
+        # Issue #78: an implausible single-peak EQ fit on a NON-EQ plugin
+        # (compressor / saturator / analyzer — judged from the parameter
+        # snapshot when present) is the model not applying, not bad data.
+        # Downgrade to "no resolvable EQ" so usable_as_spec is not blocked
+        # by a section that was never expected to fit an EQ model.
+        snapshot = (ctx or {}).get("parameter_snapshot")
+        if isinstance(snapshot, dict) and snapshot:
+            kind = classify_plugin_type(snapshot).get("kind")
+            if kind in _NON_EQ_KINDS:
+                return {"present": False, "overall": "none", "sections": [],
+                        "notes": [
+                            f"freq fit implausible for {kind} plugin "
+                            f"({verdict['flag']}); EQ single-peak model "
+                            "not applicable"]}
+
     section = {"freq_hz": freq_row.get("freq_hz"),
                "gain_db": freq_row.get("gain_db"),
                "q": freq_row.get("q"),
@@ -533,12 +585,22 @@ def _why_not_spec(eq, dynamics, nonlinearity):
     reasons = []
     if eq["overall"] == "artifact":
         reasons.append("eq artifact")
-    if dynamics["compression"]["conflict"]:
+    # Issue #79: saturation-dominant plugins (THD peak above the saturator
+    # threshold) get their compression-fit conflict / GR time-constant
+    # verdicts downgraded — the compression model does not apply to a
+    # saturation curve, so those cannot block the spec.
+    saturating = (nonlinearity.get("verdict") == "clean"
+                  and isinstance(nonlinearity.get("thd_range_pct"), list)
+                  and len(nonlinearity["thd_range_pct"]) == 2
+                  and nonlinearity["thd_range_pct"][1] > _SATURATION_THD_MAX_PCT)
+    if dynamics["compression"]["conflict"] and not saturating:
         reasons.append("compression fit conflict")
     gr = dynamics["gr"]
-    if gr.get("section_usable", True) and not gr["attack_plausible"]:
+    if (gr.get("section_usable", True) and not gr["attack_plausible"]
+            and not saturating):
         reasons.append("attack implausible")
-    if gr.get("section_usable", True) and not gr["release_plausible"]:
+    if (gr.get("section_usable", True) and not gr["release_plausible"]
+            and not saturating):
         reasons.append("release implausible")
     if nonlinearity["verdict"] == "artifact":
         reasons.append("harmonic artifact")
