@@ -544,7 +544,8 @@ def test_write_json_real_rows(tmp_path):
     assert doc["out_dir"] == _META["out_dir"]
     assert doc["tolerances"] == LOCKED_TOLERANCES
     assert doc["counts"] == {"total": 2, "with_data": 1, "no_data": 1,
-                             "degenerate": 0, "derivation_failed": 1}
+                             "degenerate": 0, "not_exercised": 0,
+                             "derivation_failed": 1}
     assert [p["slug"] for p in doc["plugins"]] == ["empty", "synth"]
     assert doc["plugins"][0]["status"] == "no-data"
     assert doc["plugins"][1]["plugin"] == "Synth"
@@ -584,7 +585,8 @@ def test_write_json_hand_built_rows(tmp_path):
 
     doc = json.loads(path.read_text(encoding="utf-8"))
     assert doc["counts"] == {"total": 2, "with_data": 1, "no_data": 1,
-                             "degenerate": 1, "derivation_failed": 1}
+                             "degenerate": 1, "not_exercised": 0,
+                             "derivation_failed": 1}
     assert [p["slug"] for p in doc["plugins"]] == ["flat", "ghost"]
     assert doc["plugins"][0]["status"] == "degenerate"
     assert doc["plugins"][1]["freq"]["status"] == "derivation-failed"

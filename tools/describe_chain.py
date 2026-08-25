@@ -48,7 +48,7 @@ from describe_render import render_json, render_markdown
 # ---------------------------------------------------------------------------
 
 # dataset.json keys that mark a section as carrying no usable measurement.
-_DEGENERATE_STATUSES = ("degenerate", "no-data")
+_DEGENERATE_STATUSES = ("degenerate", "no-data", "not-exercised")
 
 # Keyword families for classify_plugin_type (deterministic key matching).
 _ANALYZER_KEYS = ("FFT Size", "Hold Peaks", "Smoothing")
@@ -663,6 +663,14 @@ def build_chain_doc(rows, meta, dataset_dir=None):
         nonlinearity = build_nonlinearity(harmonic_row, shared_fingerprints)
         processing_order = infer_order(plugin_type, eq, dynamics, snapshot)
         why_not_spec = _why_not_spec(eq, dynamics, nonlinearity)
+        # Issue #100 T4: a not-exercised row (real param surface but the
+        # plugin did nothing under measurement) has no discriminative data —
+        # it must never ship as a usable spec even if its per-section
+        # verdicts look plausible.
+        if row.get("status") == "not-exercised":
+            why_not_spec = list(why_not_spec)
+            why_not_spec.append("not-exercised: plugin did nothing "
+                                "under measurement")
         plugins.append({
             "slug": row["slug"],
             "plugin": row["plugin"],

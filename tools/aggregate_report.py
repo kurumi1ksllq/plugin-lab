@@ -181,6 +181,56 @@ def is_harmonic_empty(tones):
     return not tones
 
 
+def detect_passthrough(data):
+    """True when the measurement set is a coherent 'plugin did nothing' tell.
+
+    The not-exercised marker (issue #100 T4): a plugin whose parameter
+    surface is real but whose processing does NOT engage under headless
+    measurement (Ozone 12 Equalizer mode — freq mag/phase all zero, i.e.
+    H1 = wet≈dry; compression unity; GR flat; harmonic tones present with a
+    strong fundamental but THD ≈ 0).
+
+    Deliberately NOT flagged when:
+      - the harmonic fundamental is absent (that is data loss / a quiet
+        plugin, not a passthrough — a dead host must not be hidden)
+      - any block is missing entirely (incomplete data is not a tell)
+      - freq is flat but carries a real bell / the harmonic THD is real
+        (a real flat EQ or a saturation plugin with flat freq)
+    """
+    freq = data.get("frequency_response") or {}
+    comp = data.get("compression") or {}
+    harm = data.get("harmonic") or {}
+    gr = data.get("gr_timeline") or {}
+
+    freq_points = freq.get("raw") or freq.get("smoothed_1_12") or []
+    if not freq_points:
+        return False
+    mags = [p.get("mag") for p in freq_points]
+    phases = [p.get("phase") for p in freq_points]
+    # mag all ≈ 0 dB (wet == dry amplitude) AND phase all ≈ 0 (no delay/filter)
+    freq_passthrough = all(abs(m) < 0.1 for m in mags if m is not None) \
+        and all(abs(p) < 0.1 for p in phases if p is not None)
+
+    curve = comp.get("curve") or []
+    comp_passthrough = (not curve) or all(
+        abs(point.get("gr_db", 0.0)) < 0.05 for point in curve)
+
+    tones = harm.get("tones") or []
+    if not tones:
+        return False
+    fundamentals = [t.get("fundamental_db") for t in tones]
+    has_signal = any(f is not None and f > -40.0 for f in fundamentals)
+    thds = [t.get("thd_percent", 0.0) for t in tones]
+    thd_zero = all(t is None or t < 0.1 for t in thds)
+
+    gr_timeline = (gr.get("gr") or {}).get("timeline") or []
+    gr_passthrough = (not gr_timeline) or all(
+        abs(point.get("gr_db", 0.0)) < 0.05 for point in gr_timeline)
+
+    return (freq_passthrough and comp_passthrough and gr_passthrough
+            and has_signal and thd_zero)
+
+
 # ---------------------------------------------------------------------------
 # Plugin discovery
 # ---------------------------------------------------------------------------
@@ -386,7 +436,9 @@ def analyze_plugin(dataset_path):
     Per-section verdicts: "ok" (derived), "degenerate" (data present but
     flat/unity/invalid), "derivation-failed" (exception), "no-data" (block
     absent). A bad block never crashes the report: derive_* exceptions are
-    caught per section. Overall verdict precedence: any "ok" -> "ok";
+    caught per section. Overall verdict precedence: "not-exercised" (the
+    plugin did nothing under measurement — coherent passthrough across all
+    blocks, issue #100 T4) overrides everything; else any "ok" -> "ok";
     else any "degenerate" -> "degenerate"; else "no-data".
     """
     path = Path(dataset_path)
@@ -413,14 +465,21 @@ def analyze_plugin(dataset_path):
     gr, has_gr = _analyze_gr(data)
     harmonic, has_harmonic = _analyze_harmonic(data)
 
-    statuses = [freq["status"], compression["status"], gr["status"],
-                harmonic["status"]]
-    if "ok" in statuses:
-        overall = "ok"
-    elif "degenerate" in statuses:
-        overall = "degenerate"
+    # not-exercised takes precedence over "ok": a passthrough plugin's
+    # per-section verdicts (flat freq / unity compression / 0% THD) can each
+    # look "fine", but the whole is "the plugin did nothing" — the data has
+    # no discriminative power (issue #100 T4).
+    if detect_passthrough(data):
+        overall = "not-exercised"
     else:
-        overall = "no-data"
+        statuses = [freq["status"], compression["status"], gr["status"],
+                    harmonic["status"]]
+        if "ok" in statuses:
+            overall = "ok"
+        elif "degenerate" in statuses:
+            overall = "degenerate"
+        else:
+            overall = "no-data"
 
     return {"slug": slug, "plugin": plugin,
             "has_freq": has_freq, "has_compression": has_compression,
@@ -678,11 +737,14 @@ def _count_rows(rows):
 
     with_data = at least one section carried data (even degenerate);
     no_data = no section carried data; degenerate = overall verdict
-    degenerate; derivation_failed = any section status derivation-failed
-    (e.g. an unreadable dataset file). with_data + no_data == total.
+    degenerate; not_exercised = overall verdict not-exercised (plugin did
+    nothing under measurement, issue #100 T4); derivation_failed = any
+    section status derivation-failed (e.g. an unreadable dataset file).
+    with_data + no_data == total.
     """
     with_data = 0
     degenerate = 0
+    not_exercised = 0
     derivation_failed = 0
     for row in rows:
         if any((row["has_freq"], row["has_compression"],
@@ -690,12 +752,15 @@ def _count_rows(rows):
             with_data += 1
         if row["status"] == "degenerate":
             degenerate += 1
+        if row["status"] == "not-exercised":
+            not_exercised += 1
         statuses = (row["freq"]["status"], row["compression"]["status"],
                     row["gr"]["status"], row["harmonic"]["status"])
         if "derivation-failed" in statuses:
             derivation_failed += 1
     return {"total": len(rows), "with_data": with_data,
             "no_data": len(rows) - with_data, "degenerate": degenerate,
+            "not_exercised": not_exercised,
             "derivation_failed": derivation_failed}
 
 
@@ -745,8 +810,9 @@ def _summary_markdown(counts, generated_at):
             f"| Total plugins | {counts['total']} |",
             f"| With data | {counts['with_data']} |",
             f"| No data | {counts['no_data']} |",
-            f"| Degenerate | {counts['degenerate']} |",
-            f"| Derivation failed | {counts['derivation_failed']} |",
+f"| Degenerate | {counts['degenerate']} |",
+        f"| Not exercised | {counts['not_exercised']} |",
+        f"| Derivation failed | {counts['derivation_failed']} |",
             f"| Locked tolerances | {tolerances} |",
             f"| Generated at | {generated_at} |"]
 
@@ -886,10 +952,12 @@ def main(argv=None):
                            args.json or report_dir / "aggregate_report.json")
 
     counts = _count_rows(rows)
-    ok_count = counts["total"] - counts["degenerate"] - counts["no_data"]
+    ok_count = counts["total"] - counts["degenerate"] - counts["no_data"] \
+        - counts["not_exercised"]
     print(f"out dir: {out_dir.resolve()}")
     print(f"plugins: {counts['total']} (ok={ok_count}, "
           f"degenerate={counts['degenerate']}, "
+          f"not-exercised={counts['not_exercised']}, "
           f"no-data={counts['no_data']}, "
           f"derivation-failed={counts['derivation_failed']})")
     print(f"reports: {md_path}, {json_path}")
