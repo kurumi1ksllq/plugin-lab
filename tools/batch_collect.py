@@ -64,6 +64,12 @@ SCAN_TIMEOUT_SEC = 300.0
 LOAD_TIMEOUT_SEC = 60.0
 DATASET_TIMEOUT_SEC = 600.0
 RD_TIMEOUT_SEC = 60.0
+# A plugin's load can answer getParams ok BEFORE its plugin pointer is fully
+# stable on the message thread (observed with FabFilter Pro-L 2: a setup
+# setParam right after wait_plugin_loaded can race and see "no plugin
+# loaded"). Retry only the transient no-plugin-loaded error within this
+# window; any other setParam error fails immediately.
+SETUP_RETRY_TIMEOUT_SEC = 30.0
 
 PLUGIN_ENTRY_KEYS = {"setup", "scan", "compression_family", "expected"}
 SETUP_KEYS = {"name", "param_id", "value"}
@@ -632,7 +638,17 @@ def process_one(pc: types.ModuleType, handle: int, entry: PlanEntry,
             else:
                 payload["name"] = item["name"]
                 ident = f"name {item['name']!r}"
+            # Issue #81: a plugin's load can settle after wait_plugin_loaded
+            # returns, so a setup setParam can transiently see "no plugin
+            # loaded". Retry that specific error within the setup-retry
+            # window; any other setParam failure fails the entry immediately.
+            deadline = time.monotonic() + SETUP_RETRY_TIMEOUT_SEC
             resp = request(pc, handle, payload, timeout_sec=30.0)
+            while not resp.get("ok") \
+                    and resp.get("error") == "no plugin loaded" \
+                    and time.monotonic() < deadline:
+                time.sleep(0.5)
+                resp = request(pc, handle, payload, timeout_sec=30.0)
             if not resp.get("ok"):
                 return _fail_entry(entry, f"setup {ident}: "
                                           f"{resp.get('error') or 'failed'}",
