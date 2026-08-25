@@ -1,0 +1,15 @@
+{
+  "plugins": {
+    "Ozone 12 Exciter": {
+      "setup": [
+        {"param_id": "8", "value": 0.8},
+        {"param_id": "9", "value": 1.0}
+      ],
+      "scan": {
+        "param_id": "8",
+        "values": [0.5, 0.8, 1.0],
+        "type": "harmonic"
+      }
+    }
+  }
+}

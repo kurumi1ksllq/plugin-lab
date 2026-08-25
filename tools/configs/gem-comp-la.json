@@ -1,0 +1,15 @@
+{
+  "plugins": {
+    "Gem Comp LA": {
+      "setup": [
+        {"param_id": "2135186029", "value": 0.5},
+        {"param_id": "894065497", "value": 0.5}
+      ],
+      "scan": {
+        "param_id": "2135186029",
+        "values": [0.3, 0.5, 0.7],
+        "type": "harmonic"
+      }
+    }
+  }
+}

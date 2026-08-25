@@ -1,0 +1,16 @@
+{
+  "plugins": {
+    "Ozone 12 Vintage Compressor": {
+      "setup": [
+        {"param_id": "8", "value": 0.5},
+        {"param_id": "9", "value": 0.5},
+        {"param_id": "14", "value": 0.0}
+      ],
+      "scan": {
+        "param_id": "9",
+        "values": [0.3, 0.5, 0.7],
+        "type": "harmonic"
+      }
+    }
+  }
+}

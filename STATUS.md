@@ -501,3 +501,26 @@ DESIGN.md                 # 设计文档
 **全语料现状**：7 plugins（auto-key-2 / pro-c-3 / pro-l-2 / pro-q-4 / saturn-2 / scepter / uadx-vibe），**ok=7 / degenerate=0 / no-data=0**（derivation-failed=1 = Pro-L 2）。describe_chain 7 条目。
 
 **已知边界**：elysia/Pro-MB 类「host 不暴露真实参数面的第三方插件」→ getParams 返回通用参数 + 测得字节重复数据，不可信（数据完整性检查已抓）；UADx 1176 崩溃宿主（#68）；Pro-L 2 无 EQ 峰限制器 rd 单峰不适用。
+
+## 批量扩语料第二批次（issue #81，2026-08-25）—— ✅ 8 插件新增入库（7 真数据 + 1 直通保留）
+
+**采集**（8 插件，每插件独立实例 + 非默认态预设，全部 [ok] 4/4 types + scan + rd exit 0，~2min/插件）：
+
+| 插件 | 类别 | 结果 |
+|---|---|---|
+| **Gem Comp76** | 1176 FET 压缩 | ✅ ratio 13.6:1（1176 典型硬压缩比），dynamics-only (high) |
+| **Gem Comp LA** | LA-2A 光学压缩 | ✅ ratio 3.35:1，dynamics-only (high) |
+| **Gem EQP** | Pultec EQ | ✅ 完整 EQ 曲线（-30.8 ~ +8.75 dB 低频 boost） |
+| **Ozone 12 Maximizer** | 限制器 | ✅ freq/compression 真实 |
+| **Ozone 12 Exciter** | 饱和 | ✅ 强谐波（usable=False 因强饱和，正确拦截） |
+| **Ozone 12 Vintage Tape** | 磁带饱和 | ✅ saturation (low) |
+| **Ozone 12 Vintage Compressor** | 压缩 | ✅ **compressor (high) + usable=True**——第二个真压缩器，质量优于 Pro-C 3（无 release implausible） |
+| **Ozone 12 Equalizer** | EQ | ⚠️ 4/4 但 **headless 直通**（EQ 处理不生效），**保留**记录边界 |
+
+**Ozone 12 Equalizer 直通确诊（探参脚本 + WAV 分析，非测量管线问题）**：freq mag/phase 全 0（=H1 wet≈dry 直通）、compression unity、GR 全 0、THD 0%；harmonic 有 75dB 基频（信号通过插件）。已排除：sweep/mls 激励、setup 组合（Enable/Global Amount/Bypass/Gain=1.0 全设）、默认态。**参数面真实暴露（107 参数）但 EQ 段在无 GUI headless 下处理不生效**——模式同 #68 UADx（参数暴露但处理不可用），非数据损坏。同系列 Maximizer/Exciter/Vintage Tape/Vintage Compressor 测量全正常，仅 Equalizer 直通。
+
+**describe_chain 泛化参数名误判（新开 #94）**：Equalizer 的 'Gain' 键 → 误判 dynamics-only (high) + usable=True（错误放行直通数据）；Gem EQP 的 'Power' 键 → 误判 saturation (low)（真实 EQ 数据贴错标签）。#80 类问题延伸（键表匹配基于参数名子串，'Gain'/'Power' 横跨多类型），已开 issue #94 待评估修复。
+
+**全语料现状**：15 plugins（原 7 + 新 8），**ok=15 / degenerate=0 / no-data=0**（derivation-failed=1 = Pro-L 2）。describe_chain 15 条目，类型覆盖新增 compressor/saturation/dynamics-only 三类别。工具 pytest 103 passed。
+
+**交付**：`tools/configs/` 8 份非默认态预设（gem-comp76 / gem-comp-la / gem-eqp / ozone-12-equalizer / ozone-12-maximizer / ozone-12-exciter / ozone-12-vintage-compressor / ozone-12-vintage-tape）+ `out/_reports/{aggregate_report,chain_description}.{md,json}`（out/ 不入库）。注意 aggregate_report/describe_chain 须 `--report-dir out/_reports` 显式指定（默认写当前目录）。
