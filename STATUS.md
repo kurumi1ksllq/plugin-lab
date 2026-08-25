@@ -481,3 +481,23 @@ DESIGN.md                 # 设计文档
 **副产品**：#82 规格样板核对（Pro-Q 4 chain_doc 981.4 Hz/+6 dB/Q 0.6945 逐项 PASS，`out/_reports/spec_sample_proq4.md`）——#67 规格可开发性验证路径的第一步落地。
 
 **已知边界**：pro-c-3 的 release implausible 拦截保留（真压缩器但 GR 反推质量差，单独分析课题）；单峰 EQ 模型每 band 需一次测量；处理顺序仍为 canonical 建议非实测。
+
+## 批量扩语料（issue #81，2026-08-25，分支 feat/corpus-expansion + fix/setup-retry）—— ✅ Saturn 2 新增入库
+
+**前置**：#83 焦点修复真机验证 PASS（SW_SHOWNOACTIVATE 生效，启动 app 不抢前台焦点，PR #84）。
+
+**采集**（8 候选插件，每插件独立实例 + 非默认态预设）：
+
+| 插件 | 类型 | 结果 |
+|---|---|---|
+| **Saturn 2** | 多段饱和 | ✅ setup Gain=0.9 → **THD 38-41% 强饱和真实数据**，[ok] 4/4 + rd exit 0，**新增入库** |
+| Pro-L 2 | 限制器 | [ok] 4/4 + scan，但 **rd exit 1**（无 EQ 峰限制器，reverse_derive 单峰模型不适用——已知边界） |
+| elysia alpha / Pro-MB | 压缩/动态EQ | ❌ **host 不暴露真实参数面**（getParams 返回通用 63 参数），测得**字节相同 dataset（SHA-256 一致）**→ 数据完整性标记不可信，**已剔除** |
+| UADx 1176 | 压缩标杆 | ❌ **崩溃宿主**（pipe closed，processBlock 异常实锤）→ #68 重新打开评估 |
+| UADx LA-2A / Showtime 64 | 压缩/放大 | 参数面与 1176 相同 8 宿主参数（真实参数不暴露），未采 |
+
+**顺带修复（fix/setup-retry，PR #89）**：部分插件（Pro-L 2 / Saturn 2）异步加载在 wait_plugin_loaded 返回后仍短暂抖动——setup setParam / dataset 命令竞态看到 `no plugin loaded` / `no session or plugin` 误失败。加 SETUP_RETRY_TIMEOUT_SEC=30s 瞬态重试（仅针对这两类错误，不掩盖真实错误）。TDD + 真机验证（Saturn 2 从 0.1s fail → [ok]）。
+
+**全语料现状**：7 plugins（auto-key-2 / pro-c-3 / pro-l-2 / pro-q-4 / saturn-2 / scepter / uadx-vibe），**ok=7 / degenerate=0 / no-data=0**（derivation-failed=1 = Pro-L 2）。describe_chain 7 条目。
+
+**已知边界**：elysia/Pro-MB 类「host 不暴露真实参数面的第三方插件」→ getParams 返回通用参数 + 测得字节重复数据，不可信（数据完整性检查已抓）；UADx 1176 崩溃宿主（#68）；Pro-L 2 无 EQ 峰限制器 rd 单峰不适用。
