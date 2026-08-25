@@ -662,7 +662,17 @@ def process_one(pc: types.ModuleType, handle: int, entry: PlanEntry,
         if entry.cfg.get("compression_family"):
             payload["compression_family"] = entry.cfg["compression_family"]
 
+        # Issue #81: like setup, the dataset command can transiently see
+        # "no session or plugin" while the async load's plugin-pointer swap
+        # is still settling on the message thread. Retry that specific error
+        # within the setup-retry window; any other failure fails the entry.
+        deadline = time.monotonic() + SETUP_RETRY_TIMEOUT_SEC
         resp = request(pc, handle, payload, timeout_sec=DATASET_TIMEOUT_SEC)
+        while not resp.get("ok") \
+                and resp.get("error") == "no session or plugin" \
+                and time.monotonic() < deadline:
+            time.sleep(0.5)
+            resp = request(pc, handle, payload, timeout_sec=DATASET_TIMEOUT_SEC)
         if not resp.get("ok"):
             return _fail_entry(entry, f"dataset: {resp.get('error') or 'failed'}", started)
 

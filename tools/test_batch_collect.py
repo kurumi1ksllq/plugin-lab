@@ -222,6 +222,30 @@ def test_process_one_no_setup_sends_no_setparam(tmp_path):
     assert [p["cmd"] for p in fake.sent] == ["loadPlugin", "getParams", "dataset"]
 
 
+def test_process_one_retries_transient_no_session_on_dataset(tmp_path, monkeypatch):
+    """Issue #81: like setup, the dataset command can transiently see
+    'no session or plugin' while the load's plugin-pointer swap settles. It
+    is retried within the setup-retry window; once it succeeds the battery
+    proceeds."""
+    monkeypatch.setattr(bc, "run_reverse_derive",
+                        lambda path, expected: (0, "report"))
+    fake = _FakePipe([
+        {"ok": True, "name": "Saturn 2"},
+        {"ok": True, "params": []},
+        {"ok": True, "param": "0", "value": 0.9},          # setup setParam ok
+        {"ok": False, "error": "no session or plugin"},   # dataset transient
+        {"ok": True, "types": {"frequency_response": True}, "scan": True},
+    ])
+    entry = _entry({"setup": [{"param_id": "0", "value": 0.9}]})
+
+    result = bc.process_one(fake, 1, entry, tmp_path, None)
+
+    cmds = [p["cmd"] for p in fake.sent]
+    assert cmds == ["loadPlugin", "getParams", "setParam",
+                    "dataset", "dataset"]
+    assert result["ok"] is True
+
+
 # ---------------------------------------------------------------------------
 # run_dry_run: setup display
 # ---------------------------------------------------------------------------
