@@ -598,10 +598,13 @@ class AppGoneError(RuntimeError):
 
 
 def process_one(pc: types.ModuleType, handle: int, entry: PlanEntry,
-                out_dir: Path, types_override: list[str] | None) -> dict:
+                out_dir: Path, types_override: list[str] | None,
+                verify_repro: bool = False) -> dict:
     """Run the full per-plugin pipeline; returns a summary entry dict.
 
     ok == dataset ok:true AND reverse_derive completed with exit 0.
+    With verify_repro, a second dataset battery runs to repro_<slug>.json
+    and the two datasets are compared (issue #98 T3 reproducibility).
     """
     started = time.monotonic()
     plugin_dir = out_dir / entry.slug
@@ -689,11 +692,39 @@ def process_one(pc: types.ModuleType, handle: int, entry: PlanEntry,
         except OSError as exc:
             print(f"  warning: cannot write report for {entry.name!r}: {exc}")
 
+        # Reproducibility check (issue #98 T3): re-run the dataset battery to a
+        # sibling repro_<slug>.json and compare all four types. A failing repro
+        # does NOT fail the plugin entry (the data is still collected); it is
+        # reported in the summary as a stability warning.
+        repro_result = None
+        if verify_repro:
+            repro_path = (plugin_dir / "repro_dataset.json").resolve()
+            repro_payload = dict(payload)
+            repro_payload["path"] = str(repro_path)
+            repro_resp = request(pc, handle, repro_payload,
+                                 timeout_sec=DATASET_TIMEOUT_SEC)
+            if not repro_resp.get("ok"):
+                repro_result = {"ok": False,
+                                "error": repro_resp.get("error") or "repro dataset failed"}
+                print(f"  warning: repro dataset failed for {entry.name!r}: "
+                      f"{repro_result['error']}")
+            else:
+                try:
+                    import repro_check
+                    repro_result = repro_check.compare_datasets(
+                        str(dataset_path), str(repro_path))
+                    for line in repro_check.format_summary(repro_result):
+                        print(f"  repro: {line}")
+                except (ImportError, ValueError) as exc:
+                    repro_result = {"ok": False, "error": f"repro check: {exc}"}
+                    print(f"  warning: repro check failed for {entry.name!r}: {exc}")
+
         return {
             "name": entry.name, "slug": entry.slug, "ok": rc == 0,
             "types": flags, "scan": scan_ok, "compression_family": cf_ok,
             "elapsed_sec": round(time.monotonic() - started, 1),
             "reverse_derive_exit": rc, "skip_reason": None,
+            "repro": repro_result,
         }
     except ConnectionError as exc:
         raise AppGoneError(f"app died during {entry.name!r}: {exc}") from exc
@@ -716,6 +747,12 @@ def format_one_line(result: dict, entry: PlanEntry, requested: list[str]) -> str
     if entry.cfg.get("compression_family"):
         parts.append("cf✓" if result["compression_family"] else "cf✗")
     parts.append(f"rd exit {result['reverse_derive_exit']}")
+    repro = result.get("repro")
+    if repro is not None:
+        if repro.get("ok"):
+            parts.append("repro✓")
+        else:
+            parts.append("repro✗")
     return f"{line} — {', '.join(parts)} ({result['elapsed_sec']:.1f}s)"
 
 
@@ -835,7 +872,8 @@ def run(args: argparse.Namespace) -> int:
 
         for entry in plan:
             try:
-                result = process_one(pc, handle, entry, out_dir, args.types)
+                result = process_one(pc, handle, entry, out_dir, args.types,
+                                     verify_repro=args.verify_repro)
             except AppGoneError as exc:
                 print(f"  ABORT: {exc}")
                 entries.append(_fail_entry(entry, f"app died: {exc}",
@@ -898,6 +936,9 @@ def parse_args() -> argparse.Namespace:
                         help="close the app after the run (WM_CLOSE)")
     parser.add_argument("--dry-run", action="store_true",
                         help="plan only: parse cache, validate config, print plan")
+    parser.add_argument("--verify-repro", action="store_true",
+                        help="re-run the dataset battery and compare for "
+                             "reproducibility (issue #98 T3)")
     args = parser.parse_args()
 
     if args.plugin and args.all:
