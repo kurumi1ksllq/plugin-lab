@@ -1,0 +1,16 @@
+{
+  "plugins": {
+    "Ozone 12 Equalizer": {
+      "setup": [
+        {"param_id": "41", "value": 1.0},
+        {"param_id": "9", "value": 0.5752},
+        {"param_id": "17", "value": 0.6}
+      ],
+      "scan": {
+        "param_id": "17",
+        "values": [0.55, 0.6, 0.65],
+        "type": "frequency_response"
+      }
+    }
+  }
+}

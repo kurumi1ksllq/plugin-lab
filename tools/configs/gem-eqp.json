@@ -1,0 +1,17 @@
+{
+  "plugins": {
+    "Gem EQP": {
+      "setup": [
+        {"param_id": "1559772963", "value": 0.6},
+        {"param_id": "2059373304", "value": 0.4},
+        {"param_id": "1056358597", "value": 0.6},
+        {"param_id": "1073302806", "value": 0.5}
+      ],
+      "scan": {
+        "param_id": "1559772963",
+        "values": [0.4, 0.6, 0.8],
+        "type": "frequency_response"
+      }
+    }
+  }
+}
