@@ -524,3 +524,17 @@ DESIGN.md                 # 设计文档
 **全语料现状**：15 plugins（原 7 + 新 8），**ok=15 / degenerate=0 / no-data=0**（derivation-failed=1 = Pro-L 2）。describe_chain 15 条目，类型覆盖新增 compressor/saturation/dynamics-only 三类别。工具 pytest 103 passed。
 
 **交付**：`tools/configs/` 8 份非默认态预设（gem-comp76 / gem-comp-la / gem-eqp / ozone-12-equalizer / ozone-12-maximizer / ozone-12-exciter / ozone-12-vintage-compressor / ozone-12-vintage-tape）+ `out/_reports/{aggregate_report,chain_description}.{md,json}`（out/ 不入库）。注意 aggregate_report/describe_chain 须 `--report-dir out/_reports` 显式指定（默认写当前目录）。
+
+## 采集方案完善块 A（2026-08-25，分支 feat/capture-standard，tickets #97/#99/#98/#100）
+
+**背景**：用户确认采集方案完善方向——块 A（工具层+标准）先行，块 B（测量能力）次之，块 C（复刻闭环 #67）最后。混响类暂缓（#96）。插件分类扩充为 7 类：话放/preamp / EQ / 压缩 / 限制器 / **clip 削波器** / tape+饱和 / 声场类。
+
+**T1 #97 采集标准 SOP**：`docs/capture-standard.md`（218 行）——7 类插件标准采集模板（测量类型组合 / 参数扫描建议 / 档位密度规则 / 电平配置 / 验收标准）+ 采集五步流程 + 档位密度规则（连续旋钮采 3-5 档代表值 + 反推插值，不逐档枚举）。
+
+**T2 #99 探参脚本入库**：`tools/probe_plugin.py`（从 .scratch 标准化）+ 16 单测。**假面检测**：泛化名+无 id+值重复三重 tell 识别 host 不暴露真实参数面的插件。真机验证：Gem Comp LA（hash 型，17 参数，真实）✅ / **elysia alpha（63 参数 59 重复 → fake=true 自动识别 #54 模式）** ✅ / Ozone Maximizer（index 型）✅。
+
+**T3 #98 复现性验证自动化**：`tools/repro_check.py` + `--verify-repro`（batch_collect）+ 7 单测。采集后自动双跑 dataset → compare_all 四类型对比。真机验证：Gem Comp76 双跑 compression/harmonic **mean|Δ|=0.0000**，repro✓ 显示在状态行。
+
+**T4 #100 直通检测补强**：`detect_passthrough`（freq 全 0+phase 0、compression unity、GR 0、harmonic 有基频但 THD 0 → not-exercised）+ `not-exercised` 状态（优先级高于 ok）+ describe_chain 强制 usable=False + 10 单测。**Ozone 12 Equalizer 从 dynamics-only usable=True 误判 → not-exercised usable=False 正确标记**（#94 泛化名误判的一个维度已闭环）。auto-key-2 / scepter 也正确标记（analyzer 直通无处理数据）。
+
+**全量工具测试**：230 passed（aggregate 71 / describe 76 / batch+repro+probe+compare+synthetic 83）。**全语料**：15 插件 ok=12 / not-exercised=3（auto-key-2, scepter, ozone-eq）/ degenerate=0 / derivation-failed=1（Pro-L 2）。
