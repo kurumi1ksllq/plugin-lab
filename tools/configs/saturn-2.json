@@ -1,0 +1,15 @@
+{
+  "plugins": {
+    "Saturn 2": {
+      "setup": [
+        {"param_id": "0", "value": 0.9},
+        {"param_id": "1", "value": 0.7143}
+      ],
+      "scan": {
+        "param_id": "0",
+        "values": [0.3, 0.6, 0.9],
+        "type": "harmonic"
+      }
+    }
+  }
+}

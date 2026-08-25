@@ -1,0 +1,15 @@
+{
+  "plugins": {
+    "Pro-L 2": {
+      "setup": [
+        {"param_id": "0", "value": 0.15},
+        {"param_id": "6", "value": 0.0}
+      ],
+      "scan": {
+        "param_id": "0",
+        "values": [0.1, 0.15, 0.2],
+        "type": "frequency_response"
+      }
+    }
+  }
+}

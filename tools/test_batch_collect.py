@@ -182,6 +182,32 @@ def test_process_one_setup_failure_marks_entry_failed(tmp_path):
     assert result["skip_reason"] == "setup name 'Band 1 Used': no such parameter"
 
 
+def test_process_one_setup_retries_transient_no_plugin(tmp_path, monkeypatch):
+    """Issue #81: a setup setParam can transiently see 'no plugin loaded'
+    while the async load settles (FabFilter Pro-L 2). The transient error is
+    retried within the setup-retry window; once it succeeds the dataset
+    battery proceeds. Other setParam errors are NOT retried."""
+    monkeypatch.setattr(bc, "run_reverse_derive",
+                        lambda path, expected: (0, "report"))
+    fake = _FakePipe([
+        {"ok": True, "name": "Pro-L 2"},
+        {"ok": True, "params": []},
+        {"ok": False, "error": "no plugin loaded"},   # transient
+        {"ok": False, "error": "no plugin loaded"},   # transient again
+        {"ok": True, "param": "0", "value": 0.8},     # settled
+        {"ok": True, "types": {"frequency_response": True}, "scan": True},
+    ])
+    entry = _entry({"setup": [{"param_id": "0", "value": 0.8}]})
+
+    result = bc.process_one(fake, 1, entry, tmp_path, None)
+
+    cmds = [p["cmd"] for p in fake.sent]
+    # loadPlugin, getParams, then setParam x3 (2 transient + 1 success), dataset
+    assert cmds == ["loadPlugin", "getParams",
+                    "setParam", "setParam", "setParam", "dataset"]
+    assert result["ok"] is True
+
+
 def test_process_one_no_setup_sends_no_setparam(tmp_path):
     """Without a setup block no setParam command is sent."""
     fake = _FakePipe([
@@ -194,6 +220,30 @@ def test_process_one_no_setup_sends_no_setparam(tmp_path):
     bc.process_one(fake, 1, entry, tmp_path, None)
 
     assert [p["cmd"] for p in fake.sent] == ["loadPlugin", "getParams", "dataset"]
+
+
+def test_process_one_retries_transient_no_session_on_dataset(tmp_path, monkeypatch):
+    """Issue #81: like setup, the dataset command can transiently see
+    'no session or plugin' while the load's plugin-pointer swap settles. It
+    is retried within the setup-retry window; once it succeeds the battery
+    proceeds."""
+    monkeypatch.setattr(bc, "run_reverse_derive",
+                        lambda path, expected: (0, "report"))
+    fake = _FakePipe([
+        {"ok": True, "name": "Saturn 2"},
+        {"ok": True, "params": []},
+        {"ok": True, "param": "0", "value": 0.9},          # setup setParam ok
+        {"ok": False, "error": "no session or plugin"},   # dataset transient
+        {"ok": True, "types": {"frequency_response": True}, "scan": True},
+    ])
+    entry = _entry({"setup": [{"param_id": "0", "value": 0.9}]})
+
+    result = bc.process_one(fake, 1, entry, tmp_path, None)
+
+    cmds = [p["cmd"] for p in fake.sent]
+    assert cmds == ["loadPlugin", "getParams", "setParam",
+                    "dataset", "dataset"]
+    assert result["ok"] is True
 
 
 # ---------------------------------------------------------------------------
