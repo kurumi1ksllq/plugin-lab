@@ -145,6 +145,51 @@ source/ipc/
 | 绘图     | XY 折线图，逐点生长                                                                                    |
 | 输出     | `{input_dB, output_dB, gr_dB}[]` + 拟合参数                                                            |
 
+### 3.4 声场类测量（stereo_width）—— 2026-08-25 设计（T6a #103）
+
+> 设计状态：**已定稿待实现**（T6b #104）。覆盖立体声宽度 / MidSide 处理器 / 立体声化 / 空间感类插件。现有 4 类测量全部是**单声道视角**（FreqResponse 只分析 channel 0，DESIGN 3.1），声场类插件改变 L/R 关系，单声道测量完全测不到。
+
+| 项目 | 方案 |
+|---|---|
+| 信号 | **双激励**（确定性黑盒）：Run A **mid-only**（L=R=扫频），Run B **side-only**（L=−R=扫频） |
+| 录制 | 干路 + 湿路，完整声道数（CaptureBuffer 已记录，SweepRunner 零改动） |
+| 分析 | MidSide 解码：M=(L+R)/2, S=(L−R)/2；H_M(f) / H_S(f) / 相关度 ρ(f) / 宽度 width_db(f) |
+| 绘图 | 第 4 个 PlotWidget：width dB + correlation vs 频率（log X），AsyncUpdater 50ms 节流 |
+| 输出 | `stereo_width` 导出：context + mid_response[] + side_response[] + correlation[] + width_db[] |
+
+**方法论**（用户确认方向，2026-08-25）：
+
+```
+Run A (mid-only, L=R=sweep) → 插件输出 → MS 解码 → 读 S 分量
+  若 S 输出非零 = 插件 mid→side 交叉处理（宽度扩展/立体声化的证据）
+Run B (side-only, L=−R=sweep) → 插件输出 → MS 解码 → 读 M 分量
+  若 M 输出非零 = 插件 side→mid 交叉处理
+```
+
+- **相关度** ρ(f) = |Sxy|²/(Sxx·Syy)（FFT 互功率归一化）：输入 L=R（ρ=+1）→ 输出 ρ<+1 = 宽度被扩展；输入 L=−R（ρ=−1）→ 输出 ρ>−1 = 宽度收窄/单声道化
+- **宽度** width_db(f) = 20·log10(|M|/|S|)：宽度扩展器在高频 S 分量提升 → width_db 下降
+- **声道极性模式**：SineSweep/MLS 加 channel mode（mono / mid L=R / side L=−R），确定性相位重启，有限 `getTotalLength()`（禁 −1，冻结 runner 契约）
+- **延迟补偿**：复用 FreqResponse `applyPhasePost` 模式；L/R 同延迟天然对齐
+
+**数据 schema（SPEC.md §stereo_width，契约先行）**：
+
+```json
+{
+  "type": "stereo_width",
+  "context": {...},
+  "mid_response": [{"f": ..., "mag": ..., "phase": ...}],
+  "side_response": [{"f": ..., "mag": ..., "phase": ...}],
+  "correlation": [{"f": ..., "rho": ...}],
+  "width_db": [{"f": ..., "width_db": ...}]
+}
+```
+
+**IPC**：`Protocol.h` `MeasureType::stereoWidth` → `MeasurementSession::Type::stereoWidth`；measure 类型 + dataset 块。**子进程路径（ChildWavAnalyzer）v1 显式拒绝**该类型（防静默 mono 污染数据）。
+
+**测试策略**（设施先行）：`TestStereoPlugin`（确定性：可配置 S 衰减 / LR 增益差 / 相位翻转）；单元测试：MS 解码数学精确、合成 L/R 相关度=1、S 衰减翻转 width、body-equiv + schema、CommandParser 类型映射、边缘（mono 插件 / 声道不匹配显式错误）。
+
+**实现计划（T6b）**：TestStereoPlugin → signal 极性模式 → MeasurementSession Type 分支 → StereoAnalysis + MeasurementAnalysis 分发 → SPEC.md schema → Export + body-equiv → IPC 接线 → GUI 接线。提交顺序见 T6b #104。
+
 ---
 
 ## 四、数据导出格式（JSON）
