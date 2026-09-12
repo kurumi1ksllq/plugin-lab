@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；312 个 TEST_CASE（2026-08-14 实测 312/312 绿：基线 208 + 块 D 新增 57 + issue #2/#3 并发改造新增 5 + 子进程测量扩展 T1/T2 新增 10 + #60 无限载波日志路径 1 + #52/#53/#58 各波增量，随 PR 逐次同步）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
+Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；318 个 TEST_CASE（2026-09-12 静态复数：grep 命中 319 − 1 注释提及 = 318 生效；历史：2026-08-14 实测 312/312 绿：基线 208 + 块 D 新增 57 + issue #2/#3 并发改造新增 5 + 子进程测量扩展 T1/T2 新增 10 + #60 无限载波日志路径 1 + #52/#53/#58 各波增量，随 PR 逐次同步）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
 
 ## RUN
 
@@ -15,12 +15,13 @@ Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`ju
 ## LAYOUT
 
 - 命名 1:1 镜像生产模块：`tests/<Module>Tests.cpp` ↔ `source/<module>/X.cpp`（如 `CommandParser.cpp` → `CommandParserTests.cpp`）；无同目录测试、无 `__tests__`
-- 20 个源文件：17 个 test .cpp + `CommandParserStubs.cpp` + `TestPlugin.h` + `TestCompressorPlugin.h`
+- 37 个源文件：33 个 test .cpp + `CommandParserStubs.cpp` + `TestChildProcess.cpp`（子进程测试桩可执行）+ `TestPlugin.h` + `TestCompressorPlugin.h`
 - 覆盖映射：除 `ui/`、`utils/`（FftHelper/MathUtils/CrashLog 无直接测试文件）和 `Main.cpp` 外每个生产模块都有测试文件
-  - signal → ToneBurst/NoiseGenerator/EnvelopeSignal/FilePlayback
-  - capture → SweepRunner/CaptureBuffer（2026-08-03 新增，WAV flush）
-  - analysis → FreqResponse/GainReduction/TimeConstants/CompressionFamily/Export
-  - scan → ScanEngine；ipc → CommandParser/PipeServer；host → 经 stubs
+  - signal → ToneBurst/NoiseGenerator/EnvelopeSignal/FilePlayback/MultiTone/SequentialTone
+  - capture → SweepRunner/CaptureBuffer（2026-08-03 新增，WAV flush）/ParameterTimeline
+  - analysis → FreqResponse/GainReduction/TimeConstants/CompressionFamily/Export/WavCaptureReader/WavExporter/ChildWavAnalyzer（经 ChildHostParity）
+  - scan → ScanEngine；ipc → CommandParser（主/并发/路由/loadPlugin黑名单）/PipeServer；host → 经 stubs + ChildProcessCoordinator/Restart/Protocol/ChildMeasureOrchestrator/ChildHostParity/PluginHostChildIntegration
+  - ui → ComponentVisibility（JUCE 可见性契约 pin：addAndMakeVisible 后隐藏，主测 grPlot 顺序防回归）
   - host → EditorCrashGuard（2026-08-08 块 C 任务 2：真实 EditorCrashGuard.cpp 编入测试目标，含 SEH 崩溃保护用例）
 - 不编译进测试：`Main.cpp`、`CrashLog.cpp`、`ui/*`
 
@@ -53,14 +54,15 @@ Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`ju
 
 tools/ 下的 Python 工具测试套件（stdlib-only，无 requirements.txt），由 `.github/workflows/build.yml` 的 `python-tools` job 强制执行：
 
-- `test_aggregate_report.py`、`test_synthetic_dataset.py`、`test_compare_all.py`（批量报告/合成数据/四类型对比）
-- `test_describe_quality.py`、`test_describe_render.py`、`test_describe_chain.py`、`test_describe_schema.py`（处理链路描述生成）
+- `test_aggregate_report.py`（61）、`test_synthetic_dataset.py`（11）、`test_compare_all.py`（30）（批量报告/合成数据/四类型对比）
+- `test_describe_chain.py`（42）、`test_describe_quality.py`（21）、`test_describe_render.py`（4）、`test_describe_schema.py`（9）（处理链路描述生成）
+- `test_batch_collect.py`（19）、`test_passthrough.py`（10）、`test_probe_plugin.py`（16）、`test_repro_check.py`（7）（采集/直通/探针/复现校验）
 
-共 145 用例（2026-08-13 实测 `python -m pytest tools/ -q`：145 passed）。CI 步骤：`pip install pytest` → `python -m pytest tools/ -q`，失败即 CI 失败——工具脚本改动不再依赖手动跑。
+共 230 用例（2026-09-12 实测 `python -m pytest tools/ -q --ignore=tools/gui_test.py --collect-only`：230 collected；历史：2026-08-13 实测 145 passed）。CI 步骤：`pip install pytest` → `python -m pytest tools/ -q`，失败即 CI 失败——工具脚本改动不再依赖手动跑。
 
 ## GOTCHAS
 
 - `PipeServerTests` 创建**真实** `\\.\pipe\PluginLab`：必须串行运行，且同时不能有其他 PluginLab 实例
 - 禁外部音频素材、禁测试源里写 main()
 - **真插件例外（2026-08-10 块 D T3/T5 授权）**：`ChildHostParityTests.cpp` 与 `ChildProtocolTests.cpp` 用真实 VST3（`CHILD_PARITY_PLUGIN` 编译定义，当前 magic.CURVE.vst3）——前者做子进程 vs 宿主直测端到端比对（<0.5dB 验收），后者验证 snapshot_params/restore_params 稳定 id 键控（D3a，需真插件参数集）。这是「无外部素材」规则的**登记例外**（黑盒测量/参数契约验收必须真插件，假插件不能顶替）；插件缺失时 SKIP（Catch2 SKIP 语义）不 fail；其余测试仍守无外部素材
-- 不属于 ctest 的验证：`tools/verify_export.py`、`tools/reverse_derive.py`（stdlib-only Python，真插件验收，手动跑）；tools/ 下 pytest 套件（145 用例）已由 CI 的 `python-tools` job 强制，见上方「TOOLS PYTEST」节
+- 不属于 ctest 的验证：`tools/verify_export.py`、`tools/reverse_derive.py`（stdlib-only Python，真插件验收，手动跑）；tools/ 下 pytest 套件（230 用例）已由 CI 的 `python-tools` job 强制，见上方「TOOLS PYTEST」节

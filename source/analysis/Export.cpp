@@ -574,7 +574,7 @@ juce::String datasetToJSON (const Dataset& dataset, const Export::Context& conte
     return json;
 }
 
-juce::String rawCaptureToJSON (int64_t samples, double rate, int blockSize,
+juce::String rawCaptureToJSON (int64_t samples, double sampleRateHz, int blockSize,
                                const Export::Context& context)
 {
     juce::String json;
@@ -587,7 +587,7 @@ juce::String rawCaptureToJSON (int64_t samples, double rate, int blockSize,
             + (context.paramSnapshot.isNotEmpty() ? context.paramSnapshot : juce::String ("{}")) + ",\n";
     appendSourceBlock (json, context, "  ");
     json += "  \"samples\": " + juce::String (samples) + ",\n";
-    json += "  \"sample_rate\": " + juce::String (rate) + ",\n";
+    json += "  \"sample_rate\": " + juce::String (sampleRateHz) + ",\n";
     json += "  \"block_size\": " + juce::String (blockSize) + "\n";
     json += "}\n";
     return json;

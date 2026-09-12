@@ -107,20 +107,20 @@ TEST_CASE ("CaptureBuffer: flush mirrors dry and wet into a readable 24-bit wav"
            "[capturebuffer][flush]")
 {
     // Arrange
-    constexpr int numChannels = 2;
-    constexpr int blockSize = 2048;
-    constexpr int numBlocks = 8;
-    const int64_t totalSamples = static_cast<int64_t> (numBlocks) * blockSize;
+    constexpr int kNumChannels = 2;
+    constexpr int kBlockSize = 2048;
+    constexpr int kNumBlocks = 8;
+    const int64_t totalSamples = static_cast<int64_t> (kNumBlocks) * kBlockSize;
 
     CaptureBuffer buffer;
-    buffer.prepare (numChannels, blockSize);
+    buffer.prepare (kNumChannels, kBlockSize);
     buffer.setSampleRate (kFlushTestSampleRate);
 
     const auto wavFile = makeFlushWavFile ("flush");
     buffer.setFlushConfig (wavFile, 0.05);   // flush every 2400 samples → mid-run flushes
 
     // Act
-    appendBlocks (buffer, numChannels, blockSize, numBlocks);
+    appendBlocks (buffer, kNumChannels, kBlockSize, kNumBlocks);
     buffer.trim();
 
     // Assert
@@ -132,8 +132,8 @@ TEST_CASE ("CaptureBuffer: flush mirrors dry and wet into a readable 24-bit wav"
     REQUIRE (readWavInto (wavFile, readBack, readSr, readCh));
 
     REQUIRE (readSr == Catch::Approx (kFlushTestSampleRate));
-    REQUIRE (readCh == 2 * numChannels);   // [dry ch0..N-1, wet ch0..N-1]
-    requireWavMatchesSignal (readBack, numChannels, totalSamples);
+    REQUIRE (readCh == 2 * kNumChannels);   // [dry ch0..N-1, wet ch0..N-1]
+    requireWavMatchesSignal (readBack, kNumChannels, totalSamples);
 
     wavFile.deleteFile();
 }
@@ -144,26 +144,26 @@ TEST_CASE ("CaptureBuffer: multiple mid-run flushes plus the trim tail capture e
     // Arrange — 7 blocks of 500 + 1 of 300 = 3800 samples; flush interval of
     // 960 samples (0.02 s) triggers mid-run flushes at 1000, 2000 and 3000;
     // the remaining 800 samples must be flushed by trim().
-    constexpr int numChannels = 2;
-    constexpr int blockSize = 500;
-    constexpr int numBlocks = 7;
-    constexpr int tailBlockSize = 300;
-    const int64_t totalSamples = static_cast<int64_t> (numBlocks) * blockSize + tailBlockSize;
+    constexpr int kNumChannels = 2;
+    constexpr int kBlockSize = 500;
+    constexpr int kNumBlocks = 7;
+    constexpr int kTailBlockSize = 300;
+    const int64_t totalSamples = static_cast<int64_t> (kNumBlocks) * kBlockSize + kTailBlockSize;
 
     CaptureBuffer buffer;
-    buffer.prepare (numChannels, blockSize);
+    buffer.prepare (kNumChannels, kBlockSize);
     buffer.setSampleRate (kFlushTestSampleRate);
 
     const auto wavFile = makeFlushWavFile ("flush-interval");
     buffer.setFlushConfig (wavFile, 0.02);   // 48000 * 0.02 = 960 samples
 
     // Act
-    appendBlocks (buffer, numChannels, blockSize, numBlocks);
+    appendBlocks (buffer, kNumChannels, kBlockSize, kNumBlocks);
 
-    juce::AudioBuffer<float> dry (numChannels, tailBlockSize);
-    juce::AudioBuffer<float> wet (numChannels, tailBlockSize);
-    fillTestBlock (dry, wet, static_cast<int64_t> (numBlocks) * blockSize);
-    buffer.append (dry, wet, tailBlockSize);
+    juce::AudioBuffer<float> dry (kNumChannels, kTailBlockSize);
+    juce::AudioBuffer<float> wet (kNumChannels, kTailBlockSize);
+    fillTestBlock (dry, wet, static_cast<int64_t> (kNumBlocks) * kBlockSize);
+    buffer.append (dry, wet, kTailBlockSize);
 
     buffer.trim();
 
@@ -173,8 +173,8 @@ TEST_CASE ("CaptureBuffer: multiple mid-run flushes plus the trim tail capture e
     int readCh = 0;
     REQUIRE (readWavInto (wavFile, readBack, readSr, readCh));
 
-    REQUIRE (readCh == 2 * numChannels);
-    requireWavMatchesSignal (readBack, numChannels, totalSamples);
+    REQUIRE (readCh == 2 * kNumChannels);
+    requireWavMatchesSignal (readBack, kNumChannels, totalSamples);
 
     wavFile.deleteFile();
 }
@@ -183,17 +183,17 @@ TEST_CASE ("CaptureBuffer: without flush config the in-memory contract is unchan
            "[capturebuffer][flush-disabled]")
 {
     // Arrange
-    constexpr int numChannels = 2;
-    constexpr int blockSize = 1024;
-    constexpr int numBlocks = 4;
-    const int64_t totalSamples = static_cast<int64_t> (numBlocks) * blockSize;
+    constexpr int kNumChannels = 2;
+    constexpr int kBlockSize = 1024;
+    constexpr int kNumBlocks = 4;
+    const int64_t totalSamples = static_cast<int64_t> (kNumBlocks) * kBlockSize;
 
     CaptureBuffer buffer;
-    buffer.prepare (numChannels, blockSize);
+    buffer.prepare (kNumChannels, kBlockSize);
     buffer.setFlushConfig (juce::File(), 0.05);   // empty path → flush disabled
 
     // Act
-    appendBlocks (buffer, numChannels, blockSize, numBlocks);
+    appendBlocks (buffer, kNumChannels, kBlockSize, kNumBlocks);
     buffer.trim();
 
     // Assert — buffers stay complete and trimmed to the exact length
@@ -203,7 +203,7 @@ TEST_CASE ("CaptureBuffer: without flush config the in-memory contract is unchan
 
     for (int s = 0; s < static_cast<int> (totalSamples); ++s)
     {
-        for (int ch = 0; ch < numChannels; ++ch)
+        for (int ch = 0; ch < kNumChannels; ++ch)
         {
             const float dryExpected = expectedDrySample (ch, s);
             REQUIRE (buffer.getDryBuffer().getSample (ch, s) == Catch::Approx (dryExpected).margin (0.001f));
@@ -216,22 +216,22 @@ TEST_CASE ("CaptureBuffer: clear() finalises the old run; a new run on the same 
            "[capturebuffer][flush-clear]")
 {
     // Arrange
-    constexpr int numChannels = 2;
-    constexpr int blockSize = 500;
+    constexpr int kNumChannels = 2;
+    constexpr int kBlockSize = 500;
 
     CaptureBuffer buffer;
-    buffer.prepare (numChannels, blockSize);
+    buffer.prepare (kNumChannels, kBlockSize);
     buffer.setSampleRate (kFlushTestSampleRate);
 
     const auto wavFile = makeFlushWavFile ("flush-clear");
     buffer.setFlushConfig (wavFile, 0.05);   // 2400 samples → no mid-run flush below that
 
     // Act — run A: 4 blocks of 500 = 2000 samples, then clear()
-    appendBlocks (buffer, numChannels, blockSize, 4);
+    appendBlocks (buffer, kNumChannels, kBlockSize, 4);
     buffer.clear();   // must flush run A's tail and close the writer
 
     // Act — run B on the same path: 3 blocks of 500 = 1500 samples
-    appendBlocks (buffer, numChannels, blockSize, 3);
+    appendBlocks (buffer, kNumChannels, kBlockSize, 3);
     buffer.trim();
 
     // Assert — the file contains ONLY run B (re-opening must truncate)
@@ -240,9 +240,9 @@ TEST_CASE ("CaptureBuffer: clear() finalises the old run; a new run on the same 
     int readCh = 0;
     REQUIRE (readWavInto (wavFile, readBack, readSr, readCh));
 
-    REQUIRE (readCh == 2 * numChannels);
-    REQUIRE (readBack.getNumSamples() == 3 * blockSize);
-    requireWavMatchesSignal (readBack, numChannels, static_cast<int64_t> (3 * blockSize));
+    REQUIRE (readCh == 2 * kNumChannels);
+    REQUIRE (readBack.getNumSamples() == 3 * kBlockSize);
+    requireWavMatchesSignal (readBack, kNumChannels, static_cast<int64_t> (3 * kBlockSize));
 
     wavFile.deleteFile();
 }
@@ -251,10 +251,10 @@ TEST_CASE ("CaptureBuffer: file is valid mid-capture even without trim() (crash 
            "[capturebuffer][flush-no-trim]")
 {
     // Arrange
-    constexpr int numChannels = 2;
-    constexpr int blockSize = 1000;
-    constexpr int numBlocks = 3;
-    const int64_t totalSamples = static_cast<int64_t> (numBlocks) * blockSize;
+    constexpr int kNumChannels = 2;
+    constexpr int kBlockSize = 1000;
+    constexpr int kNumBlocks = 3;
+    const int64_t totalSamples = static_cast<int64_t> (kNumBlocks) * kBlockSize;
 
     const auto wavFile = makeFlushWavFile ("flush-no-trim");
 
@@ -266,22 +266,22 @@ TEST_CASE ("CaptureBuffer: file is valid mid-capture even without trim() (crash 
 
     {
         CaptureBuffer buffer;
-        buffer.prepare (numChannels, blockSize);
+        buffer.prepare (kNumChannels, kBlockSize);
         buffer.setSampleRate (kFlushTestSampleRate);
         buffer.setFlushConfig (wavFile, 0.0);   // interval 0 → flush on every append
 
-        appendBlocks (buffer, numChannels, blockSize, numBlocks);
+        appendBlocks (buffer, kNumChannels, kBlockSize, kNumBlocks);
 
         // Assert — already readable mid-capture (header patched at each flush)
         REQUIRE (readWavInto (wavFile, readBack, readSr, readCh));
-        REQUIRE (readCh == 2 * numChannels);
-        requireWavMatchesSignal (readBack, numChannels, totalSamples);
+        REQUIRE (readCh == 2 * kNumChannels);
+        requireWavMatchesSignal (readBack, kNumChannels, totalSamples);
     }
 
     // Assert — still readable after the writer is gone
     REQUIRE (readSr == Catch::Approx (kFlushTestSampleRate));
     REQUIRE (readWavInto (wavFile, readBack, readSr, readCh));
-    requireWavMatchesSignal (readBack, numChannels, totalSamples);
+    requireWavMatchesSignal (readBack, kNumChannels, totalSamples);
 
     wavFile.deleteFile();
 }
@@ -292,24 +292,24 @@ TEST_CASE ("CaptureBuffer: full-scale sine survives the 24-bit PCM conversion",
     // Arrange — a 1 kHz sine at unity amplitude; sample 12 is exactly
     // sin (pi/2) = 1.0, so the peak exercises the 24-bit conversion limit
     // (8388607/8388608 ≈ 0.99999988 after the round trip).
-    constexpr int numChannels = 1;
-    constexpr int numSamples = 4800;   // 0.1 s at 48 kHz = 100 cycles of 1 kHz
+    constexpr int kNumChannels = 1;
+    constexpr int kNumSamples = 4800;   // 0.1 s at 48 kHz = 100 cycles of 1 kHz
 
     CaptureBuffer buffer;
-    buffer.prepare (numChannels, 512);
+    buffer.prepare (kNumChannels, 512);
     buffer.setSampleRate (kFlushTestSampleRate);
 
     const auto wavFile = makeFlushWavFile ("flush-24bit");
     buffer.setFlushConfig (wavFile, 0.05);
 
-    juce::AudioBuffer<float> dry (numChannels, numSamples);
-    juce::AudioBuffer<float> wet (numChannels, numSamples);
-    for (int ch = 0; ch < numChannels; ++ch)
+    juce::AudioBuffer<float> dry (kNumChannels, kNumSamples);
+    juce::AudioBuffer<float> wet (kNumChannels, kNumSamples);
+    for (int ch = 0; ch < kNumChannels; ++ch)
     {
         auto* dryPtr = dry.getWritePointer (ch);
         auto* wetPtr = wet.getWritePointer (ch);
 
-        for (int s = 0; s < numSamples; ++s)
+        for (int s = 0; s < kNumSamples; ++s)
         {
             const double t = static_cast<double> (s) / kFlushTestSampleRate;
             const float sample = static_cast<float> (std::sin (2.0 * juce::MathConstants<double>::pi * 1000.0 * t));
@@ -319,7 +319,7 @@ TEST_CASE ("CaptureBuffer: full-scale sine survives the 24-bit PCM conversion",
     }
 
     // Act
-    buffer.append (dry, wet, numSamples);
+    buffer.append (dry, wet, kNumSamples);
     buffer.trim();
 
     // Assert
@@ -328,10 +328,10 @@ TEST_CASE ("CaptureBuffer: full-scale sine survives the 24-bit PCM conversion",
     int readCh = 0;
     REQUIRE (readWavInto (wavFile, readBack, readSr, readCh));
 
-    REQUIRE (readBack.getNumSamples() == numSamples);
+    REQUIRE (readBack.getNumSamples() == kNumSamples);
 
     float peak = 0.0f;
-    for (int s = 0; s < numSamples; ++s)
+    for (int s = 0; s < kNumSamples; ++s)
         peak = juce::jmax (peak, std::fabs (readBack.getSample (0, s)));
 
     REQUIRE (peak == Catch::Approx (0.99999).margin (0.0001f));

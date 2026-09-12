@@ -83,11 +83,11 @@ TEST_CASE ("EnvelopeSignal indefinite carrier returns -1 and logs warning",
 TEST_CASE ("EnvelopeSignal without envelope passes carrier through unchanged",
            "[envelope][identity]")
 {
-    constexpr double sr = 48000.0;
+    constexpr double kSampleRateHz = 48000.0;
     const int64_t carrierLen = 48000;
 
     EnvelopeSignal env (std::make_unique<ConstantCarrier> (carrierLen));
-    env.prepare (sr, 512);
+    env.prepare (kSampleRateHz, 512);
 
     REQUIRE (env.getTotalLength() == carrierLen);
 
@@ -103,28 +103,28 @@ TEST_CASE ("EnvelopeSignal without envelope passes carrier through unchanged",
 TEST_CASE ("EnvelopeSignal ADSR follows attack/decay/sustain/release shape",
            "[envelope][adsr]")
 {
-    constexpr double sr = 48000.0;
-    constexpr double attack = 0.1;   // s
-    constexpr double decay = 0.2;    // s
-    constexpr double sustain = 0.5;
-    constexpr double release = 0.1;  // s
+    constexpr double kSampleRateHz = 48000.0;
+    constexpr double kAttackSec = 0.1;   // s
+    constexpr double kDecaySec = 0.2;    // s
+    constexpr double kSustainLevel = 0.5;
+    constexpr double kReleaseSec = 0.1;  // s
 
     // 0.8 s total: 0.1 attack + 0.2 decay + 0.4 sustain flat + 0.1 release
-    const double envLen = attack + decay + release + 0.4;
-    const int64_t carrierLen = static_cast<int64_t> (envLen * sr);
+    const double envLen = kAttackSec + kDecaySec + kReleaseSec + 0.4;
+    const int64_t carrierLen = static_cast<int64_t> (envLen * kSampleRateHz);
 
     EnvelopeSignal env (std::make_unique<ConstantCarrier> (carrierLen));
     env.setEnvelope (EnvelopeSignal::Envelope::adsr);
-    env.setADSR (attack, decay, sustain, release);
-    env.prepare (sr, 512);
+    env.setADSR (kAttackSec, kDecaySec, kSustainLevel, kReleaseSec);
+    env.prepare (kSampleRateHz, 512);
 
     // Generate past the nominal end so the tail after release is observable.
-    const int numSamples = static_cast<int> (carrierLen + static_cast<int64_t> (sr * release));
+    const int numSamples = static_cast<int> (carrierLen + static_cast<int64_t> (kSampleRateHz * kReleaseSec));
     juce::AudioBuffer<float> buffer (1, numSamples);
     buffer.clear();
     env.generate (buffer, 0, numSamples);
 
-    const auto sampleAt = [&] (double sec) { return static_cast<int> (std::llround (sec * sr)); };
+    const auto sampleAt = [&] (double sec) { return static_cast<int> (std::llround (sec * kSampleRateHz)); };
     const auto out = [&] (int i) { return buffer.getSample (0, i); };
 
     // t=0: attack start
@@ -149,15 +149,15 @@ TEST_CASE ("EnvelopeSignal ADSR follows attack/decay/sustain/release shape",
 TEST_CASE ("EnvelopeSignal sine envelope has period 1/hz and spans [0,1]",
            "[envelope][sine]")
 {
-    constexpr double sr = 48000.0;
-    constexpr double hz = 0.5;   // period = 2 s = 96000 samples
-    const int periodSamples = static_cast<int> (sr / hz);
+    constexpr double kSampleRateHz = 48000.0;
+    constexpr double kSineRateHz = 0.5;   // period = 2 s = 96000 samples
+    const int periodSamples = static_cast<int> (kSampleRateHz / kSineRateHz);
     const int numSamples = periodSamples * 2;
 
     EnvelopeSignal env (std::make_unique<ConstantCarrier> (96000));
     env.setEnvelope (EnvelopeSignal::Envelope::sine);
-    env.setSineRate (hz);
-    env.prepare (sr, 512);
+    env.setSineRate (kSineRateHz);
+    env.prepare (kSampleRateHz, 512);
 
     juce::AudioBuffer<float> buffer (1, numSamples);
     buffer.clear();
@@ -189,20 +189,20 @@ TEST_CASE ("EnvelopeSignal sine envelope has period 1/hz and spans [0,1]",
 TEST_CASE ("EnvelopeSignal exponential envelope decays as e^(-t/tau)",
            "[envelope][exponential]")
 {
-    constexpr double sr = 48000.0;
-    constexpr double tau = 0.5;   // s
+    constexpr double kSampleRateHz = 48000.0;
+    constexpr double kTauSec = 0.5;   // s
 
     EnvelopeSignal env (std::make_unique<ConstantCarrier> (96000));
     env.setEnvelope (EnvelopeSignal::Envelope::exponential);
-    env.setTau (tau);
-    env.prepare (sr, 512);
+    env.setTau (kTauSec);
+    env.prepare (kSampleRateHz, 512);
 
-    const int numSamples = static_cast<int> (sr * 2.0);   // 2 s
+    const int numSamples = static_cast<int> (kSampleRateHz * 2.0);   // 2 s
     juce::AudioBuffer<float> buffer (1, numSamples);
     buffer.clear();
     env.generate (buffer, 0, numSamples);
 
-    const auto sampleAt = [&] (double sec) { return static_cast<int> (std::llround (sec * sr)); };
+    const auto sampleAt = [&] (double sec) { return static_cast<int> (std::llround (sec * kSampleRateHz)); };
     const auto out = [&] (double sec) { return buffer.getSample (0, sampleAt (sec)); };
 
     // t=0 -> e^0 = 1
@@ -210,11 +210,11 @@ TEST_CASE ("EnvelopeSignal exponential envelope decays as e^(-t/tau)",
 
     // out(t2)/out(t1) == exp(-(t2-t1)/tau)
     const double ratio = out (1.0) / out (0.1);
-    const double expected = std::exp (-(1.0 - 0.1) / tau);
+    const double expected = std::exp (-(1.0 - 0.1) / kTauSec);
     REQUIRE (ratio == Catch::Approx (expected).margin (1e-4));
 
     const double ratio2 = out (0.5) / out (0.25);
-    const double expected2 = std::exp (-(0.5 - 0.25) / tau);
+    const double expected2 = std::exp (-(0.5 - 0.25) / kTauSec);
     REQUIRE (ratio2 == Catch::Approx (expected2).margin (1e-4));
 }
 
@@ -222,8 +222,8 @@ TEST_CASE ("EnvelopeSignal exponential envelope decays as e^(-t/tau)",
 TEST_CASE ("EnvelopeSignal getTotalLength scales inversely with speed",
            "[envelope][speed-length]")
 {
-    constexpr double sr = 48000.0;
-    const int64_t carrierLen = static_cast<int64_t> (sr * 2.0);   // 2 s sweep
+    constexpr double kSampleRateHz = 48000.0;
+    const int64_t carrierLen = static_cast<int64_t> (kSampleRateHz * 2.0);   // 2 s sweep
 
     auto makeSweep = []
     {
@@ -234,17 +234,17 @@ TEST_CASE ("EnvelopeSignal getTotalLength scales inversely with speed",
     };
 
     EnvelopeSignal envDefault (makeSweep());
-    envDefault.prepare (sr, 512);
+    envDefault.prepare (kSampleRateHz, 512);
     REQUIRE (envDefault.getTotalLength() == carrierLen);
 
     EnvelopeSignal envFast (makeSweep());
     envFast.setSpeed (2.0);
-    envFast.prepare (sr, 512);
+    envFast.prepare (kSampleRateHz, 512);
     REQUIRE (envFast.getTotalLength() == carrierLen / 2);
 
     EnvelopeSignal envSlow (makeSweep());
     envSlow.setSpeed (0.5);
-    envSlow.prepare (sr, 512);
+    envSlow.prepare (kSampleRateHz, 512);
     REQUIRE (envSlow.getTotalLength() == carrierLen * 2);
 }
 
@@ -252,8 +252,8 @@ TEST_CASE ("EnvelopeSignal getTotalLength scales inversely with speed",
 TEST_CASE ("EnvelopeSignal setSpeed scales the envelope time axis",
            "[envelope][speed-samples]")
 {
-    constexpr double sr = 48000.0;
-    constexpr int numSamples = 20000;
+    constexpr double kSampleRateHz = 48000.0;
+    constexpr int kNumSamples = 20000;
 
     auto generateWithSpeed = [&] (double spd, juce::AudioBuffer<float>& out, int num)
     {
@@ -261,7 +261,7 @@ TEST_CASE ("EnvelopeSignal setSpeed scales the envelope time axis",
         env.setEnvelope (EnvelopeSignal::Envelope::sine);
         env.setSineRate (0.25);
         env.setSpeed (spd);
-        env.prepare (sr, 512);
+        env.prepare (kSampleRateHz, 512);
 
         out.clear();
         env.generate (out, 0, num);
@@ -269,14 +269,14 @@ TEST_CASE ("EnvelopeSignal setSpeed scales the envelope time axis",
 
     // The speed=1 reference must cover sample index 2t, so it needs twice
     // the samples of the speed=2 output.
-    juce::AudioBuffer<float> out1 (1, 2 * numSamples);
-    juce::AudioBuffer<float> out2 (1, numSamples);
-    generateWithSpeed (1.0, out1, 2 * numSamples);
-    generateWithSpeed (2.0, out2, numSamples);
+    juce::AudioBuffer<float> out1 (1, 2 * kNumSamples);
+    juce::AudioBuffer<float> out2 (1, kNumSamples);
+    generateWithSpeed (1.0, out1, 2 * kNumSamples);
+    generateWithSpeed (2.0, out2, kNumSamples);
 
     // speed=2 output at sample t equals the speed=1 (bare) output at sample 2t,
     // i.e. the whole signal plays twice as fast.
-    for (int t = 0; t < numSamples; ++t)
+    for (int t = 0; t < kNumSamples; ++t)
         REQUIRE (out2.getSample (0, t)
                  == Catch::Approx (out1.getSample (0, 2 * t)).margin (1e-6f));
 
@@ -288,13 +288,13 @@ TEST_CASE ("EnvelopeSignal setSpeed scales the envelope time axis",
 TEST_CASE ("EnvelopeSignal reset restarts carrier and envelope phase",
            "[envelope][reset]")
 {
-    constexpr double sr = 48000.0;
-    constexpr double tau = 0.5;
+    constexpr double kSampleRateHz = 48000.0;
+    constexpr double kTauSec = 0.5;
 
     EnvelopeSignal env (std::make_unique<ConstantCarrier> (48000));
     env.setEnvelope (EnvelopeSignal::Envelope::exponential);
-    env.setTau (tau);
-    env.prepare (sr, 512);
+    env.setTau (kTauSec);
+    env.prepare (kSampleRateHz, 512);
 
     // Pass A: two consecutive blocks; the envelope phase continues across them.
     juce::AudioBuffer<float> passA (1, 12000);
@@ -317,7 +317,7 @@ TEST_CASE ("EnvelopeSignal reset restarts carrier and envelope phase",
         REQUIRE (passB.getSample (0, i) == passA.getSample (0, i));
         // ...and the phase restarted at t=0 (analytic check; without a working
         // reset the phase would have continued at t = (12000+i)/sr).
-        const double expected = std::exp (-static_cast<double> (i) / sr / tau);
+        const double expected = std::exp (-static_cast<double> (i) / kSampleRateHz / kTauSec);
         REQUIRE (passB.getSample (0, i) == Catch::Approx (expected).margin (1e-5));
     }
 }

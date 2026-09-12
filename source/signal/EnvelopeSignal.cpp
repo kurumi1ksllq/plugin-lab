@@ -23,12 +23,12 @@ void EnvelopeSignal::setSpeed (double newSpeed)
     speed = newSpeed > 0.0 ? newSpeed : 1.0;
 }
 
-void EnvelopeSignal::setADSR (double attack, double decay, double sustain, double release)
+void EnvelopeSignal::setADSR (double newAttackSec, double newDecaySec, double sustain, double newReleaseSec)
 {
-    attackSec = attack;
-    decaySec = decay;
+    attackSec = newAttackSec;
+    decaySec = newDecaySec;
     sustainLevel = sustain;
-    releaseSec = release;
+    releaseSec = newReleaseSec;
 }
 
 void EnvelopeSignal::setSineRate (double hz)

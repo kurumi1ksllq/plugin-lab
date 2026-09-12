@@ -704,4 +704,4 @@ issue #65：`loadPlugin` 是 AI/脚本加载被测插件的唯一入口（GUI �
 
 - 全部导出测试：`tests/ExportTests.cpp`（schema、精度、转义、python 可解析性、body 等价、dataset 聚合）。
 - 现有独立导出的输出格式由既有 schema 测试逐字节/逐数据锁定；dataset 聚合**只复用 body 序列化函数，不触碰独立导出函数**（策略 b）。
-- 验证：`ctest --test-dir build -C Release --timeout 180` 全绿（158 项，2026-08-08）。
+- 验证：`ctest --test-dir build -C Release --timeout 180` 全绿（历史：158 项，2026-08-08；2026-09-12 静态复数 318 个 TEST_CASE，见 tests/AGENTS.md）。

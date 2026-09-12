@@ -1,10 +1,10 @@
 # analysis（分析器 + JSON 导出层）
 
-**生成:** 2026-08-03 · **规模:** 16 文件（6 分析器 × .h/.cpp + Export.h/.cpp + WavExporter.h/.cpp，Export 23 符号为最大）
+**生成:** 2026-08-03 · **规模:** 22 文件（9 分析器 × .h/.cpp + Export.h/.cpp + WavExporter.h/.cpp，2026-09-12 实测；Export 23 符号为最大）
 
 ## OVERVIEW
 
-6 分析器 + Export 层：原始捕获 → 领域结果 → 8 类 schema JSON。
+9 分析器 + Export 层：原始捕获 → 领域结果 → 8 类 schema JSON。
 
 ## ANALYZERS
 
@@ -16,6 +16,9 @@
 | GainReduction     | 每 block 20·log10(RMS_wet/RMS_dry) → 逐 block GR                                 | 实时 GR 表头（50ms 节流）+ gr_timeline |
 | TimeConstants     | τ（attack/release）估计 → τ + .valid 标志                                        | 时间常数显示                           |
 | CompressionFamily | 输入电平 × 速度网格 → 每格压缩曲线 + GR 时间线                                   | compression_family 网格（阶段 4 已交付） |
+| MeasurementAnalysis | 会话测量类型 → 分析器的单一分发映射（issue #42：替代 CommandParser/ScanEngine 各处的逐字 switch 拷贝） | measure/dataset/scan 分析入口 |
+| ChildWavAnalyzer  | 子进程回传 WAV 镜像 + 元数据 → 与进程内路径同构的导出 JSON（ADR-D-6/D2b，D6 路由） | 黑名单插件进程外测量导出 |
+| WavCaptureReader  | 手写 24-bit 交织 WAV 读出 → dry/wet 浮点缓冲（`[dry ch0..N-1, wet ch0..N-1]`，ADR-D-5/D2b） | 子进程捕获镜像解析 |
 
 ### 要点
 
@@ -26,7 +29,7 @@
 
 ## EXPORT LAYER
 
-- 手写 JSON：raw string literal + escapeJsonString；juce::JSON::toString 已弃用（引号转义 bug，pluginName.quoted() 不转内部引号，Oracle P0-4）。
+- 手写 JSON：raw string literal + escapeJsonString；juce::JSON::toString 在导出层已弃用（引号转义 bug，pluginName.quoted() 不转内部引号，Oracle P0-4）。弃用范围仅限导出层——IPC 命令拼装路径仍用它且有理由（Main.cpp:1674：paramId 来自插件须 JSON 转义，`String::quoted()` 只包引号、遇内嵌引号/反斜杠会断，故用 `JSON::toString`）。
 - datasetToJSON 聚合 scan 族 / gr_timeline / compression_family 为单个 Dataset 包；appendDatasetScanFamily 辅助函数。
 - 既有导出函数不变，body-equiv 测试锁等价性。
 

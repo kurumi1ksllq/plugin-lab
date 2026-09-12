@@ -197,6 +197,8 @@ cmake:  D:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 ## 目录结构
 
+> 注：本节为历史快照——目录树不随每次新增文件逐行同步，以各行项记述为准（2026-09-12 补齐 describe_schema/render/quality、gui_test.py、configs/ 行）。
+
 ```
 source/
 ├── Main.cpp              # 主窗口 + 专用扫描/加载线程 + 独立窗口管理
@@ -221,6 +223,11 @@ tools/reverse_derive.py   # 导出 JSON 反推验证（stdlib-only）
 tools/verify_export.py    # 导出 JSON 峰值/Q 验证（stdlib-only）
 tools/aggregate_report.py # 批量聚合报告 CLI（--out-dir 扫描 → markdown+json；默认态标 degenerate）
 tools/describe_chain.py  # 处理链路描述生成器：aggregate_report.json → chain_description.md/json（EQ/动态/非线性/顺序推断，honest uncertainty）
+tools/describe_schema.py  # 链路描述文档契约常量 + 结构校验器（CONTRACT_VERSION="2"，issue #26 T5）
+tools/describe_render.py  # chain_doc JSON/markdown 纯渲染器（issue #26 T3，无推导知识）
+tools/describe_quality.py  # 测量质量谓词（issue #26 T1，describe_chain 复用其阈值）
+tools/gui_test.py  # GUI 点击路径回归测试（issue #66；pywinauto UIA invoke-only；CI `gui-tests` job）
+tools/configs/  # 批量重采预设静态配置（15 份，`*.json`，见 #54 全量重采）
 DESIGN.md                 # 设计文档
 ```
 

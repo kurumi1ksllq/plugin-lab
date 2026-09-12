@@ -1257,13 +1257,13 @@ static juce::File writeSourceTestWav (double sampleRate, int numChannels, int64_
     if (writer == nullptr)
         return {};
 
-    constexpr int blockSize = 1024;
-    juce::AudioBuffer<float> block (numChannels, blockSize);
+    constexpr int kBlockSize = 1024;
+    juce::AudioBuffer<float> block (numChannels, kBlockSize);
 
     int64_t written = 0;
     while (written < numSamples)
     {
-        const int n = static_cast<int> (std::min<int64_t> (blockSize, numSamples - written));
+        const int n = static_cast<int> (std::min<int64_t> (kBlockSize, numSamples - written));
         block.clear();
 
         for (int ch = 0; ch < numChannels; ++ch)
