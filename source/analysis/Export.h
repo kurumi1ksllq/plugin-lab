@@ -72,7 +72,7 @@ namespace Export
 
     /** Export a raw capture (non-signal sources): record metadata only, no
      *  analysis (analysis of raw captures is phase 4). */
-    juce::String rawCaptureToJSON (int64_t samples, double rate, int blockSize,
+    juce::String rawCaptureToJSON (int64_t samples, double sampleRateHz, int blockSize,
                                    const Context& context);
 
     /** Export a parameter scan (one measurement round per parameter value) to

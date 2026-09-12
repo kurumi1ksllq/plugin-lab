@@ -87,14 +87,14 @@ CompressionFamily::FamilyResult CompressionFamily::measure (
             entry.speed = speed;
 
             // Envelope release (envelope-time) clipped so the release ramp
-            // starts inside the signal: releaseStart = totalEnv - release
+            // starts inside the signal: releaseStart = totalEnv - releaseSec
             // with totalEnv = 2 * speed (EnvelopeSignal semantics).
             const double totalEnv = 2.0 * speed;
-            const double release = std::min (kEnvReleaseSec, totalEnv - 0.05);
+            const double releaseSec = std::min (kEnvReleaseSec, totalEnv - 0.05);
 
             session->setDynamicAmplitude (amp);
             session->setDynamicSpeed (speed);
-            session->setDynamicADSR (kEnvAttackSec, kEnvDecaySec, kEnvSustain, release);
+            session->setDynamicADSR (kEnvAttackSec, kEnvDecaySec, kEnvSustain, releaseSec);
             session->setDynamicCarrierStartHz (kCarrierStartHz);
 
             if (session->run())
