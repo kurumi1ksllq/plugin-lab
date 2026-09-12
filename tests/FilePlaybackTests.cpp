@@ -45,13 +45,13 @@ static juce::File writeTestWav (double sampleRate, int numChannels, int64_t numS
         return {};
     }
 
-    constexpr int blockSize = 1024;
-    juce::AudioBuffer<float> block (numChannels, blockSize);
+    constexpr int kBlockSize = 1024;
+    juce::AudioBuffer<float> block (numChannels, kBlockSize);
 
     int64_t written = 0;
     while (written < numSamples)
     {
-        const int n = static_cast<int> (std::min<int64_t> (blockSize, numSamples - written));
+        const int n = static_cast<int> (std::min<int64_t> (kBlockSize, numSamples - written));
         block.clear();
 
         for (int ch = 0; ch < numChannels; ++ch)
@@ -109,10 +109,10 @@ static void generateAll (FilePlayback& fp, double sampleRate, int blockSize,
 TEST_CASE ("FilePlayback: wav helper writes a 1s 48k stereo file that reads back",
            "[fileplayback][wav-helper]")
 {
-    const double sr = 48000.0;
-    const int64_t numSamples = static_cast<int64_t> (sr);  // 1 s
+    const double kSampleRateHz = 48000.0;
+    const int64_t numSamples = static_cast<int64_t> (kSampleRateHz);  // 1 s
 
-    const auto file = writeTestWav (sr, 2, numSamples,
+    const auto file = writeTestWav (kSampleRateHz, 2, numSamples,
                                     [] (int ch, int64_t s)
                                     {
                                         const double t = static_cast<double> (s) / 48000.0;
@@ -126,7 +126,7 @@ TEST_CASE ("FilePlayback: wav helper writes a 1s 48k stereo file that reads back
     int readCh = 0;
     REQUIRE (readWavInto (file, readBack, readSr, readCh));
 
-    REQUIRE (readSr == Catch::Approx (sr));
+    REQUIRE (readSr == Catch::Approx (kSampleRateHz));
     REQUIRE (readCh == 2);
     REQUIRE (readBack.getNumSamples() == static_cast<int> (numSamples));
 
@@ -146,8 +146,8 @@ TEST_CASE ("FilePlayback: wav helper writes a 1s 48k stereo file that reads back
 TEST_CASE ("FilePlayback: metadata after prepare of a 48k stereo file",
            "[fileplayback][metadata]")
 {
-    const double sr = 48000.0;
-    const auto file = writeTestWav (sr, 2, static_cast<int64_t> (sr),
+    const double kSampleRateHz = 48000.0;
+    const auto file = writeTestWav (kSampleRateHz, 2, static_cast<int64_t> (kSampleRateHz),
                                     [] (int ch, int64_t s)
                                     {
                                         return static_cast<float> (0.5 * std::sin (static_cast<double> (s) * 0.05 * (ch + 1)));
@@ -160,7 +160,7 @@ TEST_CASE ("FilePlayback: metadata after prepare of a 48k stereo file",
     REQUIRE (fp.isLoaded());
     REQUIRE (fp.getSourceSampleRate() == Catch::Approx (48000.0));
     REQUIRE (fp.getFileNumChannels() == 2);
-    REQUIRE (fp.getTotalLength() == static_cast<int64_t> (sr));
+    REQUIRE (fp.getTotalLength() == static_cast<int64_t> (kSampleRateHz));
     REQUIRE (fp.getDurationSec() == Catch::Approx (1.0));
     REQUIRE_FALSE (fp.getSourcePath().isEmpty());
     REQUIRE (fp.getResampleRatio() == 0.0);  // 1:1 — no resampling
@@ -169,10 +169,10 @@ TEST_CASE ("FilePlayback: metadata after prepare of a 48k stereo file",
 TEST_CASE ("FilePlayback: 48k file through 48k session is a sample-accurate bypass",
            "[fileplayback][happy]")
 {
-    const double sr = 48000.0;
-    const int64_t numSamples = static_cast<int64_t> (sr);  // 1 s
+    const double kSampleRateHz = 48000.0;
+    const int64_t numSamples = static_cast<int64_t> (kSampleRateHz);  // 1 s
 
-    const auto file = writeTestWav (sr, 2, numSamples,
+    const auto file = writeTestWav (kSampleRateHz, 2, numSamples,
                                     [] (int ch, int64_t s)
                                     {
                                         const double t = static_cast<double> (s) / 48000.0;
@@ -189,10 +189,10 @@ TEST_CASE ("FilePlayback: 48k file through 48k session is a sample-accurate bypa
     {
         FilePlayback fp;
         fp.setFile (file);
-        fp.prepare (sr, 512);
+        fp.prepare (kSampleRateHz, 512);
 
         juce::AudioBuffer<float> out;
-        generateAll (fp, sr, 512, out);
+        generateAll (fp, kSampleRateHz, 512, out);
 
         REQUIRE (out.getNumSamples() == static_cast<int> (numSamples));
         for (int ch = 0; ch < 2; ++ch)
@@ -210,7 +210,7 @@ TEST_CASE ("FilePlayback: 48k file through 48k session is a sample-accurate bypa
         plugin.setLatencySamples (0);
 
         SweepRunner runner;
-        runner.prepare (sr, 512);
+        runner.prepare (kSampleRateHz, 512);
         runner.setGenerator (&fp);
         runner.setPlugin (&plugin);
 
@@ -275,10 +275,10 @@ TEST_CASE ("FilePlayback: reset() after generating restarts with identical outpu
 TEST_CASE ("FilePlayback: mono file is duplicated to both output channels",
            "[fileplayback][mono-stereo]")
 {
-    const double sr = 48000.0;
-    const int64_t numSamples = static_cast<int64_t> (sr);  // 1 s
+    const double kSampleRateHz = 48000.0;
+    const int64_t numSamples = static_cast<int64_t> (kSampleRateHz);  // 1 s
 
-    const auto file = writeTestWav (sr, 1, numSamples,
+    const auto file = writeTestWav (kSampleRateHz, 1, numSamples,
                                     [] (int, int64_t s)
                                     {
                                         return static_cast<float> (0.5 * std::sin (2.0 * juce::MathConstants<double>::pi * 440.0 * static_cast<double> (s) / 48000.0));
@@ -292,10 +292,10 @@ TEST_CASE ("FilePlayback: mono file is duplicated to both output channels",
 
     FilePlayback fp;
     fp.setFile (file);
-    fp.prepare (sr, 512);
+    fp.prepare (kSampleRateHz, 512);
 
     juce::AudioBuffer<float> out;
-    generateAll (fp, sr, 512, out);
+    generateAll (fp, kSampleRateHz, 512, out);
 
     REQUIRE (out.getNumChannels() == 2);
     for (int i = 0; i < static_cast<int> (numSamples); ++i)

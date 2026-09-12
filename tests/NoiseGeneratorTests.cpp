@@ -44,31 +44,31 @@ static double bandPowerDb (const std::vector<float>& samples,
                            double lowHz,
                            double highHz)
 {
-    constexpr int order = 12;         // 4096-point FFT
-    const int fftSize = 1 << order;
-    const int numFrames = static_cast<int> (samples.size()) / fftSize;
-    REQUIRE (numFrames >= 1);
+    constexpr int kFftOrder = 12;     // 4096-point FFT
+    const int kFftSize = 1 << kFftOrder;
+    const int kNumFrames = static_cast<int> (samples.size()) / kFftSize;
+    REQUIRE (kNumFrames >= 1);
 
-    FftHelper fft (order);
-    const int numBins = fftSize / 2 + 1;
-    std::vector<float> real (numBins), imag (numBins), mag (numBins);
+    FftHelper fft (kFftOrder);
+    const int kNumBins = kFftSize / 2 + 1;
+    std::vector<float> real (kNumBins), imag (kNumBins), mag (kNumBins);
 
-    const double binWidth = sampleRate / fftSize;
+    const double binWidth = sampleRate / kFftSize;
     const int kStart = static_cast<int> (std::ceil (lowHz / binWidth));
     const int kEnd   = static_cast<int> (std::floor (highHz / binWidth));  // exclusive
 
     double power = 0.0;
-    for (int frame = 0; frame < numFrames; ++frame)
+    for (int frame = 0; frame < kNumFrames; ++frame)
     {
-        fft.forwardReal (samples.data() + frame * fftSize, real.data(), imag.data(), true);
-        FftHelper::getMagnitudes (mag.data(), real.data(), imag.data(), numBins);
-        for (int k = kStart; k < kEnd && k < numBins; ++k)
+        fft.forwardReal (samples.data() + frame * kFftSize, real.data(), imag.data(), true);
+        FftHelper::getMagnitudes (mag.data(), real.data(), imag.data(), kNumBins);
+        for (int k = kStart; k < kEnd && k < kNumBins; ++k)
             power += static_cast<double> (mag[k]) * mag[k];
     }
     // Average power per bin: bands contain different bin counts
     // (each octave band doubles in width), so normalise by band width.
     power /= (kEnd - kStart) > 0 ? (kEnd - kStart) : 1;
-    power /= numFrames;
+    power /= kNumFrames;
 
     REQUIRE (power > 0.0);
     return 10.0 * std::log10 (power);
@@ -185,29 +185,29 @@ TEST_CASE ("getTotalLength is zero when no duration is set", "[noise][duration]"
 // 4. Peak amplitude never exceeds the configured amplitude (white and pink).
 TEST_CASE ("Peak amplitude never exceeds the configured amplitude", "[noise][amplitude]")
 {
-    constexpr double amplitude = 0.5;
-    constexpr double sampleRate = 48000.0;
-    const int numSamples = static_cast<int> (sampleRate);   // 1 second
+    constexpr double kAmplitude = 0.5;
+    constexpr double kSampleRateHz = 48000.0;
+    const int numSamples = static_cast<int> (kSampleRateHz);   // 1 second
 
     NoiseGenerator white;
     white.setType (NoiseGenerator::Type::white);
-    white.setAmplitude (amplitude);
+    white.setAmplitude (kAmplitude);
     white.setDuration (1.0);
 
-    const auto whiteSamples = generateNoiseSamples (white, sampleRate, numSamples);
+    const auto whiteSamples = generateNoiseSamples (white, kSampleRateHz, numSamples);
     const float whitePeak = *std::max_element (whiteSamples.begin(), whiteSamples.end(),
                                                [](float x, float y) { return std::abs (x) < std::abs (y); });
-    REQUIRE (whitePeak <= static_cast<float> (amplitude));
+    REQUIRE (whitePeak <= static_cast<float> (kAmplitude));
 
     NoiseGenerator pink;
     pink.setType (NoiseGenerator::Type::pink);
-    pink.setAmplitude (amplitude);
+    pink.setAmplitude (kAmplitude);
     pink.setDuration (1.0);
 
-    const auto pinkSamples = generateNoiseSamples (pink, sampleRate, numSamples);
+    const auto pinkSamples = generateNoiseSamples (pink, kSampleRateHz, numSamples);
     const float pinkPeak = *std::max_element (pinkSamples.begin(), pinkSamples.end(),
                                               [](float x, float y) { return std::abs (x) < std::abs (y); });
-    REQUIRE (pinkPeak <= static_cast<float> (amplitude));
+    REQUIRE (pinkPeak <= static_cast<float> (kAmplitude));
 }
 
 //==============================================================================
@@ -220,13 +220,13 @@ TEST_CASE ("Pink noise spectrum slopes at approximately -3 dB per octave",
     ng.setSeed (0x2E42A5);
     ng.prepare (48000.0, 512);
 
-    constexpr int totalSamples = 16384;   // 4 x 4096 FFT frames
-    juce::AudioBuffer<float> buffer (1, totalSamples);
+    constexpr int kTotalSamples = 16384;   // 4 x 4096 FFT frames
+    juce::AudioBuffer<float> buffer (1, kTotalSamples);
     buffer.clear();
-    ng.generate (buffer, 0, totalSamples);
+    ng.generate (buffer, 0, kTotalSamples);
 
     const float* data = buffer.getReadPointer (0);
-    const std::vector<float> samples (data, data + totalSamples);
+    const std::vector<float> samples (data, data + kTotalSamples);
 
     const std::vector<std::pair<double, double>> bands = {
         { 500.0, 1000.0 }, { 1000.0, 2000.0 }, { 2000.0, 4000.0 }, { 4000.0, 8000.0 }
@@ -246,13 +246,13 @@ TEST_CASE ("White noise spectrum is flat (approximately 0 dB per octave)",
     ng.setSeed (0x2E42A5);
     ng.prepare (48000.0, 512);
 
-    constexpr int totalSamples = 16384;   // 4 x 4096 FFT frames
-    juce::AudioBuffer<float> buffer (1, totalSamples);
+    constexpr int kTotalSamples = 16384;   // 4 x 4096 FFT frames
+    juce::AudioBuffer<float> buffer (1, kTotalSamples);
     buffer.clear();
-    ng.generate (buffer, 0, totalSamples);
+    ng.generate (buffer, 0, kTotalSamples);
 
     const float* data = buffer.getReadPointer (0);
-    const std::vector<float> samples (data, data + totalSamples);
+    const std::vector<float> samples (data, data + kTotalSamples);
 
     const std::vector<std::pair<double, double>> bands = {
         { 500.0, 1000.0 }, { 1000.0, 2000.0 }, { 2000.0, 4000.0 }, { 4000.0, 8000.0 }
@@ -267,28 +267,28 @@ TEST_CASE ("White noise spectrum is flat (approximately 0 dB per octave)",
 TEST_CASE ("reset reproduces the same samples from the start", "[noise][reset]")
 {
     constexpr uint32_t seed = 0x2E42A5;
-    constexpr int blockSamples = 4096;
+    constexpr int kBlockSamples = 4096;
 
     NoiseGenerator pink;
     pink.setType (NoiseGenerator::Type::pink);
     pink.setSeed (seed);
     pink.prepare (48000.0, 512);
 
-    juce::AudioBuffer<float> first (1, blockSamples);
-    pink.generate (first, 0, blockSamples);
+    juce::AudioBuffer<float> first (1, kBlockSamples);
+    pink.generate (first, 0, kBlockSamples);
 
     // Advance the generator state well past the first block.
-    juce::AudioBuffer<float> scratch (1, blockSamples);
-    pink.generate (scratch, 0, blockSamples);
-    pink.generate (scratch, 0, blockSamples);
+    juce::AudioBuffer<float> scratch (1, kBlockSamples);
+    pink.generate (scratch, 0, kBlockSamples);
+    pink.generate (scratch, 0, kBlockSamples);
 
     pink.reset();
 
-    juce::AudioBuffer<float> replay (1, blockSamples);
-    pink.generate (replay, 0, blockSamples);
+    juce::AudioBuffer<float> replay (1, kBlockSamples);
+    pink.generate (replay, 0, kBlockSamples);
 
     const float* a = first.getReadPointer (0);
     const float* b = replay.getReadPointer (0);
-    for (int i = 0; i < blockSamples; ++i)
+    for (int i = 0; i < kBlockSamples; ++i)
         REQUIRE (a[i] == b[i]);
 }

@@ -158,7 +158,7 @@ TEST_CASE ("ChildMeasureOrchestrator: recovery sequence drives child and maps re
 //      touches the child (no restart, no spawn, no measure).
 //==============================================================================
 
-TEST_CASE ("ChildMeasureOrchestrator: gr_timeline passes the ADR-D-7 gate and reaches the child",
+TEST_CASE ("ChildMeasureOrchestrator: gr_timeline passes validation and reaches the child",
            "[childorchestrator][gr]")
 {
     // Arrange — same end-to-end double as the R1 recovery-sequence test
@@ -222,7 +222,7 @@ TEST_CASE ("ChildMeasureOrchestrator: bogus type fails without touching the chil
     REQUIRE (coord.crashCount() == 0);
 }
 
-TEST_CASE ("ChildMeasureOrchestrator: harmonic passes the ADR-D-7 gate and reaches the child",
+TEST_CASE ("ChildMeasureOrchestrator: harmonic passes validation and reaches the child",
            "[childorchestrator][harmonic]")
 {
     // Arrange — same end-to-end double as the R1 recovery-sequence test
@@ -262,7 +262,7 @@ TEST_CASE ("ChildMeasureOrchestrator: harmonic passes the ADR-D-7 gate and reach
     wavPath.deleteFile();
 }
 
-TEST_CASE ("ChildMeasureOrchestrator: compression passes the ADR-D-7 gate and reaches the child",
+TEST_CASE ("ChildMeasureOrchestrator: compression passes validation and reaches the child",
            "[childorchestrator][compression]")
 {
     // Arrange — same end-to-end double as the R1 recovery-sequence test

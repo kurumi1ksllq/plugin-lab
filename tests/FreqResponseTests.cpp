@@ -166,31 +166,31 @@ static double interpMagDB (const std::vector<FreqResponse::Point>& curve, double
 // Test: analyzeMLS matches analyze for the same filtered system.
 TEST_CASE ("FreqResponse: analyzeMLS matches analyze for a known filter", "[freqresponse][mls]")
 {
-    const double sr = 48000.0;
+    const double kSampleRateHz = 48000.0;
 
     // Same filter cascade as the sweep test: bell +6dB@1kHz Q1 + lowpass 8k
     float gainLinear = juce::Decibels::decibelsToGain (6.0f);
     std::vector<juce::dsp::IIR::Coefficients<float>::Ptr> coeffs;
     coeffs.push_back (juce::dsp::IIR::Coefficients<float>::makePeakFilter (
-        sr, 1000.0, 1.0f, gainLinear));
+        kSampleRateHz, 1000.0, 1.0f, gainLinear));
     coeffs.push_back (juce::dsp::IIR::Coefficients<float>::makeLowPass (
-        sr, 8000.0, 1.0f / std::sqrt (2.0f)));
+        kSampleRateHz, 8000.0, 1.0f / std::sqrt (2.0f)));
 
     // Sweep path (existing analysis)
-    auto drySweep = generateSweep (sr, 20.0, 20000.0, 5.0, 0.5);
+    auto drySweep = generateSweep (kSampleRateHz, 20.0, 20000.0, 5.0, 0.5);
     auto wetSweep = drySweep;
     applyFilters (wetSweep, coeffs);
-    const auto sweepResult = FreqResponse().analyze (drySweep, wetSweep, sr);
+    const auto sweepResult = FreqResponse().analyze (drySweep, wetSweep, kSampleRateHz);
 
     // MLS path (new analysis)
     constexpr int kMlsLength = 16383;
-    auto dryMls = generateMLS (sr, kMlsLength, 0.5);
+    auto dryMls = generateMLS (kSampleRateHz, kMlsLength, 0.5);
     auto wetMls = dryMls;
     applyFilters (wetMls, coeffs);
-    const auto mlsResult = FreqResponse().analyzeMLS (dryMls, wetMls, sr, kMlsLength);
+    const auto mlsResult = FreqResponse().analyzeMLS (dryMls, wetMls, kSampleRateHz, kMlsLength);
 
     REQUIRE (!mlsResult.raw.empty());
-    REQUIRE (mlsResult.sampleRate == Catch::Approx (sr));
+    REQUIRE (mlsResult.sampleRate == Catch::Approx (kSampleRateHz));
 
     // Compare magnitudes on 100 Hz – 10 kHz (both estimate the same LTI)
     for (const auto& p : mlsResult.raw)
@@ -208,13 +208,13 @@ TEST_CASE ("FreqResponse: analyzeMLS matches analyze for a known filter", "[freq
 // Test: MLS identity — dry == wet gives flat 0 dB (no filtering).
 TEST_CASE ("FreqResponse: analyzeMLS identity gives 0dB flat response", "[freqresponse][mls]")
 {
-    const double sr = 48000.0;
+    const double kSampleRateHz = 48000.0;
     constexpr int kMlsLength = 16383;
 
-    auto dry = generateMLS (sr, kMlsLength, 0.5);
+    auto dry = generateMLS (kSampleRateHz, kMlsLength, 0.5);
     auto wet = dry;   // no filtering
 
-    const auto result = FreqResponse().analyzeMLS (dry, wet, sr, kMlsLength);
+    const auto result = FreqResponse().analyzeMLS (dry, wet, kSampleRateHz, kMlsLength);
 
     REQUIRE (!result.raw.empty());
     auto mid = pointsInRange (result.raw, 100.0, 10000.0);
@@ -234,12 +234,12 @@ TEST_CASE ("FreqResponse: analyzeMLS identity gives 0dB flat response", "[freqre
 
 TEST_CASE ("FreqResponse identity: dry==wet gives 0dB flat/zero phase", "[freqresponse][h1]")
 {
-    const double sr = 48000.0;
+    const double kSampleRateHz = 48000.0;
     const double duration = 5.0;
     const double amplitude = 0.5;
 
     // Generate one sweep and use it for both dry and wet
-    auto dry = generateSweep (sr, 20.0, 20000.0, duration, amplitude);
+    auto dry = generateSweep (kSampleRateHz, 20.0, 20000.0, duration, amplitude);
     juce::AudioBuffer<float> wet (1, dry.getNumSamples());
     wet.clear();
     const float* dryData = dry.getReadPointer (0);
@@ -248,11 +248,11 @@ TEST_CASE ("FreqResponse identity: dry==wet gives 0dB flat/zero phase", "[freqre
         wetData[i] = dryData[i];
 
     FreqResponse fr;
-    auto result = fr.analyze (dry, wet, sr);
+    auto result = fr.analyze (dry, wet, kSampleRateHz);
 
     // Raw points must be populated
     REQUIRE (!result.raw.empty());
-    REQUIRE (result.sampleRate == Catch::Approx (sr));
+    REQUIRE (result.sampleRate == Catch::Approx (kSampleRateHz));
 
     // Check 100 Hz – 10 kHz range
     auto mid = pointsInRange (result.raw, 100.0, 10000.0);
@@ -277,12 +277,12 @@ TEST_CASE ("FreqResponse identity: dry==wet gives 0dB flat/zero phase", "[freqre
 
 TEST_CASE ("FreqResponse known bell filter: +6dB@1kHz Q1 recovered", "[freqresponse][h1]")
 {
-    const double sr = 48000.0;
+    const double kSampleRateHz = 48000.0;
     const double duration = 5.0;
     const double amplitude = 0.5;
 
     // Generate dry sweep
-    auto dryBuf = generateSweep (sr, 20.0, 20000.0, duration, amplitude);
+    auto dryBuf = generateSweep (kSampleRateHz, 20.0, 20000.0, duration, amplitude);
 
     // Copy to wet
     juce::AudioBuffer<float> wetBuf (1, dryBuf.getNumSamples());
@@ -299,14 +299,14 @@ TEST_CASE ("FreqResponse known bell filter: +6dB@1kHz Q1 recovered", "[freqrespo
 
     std::vector<juce::dsp::IIR::Coefficients<float>::Ptr> coeffs;
     coeffs.push_back (juce::dsp::IIR::Coefficients<float>::makePeakFilter (
-        sr, 1000.0, 1.0f, gainLinear));
+        kSampleRateHz, 1000.0, 1.0f, gainLinear));
     coeffs.push_back (juce::dsp::IIR::Coefficients<float>::makeLowPass (
-        sr, 8000.0, 1.0f / std::sqrt (2.0f)));
+        kSampleRateHz, 8000.0, 1.0f / std::sqrt (2.0f)));
 
     applyFilters (wetBuf, coeffs);
 
     FreqResponse fr;
-    auto result = fr.analyze (dryBuf, wetBuf, sr);
+    auto result = fr.analyze (dryBuf, wetBuf, kSampleRateHz);
 
     REQUIRE (!result.raw.empty());
 
@@ -346,17 +346,17 @@ TEST_CASE ("FreqResponse known bell filter: +6dB@1kHz Q1 recovered", "[freqrespo
 
 TEST_CASE ("FreqResponse latency compensation flattens phase ramp", "[freqresponse][h1]")
 {
-    const double sr = 48000.0;
+    const double kSampleRateHz = 48000.0;
     const double duration = 5.0;
     const int delaySamples = 256;
 
-    auto dryBuf = generateSweep (sr, 20.0, 20000.0, duration, 0.5);
+    auto dryBuf = generateSweep (kSampleRateHz, 20.0, 20000.0, duration, 0.5);
     auto wetBuf = delayCopy (dryBuf, delaySamples);
 
     // Without compensation: phase should be significantly non-zero
     {
         FreqResponse fr; // default latencySamples = 0
-        auto result = fr.analyze (dryBuf, wetBuf, sr);
+        auto result = fr.analyze (dryBuf, wetBuf, kSampleRateHz);
 
         auto mid = pointsInRange (result.raw, 1000.0, 10000.0);
         REQUIRE (mid.size() > 30);
@@ -371,7 +371,7 @@ TEST_CASE ("FreqResponse latency compensation flattens phase ramp", "[freqrespon
     {
         FreqResponse fr;
         fr.setLatencySamples (delaySamples);
-        auto result = fr.analyze (dryBuf, wetBuf, sr);
+        auto result = fr.analyze (dryBuf, wetBuf, kSampleRateHz);
 
         auto mid = pointsInRange (result.raw, 1000.0, 10000.0);
         REQUIRE (mid.size() > 30);
@@ -386,7 +386,7 @@ TEST_CASE ("FreqResponse latency compensation flattens phase ramp", "[freqrespon
     {
         FreqResponse fr;
         fr.setLatencySamples (delaySamples);
-        auto result = fr.analyze (dryBuf, wetBuf, sr);
+        auto result = fr.analyze (dryBuf, wetBuf, kSampleRateHz);
 
         auto mid = pointsInRange (result.raw, 100.0, 10000.0);
         double avgMagErr = meanAbsMagDB (mid);
@@ -401,9 +401,9 @@ TEST_CASE ("FreqResponse latency compensation flattens phase ramp", "[freqrespon
 
 TEST_CASE ("FreqResponse smoothed curves populated and frequencies monotonic", "[freqresponse][h1]")
 {
-    const double sr = 48000.0;
+    const double kSampleRateHz = 48000.0;
 
-    auto dry = generateSweep (sr, 20.0, 20000.0, 5.0, 0.5);
+    auto dry = generateSweep (kSampleRateHz, 20.0, 20000.0, 5.0, 0.5);
     juce::AudioBuffer<float> wet (1, dry.getNumSamples());
     wet.clear();
     const float* dryData = dry.getReadPointer (0);
@@ -412,7 +412,7 @@ TEST_CASE ("FreqResponse smoothed curves populated and frequencies monotonic", "
         wetData[i] = dryData[i];
 
     FreqResponse fr;
-    auto result = fr.analyze (dry, wet, sr);
+    auto result = fr.analyze (dry, wet, kSampleRateHz);
 
     // Smoothed curves must be populated
     REQUIRE (!result.smoothed_1_12.empty());
@@ -451,10 +451,10 @@ TEST_CASE ("FreqResponse smoothed curves populated and frequencies monotonic", "
 TEST_CASE ("FreqResponse: analyzeMLS tolerates a recording shorter than the MLS period",
            "[freqresponse][mls]")
 {
-    const double sr = 48000.0;
+    const double kSampleRateHz = 48000.0;
     constexpr int kMlsLength = 16383;
 
-    auto full = generateMLS (sr, kMlsLength, 0.5);
+    auto full = generateMLS (kSampleRateHz, kMlsLength, 0.5);
 
     // Truncate to a fraction of the period (simulates a short capture).
     constexpr int kShort = 4096;
@@ -465,7 +465,7 @@ TEST_CASE ("FreqResponse: analyzeMLS tolerates a recording shorter than the MLS 
     juce::AudioBuffer<float> wetShort = dryShort;   // identity
 
     // ---- Act ---- (buffer shorter than mlsLength must not overrun)
-    const auto result = FreqResponse().analyzeMLS (dryShort, wetShort, sr, kMlsLength);
+    const auto result = FreqResponse().analyzeMLS (dryShort, wetShort, kSampleRateHz, kMlsLength);
 
     // ---- Assert ----
     REQUIRE (! result.raw.empty());
