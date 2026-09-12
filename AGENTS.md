@@ -11,8 +11,9 @@ VST3 插件黑盒测量实验室（Windows 桌面 GUI，C++20 + JUCE 9 + CMake +
 ```
 PluginLab/
 ├── source/            # 全部生产代码（77 文件，9 模块，含块 D 新增 child/）——见 source/AGENTS.md
-│   ├── Main.cpp       # 入口 + 装配中枢（2313 行 god file）
-│   ├── host/          # VST3 扫描/加载（/EHa 崩溃保护 + 黑名单）
+│   ├── Main.cpp       # 入口 + 装配中枢（2343 行 god file，2026-09-12 实测）
+│   ├── host/          # VST3 扫描/加载（/EHa 崩溃保护 + 黑名单）+ 子进程编排（ChildProcessCoordinator/ChildMeasureOrchestrator，块 D）
+│   ├── child/         # 子进程可执行 PluginHostChild（VST3 加载 + 测量，stdin/stdout JSON 协议）
 │   ├── signal/        # 信号生成器接口 + 8 生成器
 │   ├── capture/       # 采集管线（SweepRunner 冻结 / MeasurementSession）
 │   ├── scan/          # 参数扫描引擎 ScanEngine
@@ -20,7 +21,7 @@ PluginLab/
 │   ├── ipc/           # Named Pipe 服务器 + 命令解析
 │   ├── ui/            # PlotWidget + PluginEditorWindow
 │   └── utils/         # FftHelper / MathUtils / CrashLog
-├── tests/             # Catch2 单元测试(312/312 绿,计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
+├── tests/             # Catch2 单元测试(318/318 生效，计数以 tests/AGENTS.md 为准)——见 tests/AGENTS.md
 ├── tools/             # VST3Scanner(构建可选：-DBUILD_VST3SCANNER=ON，默认关闭) + CMakeLists + PS/Python 工具脚本
 ├── samples/take01.wav # vocal 测试素材（已入库）
 ├── SPEC.md            # 工程文档：8 类导出 JSON schema + IPC 协议契约（原 docs/data-schema.md）
@@ -35,6 +36,7 @@ PluginLab/
 | 任务                      | 位置                                                 | 备注                                        |
 | ------------------------- | ---------------------------------------------------- | ------------------------------------------- |
 | 插件扫描/加载/崩溃保护    | `source/host/PluginManager.cpp`                      | /EHa + Pianoteq 黑名单                      |
+| 子进程托管/测量编排       | `source/host/ChildProcessCoordinator.*`、`source/host/ChildMeasureOrchestrator.*`、`source/child/PluginHostChild.cpp` | 块 D：黑名单插件进程外测量（stdin/stdout JSON 协议） |
 | 测量执行（4 类型 × 4 源） | `source/capture/MeasurementSession.*`                | 类型: freq/harmonic/compression/grTimeline  |
 | 参数扫描                  | `source/scan/ScanEngine.*`                           | 快照/恢复/取消 RAII                         |
 | 信号生成（新增生成器）    | `source/signal/`                                     | 实现 `SignalGenerator` 接口                 |
@@ -63,6 +65,9 @@ PluginLab/
 | `MeasurementSession`                            | class        | `source/capture/`  | 测量编排（type + source），51 符号                                   |
 | `SweepRunner`                                   | class        | `source/capture/`  | 冻结的 generate→process→capture 管线（不改）                         |
 | `ScanEngine`                                    | class        | `source/scan/`     | 参数多轮扫描，返回曲线族                                             |
+| `PluginHostChild`                               | class        | `source/child/`    | 子进程可执行：VST3 加载 + 测量（stdin/stdout JSON 协议）             |
+| `ChildProcessCoordinator`                       | class        | `source/host/`     | 子进程拉起/重启/协议收发                                             |
+| `ChildMeasureOrchestrator`                      | class        | `source/host/`     | 宿主侧子进程测量编排（与进程内路径同构导出，D6 路由）                 |
 | `Export` / `datasetToJSON`                      | namespace/fn | `source/analysis/` | 手写 JSON + 数据包聚合                                               |
 | `PlotWidget`                                    | class        | `source/ui/`       | EQ/压缩/谐波/GR 四种图                                               |
 

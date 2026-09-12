@@ -2,18 +2,18 @@
 
 ## OVERVIEW
 
-9 个子模块（块 D 新增 `child/`）+ Main.cpp 共 77 文件（38 .cpp + 39 .h）。模块边界由根 CMakeLists.txt 单一 target_sources 清单强制，目录不自包含。全局风格/构建命令/通用反模式见根 `AGENTS.md`，此处只写 source 层独有的结构、接线与边界。
+9 个子模块（块 D 新增 `child/`）+ Main.cpp 共 77 文件（38 .cpp + 39 .h，2026-09-12 复数确认）。模块边界由根 CMakeLists.txt 单一 target_sources 清单强制，目录不自包含。全局风格/构建命令/通用反模式见根 `AGENTS.md`，此处只写 source 层独有的结构、接线与边界。
 
 ## STRUCTURE
 
 ```
 source/
-├── Main.cpp          # 入口 + 装配中枢（2313 行 god file）
+├── Main.cpp          # 入口 + 装配中枢（2343 行 god file，2026-09-12 实测）
 ├── host/             # VST3 扫描/加载/崩溃保护（唯一 /EHa TU 所在）
 ├── signal/           # SignalGenerator 接口 + 8 生成器 —— 见 signal/AGENTS.md
 ├── capture/          # 测量编排（SweepRunner 冻结管线 + MeasurementSession）—— 见 capture/AGENTS.md
 ├── scan/             # ScanEngine 参数扫描（快照/恢复/取消 RAII）
-├── analysis/         # 6 分析器 + Export（手写 JSON）—— 见 analysis/AGENTS.md
+├── analysis/         # 9 分析器 + Export（手写 JSON）—— 见 analysis/AGENTS.md
 ├── ipc/              # Named Pipe 服务器 + CommandParser 分发 —— 见 ipc/AGENTS.md
 ├── ui/               # PlotWidget + PluginEditorWindow
 └── utils/            # FftHelper / MathUtils / CrashLog
