@@ -123,7 +123,7 @@ ctest --test-dir build -C Release --timeout 180
 - 模块边界由根 CMakeLists.txt 单一清单强制（目录不自包含）——`tools/` 自含 CMakeLists.txt（构建 VST3Scanner），由根 CMakeLists.txt 的 `option(BUILD_VST3SCANNER)` 门控（默认 OFF，issue #44）；`VST3Scanner` 运行时死代码（扫描在进程内），默认关闭不构建不复制
 - `JUCE_DISABLE_ASSERTIONS=1` 仅 MSVC 下 PluginLab target 全配置生效（JUCE 9 扫描器断言消息线程）；`unit_tests` 不带此定义
 - vocal 素材 `samples/take01.wav`（48k/16bit/stereo/17.0s，**已入库**）
-- 构建产物：`build/`（MSVC）与 `cmake-build-debug/`（CLion Ninja）并存
+- 构建产物：`build/`（MSVC）——**唯一构建树**。CLion 已弃用，`cmake-build-*`（`.gitignore:51` 仍保留忽略规则）不再产生，本机 `cmake` 不在 PATH，本地构建走 `build/` 或 CI `build-and-test`
 - 知识库分层：本文件（根）+ `source/AGENTS.md` + 各模块子文件 + `tests/AGENTS.md`
 - **插件缓存**：`%APPDATA%/PluginLab/pluginlist.xml`（根 `version=1`；`loadCache/saveCache` 见 PluginManager；原子写 temp+replaceFileIn）；**黑名单随缓存往返**（`<BLACKLISTED>` 子元素）；**死马踏板** `%APPDATA%/PluginLab/deadMansPedal`（挂起/崩溃插件下次自动黑名单）
 - 扫描/加载线程模型：专用一次性 `std::thread`（**析构不 join**，放弃用 `release()`）；worker 不触碰宿主成员（shared_ptr 状态 + callAsync alive-guard）；扫描看门狗（无进展 60s→黑名单+abandon，上限 3 次）；热扫增量靠 `cacheIsCurrent()`（内层 DLL mtime 基准）
