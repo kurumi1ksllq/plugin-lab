@@ -7,6 +7,7 @@ pinned contract (no imports from other agents' modules).
 Usage:
     python -m pytest tools/test_describe_render.py -q
 """
+import copy
 import json
 
 from describe_render import render_json, render_markdown
@@ -209,6 +210,41 @@ def _key_sets(value):
 # render_json
 # ---------------------------------------------------------------------------
 
+# v3 (issue #105): the clean document decomposed into stages, plus a fused
+# document carrying the optional top-level fusion block.
+STAGE_CLEAN_DOC = copy.deepcopy(CLEAN_DOC)
+STAGE_CLEAN_DOC["contract_version"] = "3"
+STAGE_CLEAN_DOC["plugins"][0]["stages"] = [
+    {"kind": "eq",
+     "params": {"overall": "clean",
+                "sections": [{"freq_hz": 1000.0, "gain_db": 3.0, "q": 1.2},
+                             {"freq_hz": 4000.0, "gain_db": 2.5, "q": 1.8}]},
+     "provenance": {"source": "frequency_response",
+                    "basis": ["eq overall clean"]}},
+    {"kind": "dynamics",
+     "params": {"threshold_db": -18.5, "ratio": 4.0, "knee_db": 6.0,
+                "attack_ms": 50.0, "release_ms": 250.0, "conflict": False},
+     "provenance": {"source": "compression+gr", "basis": ["no fit conflict"]}},
+    {"kind": "nonlinearity",
+     "params": {"verdict": "clean", "thd_range_pct": [0.1, 0.3]},
+     "provenance": {"source": "harmonic", "basis": ["harmonic verdict clean"]}},
+]
+
+FUSION_BLOCK = {
+    "inputs": [
+        {"alias": "a", "path": "chain_a.json", "slug": "pro-c-2",
+         "plugin": "Pro-C 2"},
+        {"alias": "b", "path": "chain_b.json", "slug": "pro-q-4",
+         "plugin": "Pro-Q 4"},
+    ],
+    "picks": [{"alias": "a", "stage": "dynamics"},
+              {"alias": "b", "stage": "eq"}],
+}
+
+FUSED_DOC = copy.deepcopy(STAGE_CLEAN_DOC)
+FUSED_DOC["fusion"] = copy.deepcopy(FUSION_BLOCK)
+
+
 def test_render_json_roundtrips_clean_doc():
     """Given a clean chain_doc literal, When rendered then dumped/loaded,
     Then every field survives with the same keys and value types."""
@@ -276,6 +312,72 @@ def test_render_markdown_clean():
     assert "GR: attack 50.0 ms / release 250.0 ms" in md
     assert "— release implausible" not in md
     assert " — conflict" not in md
+
+
+# ---------------------------------------------------------------------------
+# v3 stages + fusion (issue #105)
+# ---------------------------------------------------------------------------
+
+
+def test_render_markdown_lists_stage_segments():
+    """A v3 document lists its segments in fixed order with per-segment facts."""
+    md = render_markdown(STAGE_CLEAN_DOC)
+
+    assert "Stages: eq, dynamics, nonlinearity" in md
+    assert "- eq: overall clean, 2 section(s)" in md
+    assert "- dynamics: threshold -18.5 dB / ratio 4.0" in md
+    assert "- nonlinearity: verdict clean / THD 0.1-0.3%" in md
+
+
+def test_render_markdown_without_stages_has_no_stage_lines():
+    """A pre-v3 document renders exactly as before (no stage lines)."""
+    assert "Stages:" not in render_markdown(CLEAN_DOC)
+    assert "- eq: overall" not in render_markdown(CLEAN_DOC)
+
+
+def test_render_markdown_renders_fusion_section():
+    """A fused document gains a Fusion section naming inputs and picks."""
+    md = render_markdown(FUSED_DOC)
+
+    assert "## Fusion" in md
+    assert "Inputs: a (Pro-C 2), b (Pro-Q 4)" in md
+    assert "Picks: a:dynamics, b:eq" in md
+
+
+def test_render_markdown_without_fusion_has_no_fusion_section():
+    """A plain (unfused) document never grows a Fusion section."""
+    assert "Fusion" not in render_markdown(STAGE_CLEAN_DOC)
+
+
+def test_render_json_preserves_stages_and_fusion():
+    """render_json canonicalizes but keeps contract_version, stages, fusion."""
+    out = render_json(FUSED_DOC)
+
+    assert out["contract_version"] == "3"
+    assert [stage["kind"] for stage in out["plugins"][0]["stages"]] == [
+        "eq", "dynamics", "nonlinearity"]
+    assert out["fusion"] == FUSION_BLOCK
+
+
+def test_gr_line_claims_implausible_only_when_a_release_was_fitted():
+    """An empty (not picked) dynamics segment must not be rendered as a
+    release verdict — there is no measurement behind it."""
+    doc = copy.deepcopy(STAGE_CLEAN_DOC)
+    doc["plugins"][0]["dynamics"]["gr"] = {
+        "attack_ms": None, "release_ms": None, "attack_plausible": False,
+        "release_plausible": False, "release_flag": None,
+        "note": "not picked in fusion", "section_usable": False}
+
+    md = render_markdown(doc)
+
+    assert "GR: attack n/a ms / release n/a ms" in md
+    assert "release implausible" not in md
+
+
+def test_render_markdown_stage_output_is_stable():
+    """Two renders of the same v3 document are byte-identical."""
+    first = render_markdown(FUSED_DOC)
+    assert render_markdown(FUSED_DOC) == first
 
 
 def test_render_markdown_degenerate():

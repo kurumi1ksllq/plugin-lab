@@ -225,7 +225,7 @@ tools/reverse_derive.py   # 导出 JSON 反推验证（stdlib-only）
 tools/verify_export.py    # 导出 JSON 峰值/Q 验证（stdlib-only）
 tools/aggregate_report.py # 批量聚合报告 CLI（--out-dir 扫描 → markdown+json；默认态标 degenerate）
 tools/describe_chain.py  # 处理链路描述生成器：aggregate_report.json → chain_description.md/json（EQ/动态/非线性/顺序推断，honest uncertainty）
-tools/describe_schema.py  # 链路描述文档契约常量 + 结构校验器（CONTRACT_VERSION="2"，issue #26 T5）
+tools/describe_schema.py  # 链路描述文档契约常量 + 结构校验器（CONTRACT_VERSION="3"，v2 文档仍兼容；issue #26 T5 / #105）
 tools/describe_render.py  # chain_doc JSON/markdown 纯渲染器（issue #26 T3，无推导知识）
 tools/describe_quality.py  # 测量质量谓词（issue #26 T1，describe_chain 复用其阈值）
 tools/gui_test.py  # GUI 点击路径回归测试（issue #66；pywinauto UIA invoke-only；CI `gui-tests` job）
@@ -396,7 +396,7 @@ DESIGN.md                 # 设计文档
 
 > **2026-08-14 终止声明**：用户确认本工具不做自动复刻插件——T4（规格 → 复刻 VST3）不再纳入设计目标（见 DESIGN.md「开发目标」要点 5）。以下记录为终止前的历史决策与实现状态，保留存档；**分支不复入 main**，issue #27 关闭。复刻插件的替代定位：chain_doc 仍作为**交付给开发者的规格载体**（DESIGN.md「规格交付链路」），但不自动转成可运行 VST3。
 >
-> T4 原定义 = spec-driven 复刻 VST3 测试插件：把 T2 `describe_chain.py` 的 chain_doc JSON（契约 `tools/describe_schema.py` `CONTRACT_VERSION="2"`）变成可被本工具测量的真实插件，闭环 T5（measure 真机 → derive → describe → configure 复刻 → measure → compare_all）。T5 闭环待真机数据。
+> T4 原定义 = spec-driven 复刻 VST3 测试插件：把 T2 `describe_chain.py` 的 chain_doc JSON（契约 `tools/describe_schema.py`，当时 `CONTRACT_VERSION="2"`，2026-11-18 起为 "3"）变成可被本工具测量的真实插件，闭环 T5（measure 真机 → derive → describe → configure 复刻 → measure → compare_all）。T5 闭环待真机数据。
 
 **决策记录**（2026-08-14 用户确认，全部批准）：
 
@@ -547,3 +547,30 @@ DESIGN.md                 # 设计文档
 **T4 #100 直通检测补强**：`detect_passthrough`（freq 全 0+phase 0、compression unity、GR 0、harmonic 有基频但 THD 0 → not-exercised）+ `not-exercised` 状态（优先级高于 ok）+ describe_chain 强制 usable=False + 10 单测。**Ozone 12 Equalizer 从 dynamics-only usable=True 误判 → not-exercised usable=False 正确标记**（#94 泛化名误判的一个维度已闭环）。auto-key-2 / scepter 也正确标记（analyzer 直通无处理数据）。
 
 **全量工具测试**：230 passed（aggregate 71 / describe 76 / batch+repro+probe+compare+synthetic 83）。**全语料**：15 插件 ok=12 / not-exercised=3（auto-key-2, scepter, ozone-eq）/ degenerate=0 / derivation-failed=1（Pro-L 2）。
+
+## 采集方案完善块 B — T7 #105：chain_doc stages 处理段解耦（2026-11-18，分支 issue-105-chain-doc-stages）
+
+**背景**：块 B 的 T7（#105）——此前 chain_doc 只有 eq/dynamics/nonlinearity 三个整块，无法表达「取 A 插件的 EQ 段 + B 插件的压缩段」。本票把同一批证据拆成可单独取用的段，并给出融合 CLI，作为 #106（T8 复刻闭环）的前置契约。
+
+**契约 v2 → v3**（`tools/describe_schema.py`）：
+- `CONTRACT_VERSION = "3"`；顶层加 `contract_version`，**缺失即按 v2 校验**（既有文档不失效）；未知版本 → 单条确定性错误 `doc: contract_version '4' unsupported (known: 2, 3)`，不抛异常。
+- 每 plugin 加 `stages:[{kind, params, provenance:{source, basis[]}}]`，kind ∈ eq/dynamics/nonlinearity；`params` 为该段可开发参数摘要，`provenance.source` 记来源测量（frequency_response / compression+gr / harmonic）。
+- 顶层可选 `fusion:{inputs[],picks[]}`（仅融合产物有）。
+- 不变式：`usable_as_spec=true` 的插件必须阶段非空；测量全失败的插件允许 `stages: []`（诚实表达「没有可用段」）。
+
+**实现**：`describe_chain.build_stages`（固定顺序 eq→dynamics→nonlinearity；artifact 段同样描述并带其 verdict，绝不静默丢弃）；`describe_render` 增加 `Stages:` 头与每段一行、`## Fusion` 节——**无 stages 的旧文档输出与今日逐字节一致**；新增 `tools/stage_fusion.py`：`--pick a:eq --pick b:dynamics --out fused.json`，输入按位置命名 a/b/c，每个输入须恰含 1 个插件、pick 的段必须真实测得，provenance 附加 `input:{alias,slug,path}`，blocker 以 `inherited from <alias>: …` 继承，输出先过 `validate_chain_doc` 再落盘，**确定性**（generated_at 取输入最新戳，不用墙钟）。
+
+**验证**：`python -m pytest tools/ -q` → **290 passed / 1 skipped**（基线 230 passed / 1 skipped；新增 60 条）。只测公开行为（CLI 与公开函数输出），不断言私有函数与调用次数。
+
+**双轴 review 后加固（两轴并行审查，8 类发现已裁决并落地）**：
+- **blocker 单一真相**（最重要）：stage 新增 `blockers[]` + `usable`，由 `describe_chain` 从 plugin 的 `why_not_spec` 按段过滤而来；`stage_fusion` **只做并集，不再从 params 重推**——此前融合会洗掉 `not-exercised`（#100 明令不得作为可用 spec）与 tau 不可信两类阻塞，反向还会把 #79 已豁免的 saturation conflict 重新变成阻塞。
+- **同 kind 重复 pick** 改为确定性报错（退出 2）；schema 另加「每 plugin 每种段唯一」不变式，杜绝 stages 两个 eq 摘要 + 块里只有一个 eq 的两处真相。
+- **空（未选）段不再下判据**：not-picked 的 dynamics 空块曾把 `release_plausible=False` 写进去，渲染出「release implausible」；现为空块不携带判据，且 `_gr_line` 只在确有 release_ms 时才下判断。
+- **版本门禁对称**：v2 文档的 `stages`/`fusion` 若存在一律校验（向后兼容=可缺省，≠可塞垃圾）。
+- **写盘纳入错误契约**：`--out`/`--markdown` 写失败 → 退出 2 且不留半成品；融合文档记录**调用处写法**的路径（相对路径不泄露本机布局）。
+- **knee 来源诚实**：`knee_db` 只存在于 JSON 拟合，冲突时不填（否则拼出从未测到的参数组）。
+- 处理顺序建议常量移入 `describe_schema`（`SUGGESTED_ORDER`），文档与融合共用一处。
+- 确定性断言去掉 `sort_keys=True`（原写法把「键序漂移」这一被测属性归一化掉了）。
+
+**未验证**：真实语料回归——`out/` 不入库、本机无测量数据，融合链路的真机数据验证留给 #106（T8）。
+

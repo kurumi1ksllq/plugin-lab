@@ -33,6 +33,7 @@ Usage:
 Exit code 0 = ok.
 """
 import argparse
+import copy
 import sys
 
 # ======================= Verified pro-c-3 constants ==========================
@@ -446,6 +447,114 @@ def make_chain_doc_artifact():
                           "release implausible", "harmonic artifact"]),
         ],
     }
+
+
+# ======================= stage / v3 chain_doc builders ======================
+
+
+def make_stage(kind, *, params=None, source="unknown", basis=None,
+               blockers=None):
+    """Return one v3 chain_doc stage: {kind, params, provenance, blockers,
+    usable}. usable is derived from blockers (empty = usable), mirroring
+    describe_chain.build_stages."""
+    stage_blockers = list(blockers) if blockers else []
+    return {"kind": kind,
+            "params": dict(params) if params else {},
+            "provenance": {"source": source,
+                           "basis": list(basis) if basis else []},
+            "blockers": stage_blockers,
+            "usable": not stage_blockers}
+
+
+def make_stages_clean():
+    """Return the clean plugin's three stages (eq / dynamics / nonlinearity)."""
+    return [
+        make_stage("eq",
+                   params={"overall": "clean",
+                           "sections": [{"freq_hz": 1000.0, "gain_db": 6.0,
+                                         "q": 1.5}]},
+                   source="frequency_response",
+                   basis=["eq.overall clean", "1 plausible section"]),
+        make_stage("dynamics",
+                   params={"threshold_db": -30.0, "ratio": 4.0,
+                           "knee_db": 0.0, "attack_ms": 3.859,
+                           "release_ms": 50.0},
+                   source="compression+gr",
+                   basis=["no fit conflict", "taus plausible"]),
+        make_stage("nonlinearity",
+                   params={"verdict": "clean", "thd_range_pct": [0.8, 2.1]},
+                   source="harmonic",
+                   basis=["THD 0.8-2.1% within the clean band"]),
+    ]
+
+
+def make_stages_artifact():
+    """Return the artifact plugin's stages: every segment carries its bad
+    verdict (eq artifact / compression fit conflict / harmonic artifact)."""
+    return [
+        make_stage("eq",
+                   params={"overall": "artifact",
+                           "sections": [{"freq_hz": 18840.8,
+                                         "gain_db": 12.78,
+                                         "q": 18098.43}]},
+                   source="frequency_response",
+                   basis=["eq overall artifact",
+                          "flag implausible_q: Q far outside band"],
+                   blockers=["eq artifact"]),
+        make_stage("dynamics",
+                   params={"threshold_db": -13.47, "ratio": 3.27,
+                           "knee_db": 3.0, "attack_ms": 3.859,
+                           "release_ms": 39676.69, "conflict": True},
+                   source="compression+gr",
+                   basis=["compression conflict: derived vs json threshold "
+                          "differ by 4.4 dB",
+                          "release implausible"],
+                   blockers=["compression fit conflict",
+                             "release implausible"]),
+        make_stage("nonlinearity",
+                   params={"verdict": "artifact",
+                           "thd_range_pct": [96.58, 195.8767]},
+                   source="harmonic",
+                   basis=["harmonic verdict artifact"],
+                   blockers=["harmonic artifact"]),
+    ]
+
+
+def upgrade_to_v3(doc, stages=None):
+    """Return a copy of a v2 chain_doc upgraded to the v3 contract: a
+    top-level contract_version "3" plus the given stages on every plugin.
+
+    stages defaults to make_stages_clean() and is deep-copied so callers
+    can mutate the result without touching the source fixture.
+    """
+    upgraded = copy.deepcopy(doc)
+    upgraded["contract_version"] = "3"
+    for plugin in upgraded["plugins"]:
+        plugin["stages"] = copy.deepcopy(
+            make_stages_clean() if stages is None else stages)
+    return upgraded
+
+
+def make_chain_doc_v3_clean():
+    """Return make_chain_doc_clean() upgraded to the v3 contract."""
+    return upgrade_to_v3(make_chain_doc_clean())
+
+
+def make_chain_doc_v3_artifact():
+    """Return make_chain_doc_artifact() upgraded to the v3 contract, with
+    every stage carrying its artifact verdict."""
+    return upgrade_to_v3(make_chain_doc_artifact(),
+                         stages=make_stages_artifact())
+
+
+def make_fusion_block():
+    """Return a valid top-level fusion block (one stage from each input)."""
+    return {"inputs": [{"alias": "a", "path": "chain_a.json",
+                        "slug": "synthetic", "plugin": "Synthetic"},
+                       {"alias": "b", "path": "chain_b.json",
+                        "slug": "pro-c-3", "plugin": "Pro-C 3"}],
+            "picks": [{"alias": "a", "stage": "eq"},
+                      {"alias": "b", "stage": "dynamics"}]}
 
 
 # ======================= CLI =================================================
