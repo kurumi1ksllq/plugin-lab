@@ -93,8 +93,15 @@ TEST_CASE ("HarmonicFamily: one valid entry per configured level",
     {
         REQUIRE (result.entries[i].valid);
         REQUIRE (result.entries[i].inputLevelDB == result.levelsDB[i]);
-        // The harmonic excitation carries 8 fundamentals (MeasurementSession).
-        REQUIRE (result.entries[i].tones.size() == 8);
+        // The excitation carries 8 fundamentals (100 Hz .. 12.8 kHz); the
+        // analyser only reports tones for which an in-band harmonic exists, and
+        // 12.8 kHz has none below Nyquist (2nd harmonic = 25.6 kHz @48k), so a
+        // full-level cell yields 7 of 8. Assert the shape that matters (the
+        // 400 Hz tone is always present) rather than pinning the FFT's
+        // band-edge behaviour.
+        REQUIRE (result.entries[i].tones.size() >= 7);
+        REQUIRE (result.entries[i].tones.size() <= 8);
+        REQUIRE (thdAt (result.entries[i], 400.0) > 0.0);
     }
 }
 
@@ -129,26 +136,33 @@ TEST_CASE ("HarmonicFamily: THD grows monotonically with input level",
 // 3. Hard clip vs soft saturation
 //==============================================================================
 
-TEST_CASE ("HarmonicFamily: hard clipping is more non-linear than tanh at the same drive",
+TEST_CASE ("HarmonicFamily: a hard clipper shows a knee, a soft saturator does not",
            "[harmonic-family][hard-clip]")
 {
-    TestSaturatorPlugin soft;
-    soft.setDrive (kDrive);
-    soft.setHardClip (false);
-    MeasurementSession softSession;
-    configureSession (softSession, soft);
-    const auto softResult = HarmonicFamily::measure (&softSession, { -6.0 }, {});
+    // What the grid has to separate (issue #102): a hard clipper is silent
+    // below its clip point and then distorts abruptly, while a soft saturator
+    // bends the curve everywhere. Driving both at 2 and sweeping -20 -> 0 dB:
+    //   hard clip: 2 * 0.1 = 0.2 -> no clamping at all -> THD ~ 0
+    //              2 * 1.0 -> flat top over most of the cycle -> THD >> 5%
+    //   tanh     : gradual growth (covered by [thd-vs-level])
+    // This is the property a fusion/spec consumer reads, and unlike "hard THD
+    // > soft THD at one level" it does not depend on how the two curves happen
+    // to cross at a particular drive/level pair.
+    TestSaturatorPlugin plugin;
+    plugin.setDrive (kDrive);
+    plugin.setHardClip (true);
+    MeasurementSession session;
+    configureSession (session, plugin);
 
-    TestSaturatorPlugin hard;
-    hard.setDrive (kDrive);
-    hard.setHardClip (true);
-    MeasurementSession hardSession;
-    configureSession (hardSession, hard);
-    const auto hardResult = HarmonicFamily::measure (&hardSession, { -6.0 }, {});
+    const auto result = HarmonicFamily::measure (&session, { -20.0, 0.0 }, {});
+    REQUIRE (result.entries.size() == 2);
 
-    REQUIRE (softResult.entries.size() == 1);
-    REQUIRE (hardResult.entries.size() == 1);
-    REQUIRE (thdAt (hardResult.entries[0], 400.0) > thdAt (softResult.entries[0], 400.0));
+    const double thdBelowClip = thdAt (result.entries[0], 400.0);
+    const double thdAboveClip = thdAt (result.entries[1], 400.0);
+
+    REQUIRE (thdBelowClip < 1.0);          // linear: the clamp never engages
+    REQUIRE (thdAboveClip > 5.0);          // flat top: strongly non-linear
+    REQUIRE (thdAboveClip > 10.0 * thdBelowClip);   // the knee itself
 }
 
 //==============================================================================
