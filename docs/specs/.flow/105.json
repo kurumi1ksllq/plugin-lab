@@ -1,8 +1,8 @@
 {
   "issue": 105,
   "grade": "standard",
-  "stage": "dev",
-  "updatedAt": "2026-11-18T01:05:00+08:00",
+  "stage": "pr",
+  "updatedAt": "2026-11-18T01:12:00+08:00",
   "branch": "issue-105-chain-doc-stages",
   "tickets": [
     {
@@ -22,7 +22,7 @@
     },
     {
       "id": 4,
-      "title": "stage_fusion.py CLI + 10 条拒绝/成功用例",
+      "title": "stage_fusion.py CLI + 拒绝/成功用例",
       "state": "done"
     },
     {
@@ -37,11 +37,12 @@
     "status": "unknown"
   },
   "review": {
-    "state": "not-started",
+    "state": "running",
     "axes": 2
   },
   "merge": {
     "authorized": false
   },
+  "pr": "https://github.com/kurumi1ksllq/plugin-lab/pull/125",
   "notes": "tools/ 纯 Python；基线 230 passed / 1 skipped → 274 passed / 1 skipped"
 }
