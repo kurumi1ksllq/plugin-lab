@@ -140,6 +140,24 @@ public:
      *  segment (issue #38). */
     double getSegmentDurationSec() const { return segmentDurationSec; }
 
+    // --- harmonic source configuration (issue #102: nonlinear_family) ---
+    // Defaults reproduce the existing harmonic excitation exactly: the default
+    // path keeps the literal 0.4 amplitude and the 3.0 s segment duration, so
+    // exports without a level grid are byte-identical.
+    /** The THD-versus-level grid (dBFS) a family measurement sweeps. Empty by
+     *  default (single-level harmonic measurement). */
+    void setHarmonicLevelsDB (const std::vector<double>& levelsDB) { harmonicLevelsDB = levelsDB; }
+    const std::vector<double>& getHarmonicLevelsDB() const { return harmonicLevelsDB; }
+
+    /** Per-cell input amplitude in dBFS. Unset by default — while unset the
+     *  excitation uses the literal 0.4 amplitude (backward compatibility). */
+    void setHarmonicAmplitudeDB (double db) { harmonicAmplitudeDB = db; harmonicAmplitudeSet = true; }
+    bool isHarmonicAmplitudeSet() const { return harmonicAmplitudeSet; }
+
+    /** Single-tone segment duration in seconds (default 3.0 = unchanged). */
+    void setHarmonicSegmentDurationSec (double sec) { harmonicSegmentDurationSec = sec; }
+    double getHarmonicSegmentDurationSec() const { return harmonicSegmentDurationSec; }
+
     /** Get the tone-burst input levels in dB (20*log10(amplitude)).
      *  Empty unless the session type is compressionCurve and run() completed. */
     std::vector<double> getInputLevelsDB() const;
@@ -237,6 +255,14 @@ private:
     std::vector<double> fundamentalFreqs;  // harmonic analysis frequencies
     double segmentDurationSec = 0.0;       // harmonic tone segment duration (s)
     std::vector<double> lastLevels;        // tone-burst amplitudes (linear)
+
+    // Issue #102: nonlinear-family (THD vs level) configuration.
+    // harmonicAmplitudeSet gates the per-cell override so the default path keeps
+    // the literal 0.4 amplitude (byte-compatible with existing exports).
+    std::vector<double> harmonicLevelsDB;
+    double harmonicAmplitudeDB = 0.0;
+    bool harmonicAmplitudeSet = false;
+    double harmonicSegmentDurationSec = 3.0;
 
     // Frequency-response excitation selection (default: sine sweep).
     bool freqExcitationMLS = false;

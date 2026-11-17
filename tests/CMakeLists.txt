@@ -25,6 +25,7 @@ target_sources(unit_tests PRIVATE
     ../source/analysis/CompressionCurve.cpp ../source/analysis/Export.cpp
     ../source/analysis/GainReduction.cpp ../source/analysis/TimeConstants.cpp
     ../source/analysis/CompressionFamily.cpp
+    ../source/analysis/HarmonicFamily.cpp
     ../source/analysis/WavExporter.cpp
     ../source/analysis/WavCaptureReader.cpp
     ../source/analysis/ChildWavAnalyzer.cpp
@@ -37,7 +38,7 @@ target_sources(unit_tests PRIVATE
     ../source/host/ChildProcessCoordinator.cpp
     ../source/host/ChildMeasureOrchestrator.cpp
     CommandParserStubs.cpp
-    TestPlugin.h TestPluginTests.cpp TestCompressorPlugin.h TestCompressorPluginTests.cpp ToneBurstTests.cpp SweepRunnerTests.cpp CaptureBufferTests.cpp FreqResponseTests.cpp ExportTests.cpp
+    TestPlugin.h TestPluginTests.cpp TestCompressorPlugin.h TestCompressorPluginTests.cpp TestSaturatorPlugin.h ToneBurstTests.cpp SweepRunnerTests.cpp CaptureBufferTests.cpp FreqResponseTests.cpp ExportTests.cpp
     CommandParserTests.cpp PipeServerTests.cpp
     CommandParserConcurrencyTests.cpp
     CommandParserRoutingTests.cpp
@@ -47,6 +48,7 @@ target_sources(unit_tests PRIVATE
     GainReductionTests.cpp ScanEngineTests.cpp
     TimeConstantsTests.cpp
     CompressionFamilyTests.cpp
+    HarmonicFamilyTests.cpp
     ComponentVisibilityTests.cpp
     EditorCrashGuardTests.cpp
     WavExporterTests.cpp

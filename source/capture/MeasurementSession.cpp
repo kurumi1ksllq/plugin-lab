@@ -165,12 +165,20 @@ bool MeasurementSession::run()
                     // issue #38): each fundamental plays alone for one 3 s
                     // segment, so HarmonicAnalysis can window each tone to its
                     // own segment (segmentDurationSec is stored for it).
+                    // Issue #102: a nonlinear-family cell overrides the input
+                    // level per cell; while no override was requested the literal
+                    // 0.4 amplitude is kept so the existing harmonic export is
+                    // byte-identical (backward-compatibility acceptance line).
+                    const double harmonicAmplitude = harmonicAmplitudeSet
+                                                         ? std::pow (10.0, harmonicAmplitudeDB / 20.0)
+                                                         : 0.4;
+
                     auto seq = std::make_unique<SequentialTone>();
-                    seq->setSegmentDuration (3.0);
-                    seq->setAmplitude (0.4);
+                    seq->setSegmentDuration (harmonicSegmentDurationSec);
+                    seq->setAmplitude (harmonicAmplitude);
                     seq->setFrequencies (kFundamentals);
                     fundamentalFreqs = kFundamentals;
-                    segmentDurationSec = 3.0;
+                    segmentDurationSec = harmonicSegmentDurationSec;
                     gen = std::move (seq);
                     break;
                 }

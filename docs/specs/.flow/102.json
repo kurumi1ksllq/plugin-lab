@@ -1,0 +1,68 @@
+{
+  "issue": 102,
+  "grade": "standard",
+  "stage": "spec",
+  "updatedAt": "2026-11-18T01:20:00+08:00",
+  "branch": "issue-102-nonlinear-family",
+  "worktree": "/root/plugin-lab-102",
+  "tickets": [
+    {
+      "id": 1,
+      "title": "TestSaturatorPlugin 测试设施",
+      "state": "todo"
+    },
+    {
+      "id": 2,
+      "title": "HarmonicFamilyTests RED",
+      "state": "todo"
+    },
+    {
+      "id": 3,
+      "title": "HarmonicFamily.{h,cpp} 骨架",
+      "state": "todo"
+    },
+    {
+      "id": 4,
+      "title": "MeasurementSession::setHarmonicLevelsDB",
+      "state": "todo"
+    },
+    {
+      "id": 5,
+      "title": "网格实现（THD vs level）",
+      "state": "todo"
+    },
+    {
+      "id": 6,
+      "title": "SPEC.md §13 nonlinear_family",
+      "state": "todo"
+    },
+    {
+      "id": 7,
+      "title": "Export 独立文档 + dataset 块 + body-equiv",
+      "state": "todo"
+    },
+    {
+      "id": 8,
+      "title": "CommandParser dataset 块 + 响应标志",
+      "state": "todo"
+    },
+    {
+      "id": 9,
+      "title": "收尾：GuardDiff + ctest 双跑",
+      "state": "todo"
+    }
+  ],
+  "ci": {
+    "run": 0,
+    "max": 2,
+    "status": "none"
+  },
+  "review": {
+    "state": "not-started",
+    "axes": 2
+  },
+  "merge": {
+    "authorized": false
+  },
+  "notes": "本机 Linux 无 cmake：C++ 只能靠 CI(windows-latest) 验证；旧归档已丢失，按本 issue 重做"
+}
