@@ -147,11 +147,55 @@ def test_v3_missing_stages_rejected():
 
 
 def test_v3_empty_stages_rejected():
-    """v3 plugin with stages [] -> error naming stages (v3 must decompose)."""
+    """A usable plugin with stages [] -> error naming stages: claiming a
+    spec while decomposing into no segments is a contradiction."""
     doc = upgrade_to_v3(make_chain_doc_clean(), stages=[])
     result = validate_chain_doc(doc)
     assert result["ok"] is False
     assert any("stages" in err for err in result["errors"])
+
+
+def test_v3_duplicate_stage_kind_rejected():
+    """Two stages of the same kind -> named error (one stage per segment)."""
+    doc = upgrade_to_v3(make_chain_doc_clean())
+    doc["plugins"][0]["stages"].append(
+        dict(doc["plugins"][0]["stages"][0]))
+    result = validate_chain_doc(doc)
+    assert result["ok"] is False
+    assert any("duplicated" in err and "eq" in err
+               for err in result["errors"])
+
+
+def test_v2_doc_with_junk_stages_is_still_validated():
+    """Backward compatibility means stages may be ABSENT, not that junk in
+    them is accepted: a v2 document carrying malformed stages must fail."""
+    doc = make_chain_doc_clean()
+    doc["contract_version"] = "2"
+    doc["plugins"][0]["stages"] = [{"kind": "reverb", "params": "nope"}]
+    result = validate_chain_doc(doc)
+    assert result["ok"] is False
+    assert any("stages[0].kind" in err for err in result["errors"])
+
+
+def test_v3_stage_blockers_and_usable_required():
+    """A stage without blockers[]/usable is malformed (fusion relies on them)."""
+    doc = upgrade_to_v3(make_chain_doc_clean())
+    del doc["plugins"][0]["stages"][0]["blockers"]
+    del doc["plugins"][0]["stages"][1]["usable"]
+    result = validate_chain_doc(doc)
+    assert result["ok"] is False
+    assert any("stages[0].blockers" in err for err in result["errors"])
+    assert any("stages[1].usable" in err for err in result["errors"])
+
+
+def test_fusion_pick_alias_must_name_an_input():
+    """A pick naming an undeclared input -> named error."""
+    doc = make_chain_doc_v3_clean()
+    doc["fusion"] = make_fusion_block()
+    doc["fusion"]["picks"][0]["alias"] = "zz"
+    result = validate_chain_doc(doc)
+    assert result["ok"] is False
+    assert any("names no fusion input" in err for err in result["errors"])
 
 
 def test_v3_empty_stages_allowed_when_not_usable():

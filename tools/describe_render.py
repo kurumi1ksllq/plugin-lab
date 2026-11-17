@@ -135,7 +135,9 @@ def _gr_line(dynamics):
         _fmt_text(gr.get("attack_ms")),
         _fmt_text(gr.get("release_ms")),
     )
-    if gr.get("release_plausible") is False:
+    # Only claim an implausible release when a release was actually fitted:
+    # an unpicked/absent segment carries no verdict (issue #105 review finding).
+    if gr.get("release_plausible") is False and gr.get("release_ms") is not None:
         line += " — release implausible"
     return line
 

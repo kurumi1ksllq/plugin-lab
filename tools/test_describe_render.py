@@ -359,6 +359,21 @@ def test_render_json_preserves_stages_and_fusion():
     assert out["fusion"] == FUSION_BLOCK
 
 
+def test_gr_line_claims_implausible_only_when_a_release_was_fitted():
+    """An empty (not picked) dynamics segment must not be rendered as a
+    release verdict — there is no measurement behind it."""
+    doc = copy.deepcopy(STAGE_CLEAN_DOC)
+    doc["plugins"][0]["dynamics"]["gr"] = {
+        "attack_ms": None, "release_ms": None, "attack_plausible": False,
+        "release_plausible": False, "release_flag": None,
+        "note": "not picked in fusion", "section_usable": False}
+
+    md = render_markdown(doc)
+
+    assert "GR: attack n/a ms / release n/a ms" in md
+    assert "release implausible" not in md
+
+
 def test_render_markdown_stage_output_is_stable():
     """Two renders of the same v3 document are byte-identical."""
     first = render_markdown(FUSED_DOC)

@@ -1,8 +1,8 @@
 {
   "issue": 105,
   "grade": "standard",
-  "stage": "pr",
-  "updatedAt": "2026-11-18T01:12:00+08:00",
+  "stage": "ci",
+  "updatedAt": "2026-11-18T01:10:00+08:00",
   "branch": "issue-105-chain-doc-stages",
   "tickets": [
     {
@@ -12,7 +12,7 @@
     },
     {
       "id": 2,
-      "title": "describe_chain：build_stages + provenance + contract_version",
+      "title": "describe_chain：build_stages + provenance + blockers",
       "state": "done"
     },
     {
@@ -37,12 +37,13 @@
     "status": "unknown"
   },
   "review": {
-    "state": "running",
-    "axes": 2
+    "state": "done",
+    "axes": 2,
+    "note": "two axes reported; 8 finding groups adjudicated (7 fixed, 1 = doc anchors fixed here)"
   },
   "merge": {
     "authorized": false
   },
   "pr": "https://github.com/kurumi1ksllq/plugin-lab/pull/125",
-  "notes": "tools/ 纯 Python；基线 230 passed / 1 skipped → 274 passed / 1 skipped"
+  "notes": "290 passed / 1 skipped after review hardening (baseline 230 / 1)"
 }

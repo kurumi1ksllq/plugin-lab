@@ -49,7 +49,8 @@ from pathlib import Path
 from aggregate_report import LOCKED_TOLERANCES
 import describe_quality as dq
 from describe_render import render_json, render_markdown
-from describe_schema import CONTRACT_VERSION
+from describe_schema import (CONTRACT_VERSION, SUGGESTED_ORDER,
+                             SUGGESTION_NOTE)
 
 # ---------------------------------------------------------------------------
 # Enrichment
@@ -84,9 +85,10 @@ _NON_EQ_KINDS = ("compressor", "dynamics-only", "saturation", "analyzer")
 # their fit conflicts/implausible taus stay spec blockers.
 _SATURATION_THD_MAX_PCT = 1.0
 
-# Canonical, never-asserted processing order suggestion (eq -> dyn -> eq).
-_SUGGESTED_ORDER = "eq -> dyn -> eq"
-_SUGGESTION_NOTE = "canonical, not measured"
+# Canonical, never-asserted processing order suggestion — imported from the
+# contract module so the fused document (stage_fusion) cannot drift from it.
+_SUGGESTED_ORDER = SUGGESTED_ORDER
+_SUGGESTION_NOTE = SUGGESTION_NOTE
 
 
 def enrich_from_dataset(dataset_path):
@@ -597,15 +599,45 @@ _STAGE_SOURCE = {"eq": "frequency_response",
                  "nonlinearity": "harmonic"}
 
 
-def _stage(kind, params, basis):
-    """One stage: {kind, params, provenance:{source, basis[]}}."""
+# Why-not-spec reasons that belong to a specific segment. A reason absent here
+# but starting with "not-exercised" is plugin-level: it applies to every segment
+# (a plugin that did nothing under measurement has no usable segment at all).
+_BLOCKER_STAGE = {"eq artifact": "eq",
+                  "compression fit conflict": "dynamics",
+                  "attack implausible": "dynamics",
+                  "release implausible": "dynamics",
+                  "harmonic artifact": "nonlinearity"}
+
+
+def _stage_blockers(kind, why_not_spec):
+    """The spec blockers that apply to one segment, in why_not_spec order.
+
+    Single source of truth: the reasons come from _why_not_spec (the plugin
+    verdict), never re-derived here — so a fused document cannot inherit a
+    different set of blockers than its source reported.
+    """
+    applicable = []
+    for reason in why_not_spec or ():
+        target = _BLOCKER_STAGE.get(reason)
+        if target is None and str(reason).startswith("not-exercised"):
+            target = kind
+        if target == kind:
+            applicable.append(reason)
+    return applicable
+
+
+def _stage(kind, params, basis, why_not_spec=()):
+    """One stage: {kind, params, provenance, blockers, usable}."""
+    blockers = _stage_blockers(kind, why_not_spec)
     return {"kind": kind,
             "params": params,
             "provenance": {"source": _STAGE_SOURCE[kind],
-                           "basis": [line for line in basis if line]}}
+                           "basis": [line for line in basis if line]},
+            "blockers": blockers,
+            "usable": not blockers}
 
 
-def _eq_stage(eq):
+def _eq_stage(eq, why_not_spec=()):
     """EQ segment: the fitted band + its verdict, or None when absent."""
     if not eq.get("present"):
         return None
@@ -619,18 +651,29 @@ def _eq_stage(eq):
                   + [f"flag {s.get('flag')}: {s.get('reason')}"
                      for s in eq.get("sections") or []
                      if s.get("plausible") is False]
-                  + list(eq.get("notes") or []))
+                  + list(eq.get("notes") or []),
+                  why_not_spec)
 
 
-def _dynamics_stage(dynamics):
-    """Dynamics segment: compression fit + GR time constants, or None."""
+def _dynamics_stage(dynamics, why_not_spec=()):
+    """Dynamics segment: compression fit + GR time constants, or None.
+
+    threshold/ratio come from the derived fit; a knee value only exists in the
+    JSON fit, so it is reported only when the two fits agree (no conflict) —
+    otherwise the params would describe a threshold/ratio/knee combination that
+    was never measured. The basis says which fit the knee came from.
+    """
     if not dynamics.get("present"):
         return None
     compression = dynamics.get("compression") or {}
     gr = dynamics.get("gr") or {}
+    conflict = bool(compression.get("conflict"))
     basis = ["no fit conflict"]
-    if compression.get("conflict"):
+    if conflict:
         basis = [f"compression conflict: {compression.get('conflict_note')}"]
+    knee_db = compression.get("knee_json")
+    if knee_db is not None and not conflict:
+        basis.append("knee from the json fit (agrees with the derived fit)")
     if gr.get("attack_plausible") is False:
         basis.append("attack implausible")
     if gr.get("release_plausible") is False:
@@ -639,14 +682,15 @@ def _dynamics_stage(dynamics):
     return _stage("dynamics",
                   {"threshold_db": compression.get("threshold_derived"),
                    "ratio": compression.get("ratio_derived"),
-                   "knee_db": compression.get("knee_json"),
+                   "knee_db": None if conflict else knee_db,
                    "attack_ms": gr.get("attack_ms"),
                    "release_ms": gr.get("release_ms"),
-                   "conflict": bool(compression.get("conflict"))},
-                  basis)
+                   "conflict": conflict},
+                  basis,
+                  why_not_spec)
 
 
-def _nonlinearity_stage(nonlinearity):
+def _nonlinearity_stage(nonlinearity, why_not_spec=()):
     """Non-linearity segment: verdict + THD range, or None when not measured."""
     verdict = nonlinearity.get("verdict")
     if verdict not in ("clean", "artifact"):
@@ -656,10 +700,11 @@ def _nonlinearity_stage(nonlinearity):
     return _stage("nonlinearity",
                   {"verdict": verdict,
                    "thd_range_pct": nonlinearity.get("thd_range_pct")},
-                  [f"harmonic verdict {verdict}"] + reasons)
+                  [f"harmonic verdict {verdict}"] + reasons,
+                  why_not_spec)
 
 
-def build_stages(eq, dynamics, nonlinearity):
+def build_stages(eq, dynamics, nonlinearity, why_not_spec=()):
     """Decompose the three measurement blocks into the v3 stages[] list.
 
     Fixed order (eq, dynamics, nonlinearity) so the output is deterministic.
@@ -668,11 +713,16 @@ def build_stages(eq, dynamics, nonlinearity):
     segment is still described together with its verdict, because dropping
     it would silently lose why the plugin is not spec-usable.
 
+    Each stage carries the subset of the plugin's why_not_spec reasons that
+    applies to it (blockers[]) plus the resulting usable flag, so a consumer
+    that picks segments (stage_fusion.py) inherits exactly the blockers the
+    source plugin reported — never a re-derived approximation.
+
     Returns [stage, ...] where stage = {kind, params, provenance:{source,
-    basis[]}}; [] when no segment was measured.
+    basis[]}, blockers[], usable}; [] when no segment was measured.
     """
-    stages = [_eq_stage(eq), _dynamics_stage(dynamics),
-              _nonlinearity_stage(nonlinearity)]
+    stages = [_eq_stage(eq, why_not_spec), _dynamics_stage(dynamics, why_not_spec),
+              _nonlinearity_stage(nonlinearity, why_not_spec)]
     return [stage for stage in stages if stage is not None]
 
 
@@ -779,7 +829,7 @@ def build_chain_doc(rows, meta, dataset_dir=None):
             # Issue #105 T7: the same evidence, decomposed into segments a
             # consumer can pick individually (stage_fusion.py), each with its
             # provenance so a fused spec never loses where it came from.
-            "stages": build_stages(eq, dynamics, nonlinearity),
+            "stages": build_stages(eq, dynamics, nonlinearity, why_not_spec),
             "usable_as_spec": not why_not_spec,
             "why_not_spec": why_not_spec,
         })

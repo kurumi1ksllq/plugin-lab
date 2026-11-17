@@ -452,12 +452,18 @@ def make_chain_doc_artifact():
 # ======================= stage / v3 chain_doc builders ======================
 
 
-def make_stage(kind, *, params=None, source="unknown", basis=None):
-    """Return one v3 chain_doc stage: {kind, params, provenance}."""
+def make_stage(kind, *, params=None, source="unknown", basis=None,
+               blockers=None):
+    """Return one v3 chain_doc stage: {kind, params, provenance, blockers,
+    usable}. usable is derived from blockers (empty = usable), mirroring
+    describe_chain.build_stages."""
+    stage_blockers = list(blockers) if blockers else []
     return {"kind": kind,
             "params": dict(params) if params else {},
             "provenance": {"source": source,
-                           "basis": list(basis) if basis else []}}
+                           "basis": list(basis) if basis else []},
+            "blockers": stage_blockers,
+            "usable": not stage_blockers}
 
 
 def make_stages_clean():
@@ -493,7 +499,8 @@ def make_stages_artifact():
                                          "q": 18098.43}]},
                    source="frequency_response",
                    basis=["eq overall artifact",
-                          "flag implausible_q: Q far outside band"]),
+                          "flag implausible_q: Q far outside band"],
+                   blockers=["eq artifact"]),
         make_stage("dynamics",
                    params={"threshold_db": -13.47, "ratio": 3.27,
                            "knee_db": 3.0, "attack_ms": 3.859,
@@ -501,12 +508,15 @@ def make_stages_artifact():
                    source="compression+gr",
                    basis=["compression conflict: derived vs json threshold "
                           "differ by 4.4 dB",
-                          "release implausible"]),
+                          "release implausible"],
+                   blockers=["compression fit conflict",
+                             "release implausible"]),
         make_stage("nonlinearity",
                    params={"verdict": "artifact",
                            "thd_range_pct": [96.58, 195.8767]},
                    source="harmonic",
-                   basis=["harmonic verdict artifact"]),
+                   basis=["harmonic verdict artifact"],
+                   blockers=["harmonic artifact"]),
     ]
 
 

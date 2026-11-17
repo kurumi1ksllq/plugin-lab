@@ -40,10 +40,8 @@ import sys
 from pathlib import Path
 
 from describe_render import render_json, render_markdown
-from describe_schema import CONTRACT_VERSION, STAGE_KINDS, validate_chain_doc
-
-_SUGGESTED_ORDER = "eq -> dyn -> eq"
-_SUGGESTION_NOTE = "canonical, not measured"
+from describe_schema import (CONTRACT_VERSION, STAGE_KINDS, SUGGESTED_ORDER,
+                             SUGGESTION_NOTE, validate_chain_doc)
 
 # Stage kind -> the state a fused document reports for a segment that was
 # not picked (explicitly empty, never a silent zero).
@@ -56,8 +54,11 @@ _EMPTY_BLOCKS = {
                         "threshold_json": None, "ratio_json": None,
                         "knee_json": None, "conflict": False,
                         "conflict_note": None},
+        # No measurement behind this segment: the plausibility flags must not
+        # claim anything (a False here used to render as "release implausible"),
+        # and section_usable keeps the document from treating it as evidence.
         "gr": {"attack_ms": None, "release_ms": None,
-               "attack_plausible": False, "release_plausible": False,
+               "attack_plausible": True, "release_plausible": True,
                "release_flag": None, "note": "not picked in fusion",
                "section_usable": False},
         "notes": ["not picked in fusion"]},
@@ -140,6 +141,15 @@ def parse_pick(text, entries):
 # ---------------------------------------------------------------------------
 
 
+def _display_path(path):
+    """Path as written when possible: never leak the absolute local layout."""
+    resolved = Path(path).resolve()
+    try:
+        return str(resolved.relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return str(path)
+
+
 def _picked_stages(entries, picks):
     """Resolve picks into [(alias, stage, stage_copy)] in pick order."""
     by_alias = {entry["alias"]: entry for entry in entries}
@@ -149,29 +159,32 @@ def _picked_stages(entries, picks):
         stage_doc = next(item for item in entry["plugin"]["stages"]
                          if item.get("kind") == stage)
         stage_copy = copy.deepcopy(stage_doc)
-        stage_copy["provenance"]["input"] = {"alias": alias,
-                                             "slug": entry["plugin"]["slug"],
-                                             "path": entry["path"]}
+        # The provenance block is guaranteed by the v3 contract for stages that
+        # describe_chain wrote; a hand-written document may omit it, so keep a
+        # safe default instead of raising KeyError.
+        provenance = stage_copy.setdefault("provenance",
+                                           {"source": "unknown", "basis": []})
+        provenance["input"] = {"alias": alias,
+                               "slug": entry["plugin"]["slug"],
+                               "path": _display_path(entry["path"])}
         resolved.append((alias, stage, stage_copy))
     return resolved
 
 
 def _blockers(resolved):
-    """Reasons inherited from the picked segments (deterministic order)."""
+    """Blockers inherited from the picked segments, in pick order.
+
+    Read from the stage's own blockers[] (written by describe_chain from the
+    plugin verdict) — never re-derived from params, which used to silently drop
+    tau verdicts and the not-exercised verdict (issue #105 review, finding 1).
+    """
     reasons = []
-    for alias, stage, stage_doc in resolved:
-        params = stage_doc.get("params") or {}
-        if stage == "eq" and params.get("overall") == "artifact":
-            reasons.append(f"inherited from {alias}: eq artifact")
-        if stage == "dynamics" and params.get("conflict") is True:
-            reasons.append(f"inherited from {alias}: compression fit conflict")
-        if stage == "nonlinearity" and params.get("verdict") == "artifact":
-            reasons.append(f"inherited from {alias}: harmonic artifact")
-    deduped = []
-    for reason in reasons:
-        if reason not in deduped:
-            deduped.append(reason)
-    return deduped
+    for alias, _, stage_doc in resolved:
+        for blocker in stage_doc.get("blockers") or []:
+            reason = f"inherited from {alias}: {blocker}"
+            if reason not in reasons:
+                reasons.append(reason)
+    return reasons
 
 
 def fuse_chain_docs(entries, picks):
@@ -223,14 +236,15 @@ def fuse_chain_docs(entries, picks):
             "processing_order": {"order": "unknown", "confidence": "low",
                                  "basis": ["fused document: processing order "
                                            "is never asserted from a fusion"],
-                                 "suggested": _SUGGESTED_ORDER,
-                                 "suggestion_note": _SUGGESTION_NOTE},
+                                 "suggested": SUGGESTED_ORDER,
+                                 "suggestion_note": SUGGESTION_NOTE},
             "stages": [stage_doc for _, _, stage_doc in resolved],
             "usable_as_spec": not why_not_spec,
             "why_not_spec": why_not_spec,
         }],
         "fusion": {
-            "inputs": [{"alias": entry["alias"], "path": entry["path"],
+            "inputs": [{"alias": entry["alias"],
+                        "path": _display_path(entry["path"]),
                         "slug": entry["plugin"]["slug"],
                         "plugin": entry["plugin"]["plugin"]}
                        for entry in entries],
@@ -275,6 +289,11 @@ def main(argv=None):
             pick = parse_pick(text, entries)
             if pick in picks:
                 raise InputError(f"duplicate pick {text!r}")
+            # One stage per segment kind: two picks of the same kind would put
+            # two summaries in stages[] but only one source block in the doc.
+            if any(stage == pick[1] for _, stage in picks):
+                raise InputError(f"duplicate stage {pick[1]!r} (got {text!r}): "
+                                 f"pick one stage per segment kind")
             picks.append(pick)
         fused = fuse_chain_docs(entries, picks)
         result = validate_chain_doc(fused)
@@ -286,17 +305,29 @@ def main(argv=None):
         return 2
 
     out_path = Path(args.out)
-    out_path.write_text(
-        json.dumps(render_json(fused), indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8")
-    print(f"stages: " + ", ".join(f"{alias}:{stage}" for alias, stage
-                                 in picks))
-    print(f"spec-usable: {'yes' if fused['plugins'][0]['usable_as_spec'] else 'no'}")
+    markdown_path = Path(args.markdown) if args.markdown else None
+    overwritten = out_path.exists()
+
+    # Both outputs are rendered first, written inside the error contract: a
+    # failed write is a usage/IO error (exit 2, no traceback, no half-written
+    # pair). Markdown goes first so a JSON file always has its report beside it.
+    try:
+        payload = json.dumps(render_json(fused), indent=2,
+                             ensure_ascii=False) + "\n"
+        report = render_markdown(fused) if markdown_path is not None else None
+        if markdown_path is not None:
+            markdown_path.write_text(report, encoding="utf-8")
+        out_path.write_text(payload, encoding="utf-8")
+    except OSError as exc:
+        print(f"error: cannot write output ({exc})", file=sys.stderr)
+        return 2
+
+    print("stages: " + ", ".join(f"{alias}:{stage}" for alias, stage in picks))
+    print(f"spec-usable: "
+          f"{'yes' if fused['plugins'][0]['usable_as_spec'] else 'no'}")
     print(f"reports: {out_path}"
-          + (f", {args.markdown}" if args.markdown else ""))
-    if args.markdown:
-        Path(args.markdown).write_text(render_markdown(fused),
-                                       encoding="utf-8")
+          + (f", {markdown_path}" if markdown_path is not None else "")
+          + (" (overwrote existing)" if overwritten else ""))
     return 0
 
 

@@ -72,6 +72,12 @@ CONFIDENCE = {"high", "low"}
 # into (issue #105). A fused spec picks one stage per alias.
 STAGE_KINDS = {"eq", "dynamics", "nonlinearity"}
 
+# Canonical, never-asserted processing order suggestion (eq -> dyn -> eq).
+# Shared by describe_chain (document) and stage_fusion (fused document) so the
+# two can never drift apart.
+SUGGESTED_ORDER = "eq -> dyn -> eq"
+SUGGESTION_NOTE = "canonical, not measured"
+
 # ---------------------------------------------------------------------------
 # validate_chain_doc
 # ---------------------------------------------------------------------------
@@ -171,6 +177,10 @@ def _check_stage(errors, path, stage, idx):
                   field=f"stages[{idx}].provenance.source")
         _required(errors, path, provenance, "basis", "list",
                   field=f"stages[{idx}].provenance.basis")
+    _required(errors, path, stage, "blockers", "list",
+              field=f"stages[{idx}].blockers")
+    _required(errors, path, stage, "usable", "bool",
+              field=f"stages[{idx}].usable")
 
 
 def _check_fusion(errors, path, fusion):
@@ -184,6 +194,17 @@ def _check_fusion(errors, path, fusion):
                 continue
             _required(errors, path, item, "alias", "str",
                       field=f"fusion.inputs[{idx}].alias")
+            _optional(errors, path, item, "path", "str",
+                      field=f"fusion.inputs[{idx}].path")
+            _optional(errors, path, item, "slug", "str",
+                      field=f"fusion.inputs[{idx}].slug")
+            _optional(errors, path, item, "plugin", "str",
+                      field=f"fusion.inputs[{idx}].plugin")
+    aliases = set()
+    if isinstance(inputs, list):
+        aliases = {item.get("alias") for item in inputs
+                   if isinstance(item, dict) and isinstance(item.get("alias"),
+                                                            str)}
     _required(errors, path, fusion, "picks", "list", field="fusion.picks")
     picks = fusion.get("picks")
     if isinstance(picks, list):
@@ -195,6 +216,12 @@ def _check_fusion(errors, path, fusion):
                       field=f"fusion.picks[{idx}].alias")
             _vocab_check(errors, path, item, "stage", STAGE_KINDS,
                          field=f"fusion.picks[{idx}].stage")
+            alias = item.get("alias")
+            # A pick must name one of the declared inputs (dangling aliases
+            # would make the fusion block unreadable as evidence).
+            if isinstance(alias, str) and aliases and alias not in aliases:
+                errors.append(f"{path}: fusion.picks[{idx}].alias {alias!r} "
+                              f"names no fusion input")
 
 
 def _check_plugin(errors, path, plugin, version="2"):
@@ -309,21 +336,33 @@ def _check_plugin(errors, path, plugin, version="2"):
     _required(errors, path, plugin, "usable_as_spec", "bool")
     _required(errors, path, plugin, "why_not_spec", "list")
 
-    # stages (v3 only) -----------------------------------------------------
+    # stages ---------------------------------------------------------------
+    # Required in v3, optional in v2 — but whenever present it is validated
+    # (backward compatibility means "may be absent", not "may be junk").
     if version == "3":
         _required(errors, path, plugin, "stages", "list")
-        stages = plugin.get("stages")
-        if isinstance(stages, list):
-            if not stages:
-                # A plugin whose measurements yielded no usable segment
-                # legitimately carries stages [] — but it must not claim to
-                # be a usable spec then (issue #105 contract invariant).
-                if plugin.get("usable_as_spec") is True:
-                    errors.append(f"{path}: stages must not be empty when "
-                                  f"usable_as_spec is true")
-            else:
-                for idx, stage in enumerate(stages):
-                    _check_stage(errors, path, stage, idx)
+    stages = plugin.get("stages", _MISSING)
+    if stages is not _MISSING and stages is not None:
+        if not isinstance(stages, list):
+            errors.append(f"{path}: stages must be list")
+        elif not stages:
+            # A plugin whose measurements yielded no usable segment
+            # legitimately carries stages [] — but it must not claim to
+            # be a usable spec then (issue #105 contract invariant).
+            if plugin.get("usable_as_spec") is True:
+                errors.append(f"{path}: stages must not be empty when "
+                              f"usable_as_spec is true")
+        else:
+            seen = []
+            for idx, stage in enumerate(stages):
+                _check_stage(errors, path, stage, idx)
+                kind = stage.get("kind") if isinstance(stage, dict) else None
+                if kind in seen:
+                    # One segment per kind: two "eq" stages would describe two
+                    # different bands while the eq block holds only one.
+                    errors.append(f"{path}: stages[{idx}].kind {kind!r} "
+                                  f"duplicated (one stage per segment kind)")
+                seen.append(kind)
 
 
 def validate_chain_doc(doc):

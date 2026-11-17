@@ -28,18 +28,18 @@ grade: standard
 | id | 内容 | 验收 |
 | --- | --- | --- |
 | T1 | schema v3：`contract_version` + `stages` 校验 + v2 兼容 + 未知版本确定性错误 | `test_describe_schema.py` 新用例全绿，旧用例不退化 |
-| T2 | `describe_chain`：`build_*_stage` 产出段 + provenance，`build_chain_doc` 填 `stages` + 顶层 `contract_version` | `test_describe_chain.py` 新用例全绿 |
+| T2 | `describe_chain`：`build_stages`（内部按段产出 params/provenance/blockers）+`build_chain_doc` 填 `stages` + 顶层 `contract_version` | `test_describe_chain.py` 新用例全绿 |
 | T3 | `describe_render`：markdown 渲染 stages 摘要 + fusion 节 | `test_describe_render.py` 新用例全绿 |
 | T4 | `stage_fusion.py` CLI：`--pick a:eq --pick b:dynamics --out fused.json` | `test_stage_fusion.py` 全绿；融合文档过 `validate_chain_doc` |
 | T5 | 确定性：同输入两次运行字节相同 | 测试断言逐字节相等（无 set/dict 序漂移） |
 
 ## 验收
 
-- [ ] `.venv/bin/python -m pytest tools/ -q` 全绿（基线 230 passed / 1 skipped 不得退化）
-- [ ] `CONTRACT_VERSION == "3"`；v2 文档校验通过；未知版本确定性报错
-- [ ] 融合产物能通过 `validate_chain_doc`；provenance 保留两个输入来源
-- [ ] 确定性：字节稳定
-- [ ] 只测公开行为（不在测试里断言私有函数/调用次数/内部顺序）
+- [x] `.venv/bin/python -m pytest tools/ -q` 全绿（**290 passed / 1 skipped**；基线 230 / 1 未退化）
+- [x] `CONTRACT_VERSION == "3"`；v2 文档校验通过；未知版本确定性报错
+- [x] 融合产物能通过 `validate_chain_doc`；provenance 保留两个输入来源
+- [x] 确定性：字节稳定
+- [x] 只测公开行为（不在测试里断言私有函数/调用次数/内部顺序）
 
 ## 裁剪
 
@@ -51,13 +51,26 @@ grade: standard
 ### 变更点 1（实现中修订）：`stages` 允许空列表
 
 - **原验收**：v3 文档的每个 plugin 必须分解出非空 stages。
-- **实际**：测量全失败的退化插件（如 scepter：freq/compression/gr 拟合全失败）确实没有任何可用段；强制非空会逼出伪造段，或让合法文档校验失败。
-- **改为**：`usable_as_spec === true` 的 plugin 必须 stages 非空；`usable_as_spec === false` 允许 `stages: []`（诚实表达「没有可用段」）。校验器按此不变式实现，并有专门用例。
+- **实际**：同一个插件可能**一段都没测到**（freq/compression/gr 拟合全失败、harmonic 也 not-measured）；此时强制非空只能逼出伪造段。
+- **改为**：`usable_as_spec === true` 的 plugin 必须 stages 非空；`usable_as_spec === false` 允许 `stages: []`。校验器按此不变式实现，并有专门用例（`upgrade_to_v3(..., stages=[])` 构造）。
+- 注：scepter 这类退化插件**仍会产出** `nonlinearity` 段（它有 rig 级 THD 数据，只是 verdict=artifact），所以空列表的真实触发者是「连谐波都没测」的插件，而不是 scepter——初稿措辞已按此更正。
 
 ### 变更点 2（实现中澄清）：params 是摘要，不是第二份真相
 
 - stage 的 `params` 只放该段可开发参数摘要 + provenance；完整证据块仍留在 `eq`/`dynamics`/`nonlinearity`。
 - 融合产物复制源插件的**完整块**，stages 只承载摘要与 `input` 溯源，避免同一事实在两处漂移。
+
+### 变更点 4（双轴 review 后修订）：blocker 单一真相
+
+- stage 新增 `blockers[]` + `usable`，由 `describe_chain` 从 plugin 的 `why_not_spec` 按段过滤生成；`stage_fusion` 只做并集，**不从 params 重推**。
+- 理由：初版融合层自行按三条规则重推，会洗掉 `not-exercised`（#100）与 tau 不可信两类阻塞，反向还会把 #79 已豁免的 saturation conflict 重新变成阻塞。
+- 校验器把 `blockers`/`usable` 列为 v3 必填，并新增「每 plugin 每种段唯一」。
+
+### 变更点 5（双轴 review 后修订）：错误契约与渲染判据
+
+- `--out`/`--markdown` 写失败 → 退出 2、不留半成品；融合文档记录**调用处写法**的路径（不把本机绝对布局写进文档）。
+- 未选中的段不下任何判据：空 dynamics 块不再写 `release_plausible=False`，渲染也只在确有 `release_ms` 时提示「release implausible」。
+- v2 文档若带 `stages`/`fusion` 一律校验（向后兼容=可缺省，≠可塞垃圾）。
 
 ### 变更点 3（实现中决定）：`generated_at` 取输入最新戳
 
