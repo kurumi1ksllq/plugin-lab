@@ -5,6 +5,7 @@
 #include "HarmonicAnalysis.h"
 #include "CompressionCurve.h"
 #include "CompressionFamily.h"
+#include "HarmonicFamily.h"
 #include "../scan/ScanEngine.h"
 #include "../capture/MeasurementSession.h"
 
@@ -88,6 +89,13 @@ namespace Export
     juce::String compressionFamilyToJSON (const CompressionFamily::FamilyResult& result,
                                           const Context& context);
 
+    /** Export a harmonics family (input level -> per-tone harmonics) to JSON:
+     *  one family entry per input level carrying the harmonic body of that
+     *  level (issue #102, nonlinear_family). The same body helper backs the
+     *  dataset block, so the two stay data-equivalent. */
+    juce::String harmonicFamilyToJSON (const HarmonicFamily::FamilyResult& result,
+                                       const Context& context);
+
     /** Export a gain-reduction timeline (T4.4) to JSON: the GR-over-time
      *  curve (GainReduction convention — negative dB = reduction) plus the
      *  attack/release time constants (valid=false when no controlled edges
@@ -108,6 +116,7 @@ namespace Export
         const ScanEngine::ScanResult* scan = nullptr;              // parameter-scan family (optional)
         MeasurementSession::Type scanType = MeasurementSession::Type::frequencyResponse;  // scan's analysis type
         const CompressionFamily::FamilyResult* compressionFamily = nullptr;  // compression-response family (optional)
+        const HarmonicFamily::FamilyResult* nonlinearFamily = nullptr;       // THD-vs-level family (optional, issue #102)
         const GainReduction::Result* grTimeline = nullptr;         // GR timeline (optional)
         const TimeConstants::Result* grTau = nullptr;              // GR time constants (optional, with grTimeline)
         const FreqResponse::Result* freq = nullptr;                // frequency-response measurement (optional)

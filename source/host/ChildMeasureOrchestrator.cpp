@@ -41,6 +41,10 @@ ChildMeasureContract::ChildMeasureOutcome ChildMeasureOrchestrator::run (
     //    compression (T2) and gr_timeline (issue #15). Everything else
     //    (unknown types) fails WITHOUT touching the child — and never falls
     //    back to loading the (blacklisted) plugin in this process.
+    //    Issue #102 (nonlinear_family) is deliberately NOT one of these types:
+    //    it is an optional dataset block, so it never travels the child path
+    //    and needs no entry here (add one only if that block is ever routed
+    //    out of process).
     if (request.type != "frequency_response" && request.type != "harmonic"
         && request.type != "compression" && request.type != "gr_timeline")
     {

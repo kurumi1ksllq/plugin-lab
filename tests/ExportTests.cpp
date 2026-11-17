@@ -885,3 +885,93 @@ TEST_CASE ("dataset with freq/harmonic/compression/gr_timeline emits all four bl
     REQUIRE (static_cast<double> (parsed["gr_timeline"]["tau"]["attack_sec"])
              == Catch::Approx (0.002));
 }
+
+//==============================================================================
+// Issue #102: nonlinear_family — THD-versus-level family export.
+
+namespace
+{
+    /** 2-level harmonics grid with two tones per level (THD rises with level). */
+    HarmonicFamily::FamilyResult makeHarmonicFamilyResult()
+    {
+        HarmonicFamily::FamilyResult family;
+        family.levelsDB = { -24.0, -6.0 };
+
+        for (double level : family.levelsDB)
+        {
+            HarmonicFamily::FamilyEntry entry;
+            entry.inputLevelDB = level;
+
+            HarmonicAnalysis::ToneResult tone;
+            tone.fundamentalFreq = 400.0;
+            tone.fundamentalDB = level;
+            tone.thdPercent = (level + 24.0) * 0.5;
+            tone.harmonics = { { 2, 800.0, level - 40.0, 1.0 },
+                               { 3, 1200.0, level - 50.0, 0.3 } };
+            entry.tones.push_back (tone);
+
+            HarmonicAnalysis::ToneResult highTone = tone;
+            highTone.fundamentalFreq = 1600.0;
+            entry.tones.push_back (highTone);
+
+            entry.valid = true;
+            family.entries.push_back (entry);
+        }
+        return family;
+    }
+} // namespace
+
+TEST_CASE ("harmonicFamilyToJSON emits the nonlinear_family schema",
+           "[export][nonlinear-family]")
+{
+    const auto family = makeHarmonicFamilyResult();
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+    ctx.classId = "com.example.nl";
+    ctx.sampleRate = 48000.0;
+
+    const auto parsed = juce::JSON::parse (
+        Export::harmonicFamilyToJSON (family, ctx));
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (parsed["type"].toString() == "nonlinear_family");
+    REQUIRE (parsed["family"].size() == 2);
+    // juce::var has no unambiguous operator== against double — compare the
+    // extracted double instead (same convention as the other export tests).
+    REQUIRE (static_cast<double> (parsed["family"][0]["input_level_db"])
+             == Catch::Approx (-24.0));
+    // Every level reports whether it produced usable tones (a failed level is
+    // kept in the array with valid=false instead of silently disappearing).
+    REQUIRE (parsed["family"][0]["valid"].isBool());
+    REQUIRE (parsed["family"][0]["valid"] == juce::var (true));
+    REQUIRE (parsed["family"][0]["tones"].size() == 2);
+    REQUIRE (static_cast<double> (parsed["family"][0]["tones"][0]["fundamental_hz"])
+             == Catch::Approx (400.0));
+    REQUIRE (static_cast<double> (parsed["family"][0]["tones"][0]["thd_percent"])
+             == Catch::Approx (0.0));
+    REQUIRE (static_cast<double> (parsed["family"][1]["tones"][0]["thd_percent"])
+             == Catch::Approx (9.0));
+    REQUIRE (parsed["family"][1]["tones"][0]["harmonics"].size() == 2);
+}
+
+TEST_CASE ("dataset nonlinear_family block is data-equivalent to the standalone export",
+           "[export][dataset-body-equiv]")
+{
+    const auto family = makeHarmonicFamilyResult();
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+    ctx.classId = "com.example.nl";
+    ctx.sampleRate = 48000.0;
+
+    Export::Dataset dataset;
+    dataset.nonlinearFamily = &family;
+
+    const auto parsed = juce::JSON::parse (Export::datasetToJSON (dataset, ctx));
+    const auto nlStd = juce::JSON::parse (
+        Export::harmonicFamilyToJSON (family, ctx));
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (! nlStd.isUndefined());
+    REQUIRE (parsed["nonlinear_family"]["family"] == nlStd["family"]);
+}
+

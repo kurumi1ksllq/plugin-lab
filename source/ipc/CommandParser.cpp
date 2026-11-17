@@ -8,6 +8,7 @@
 #include "../analysis/GainReduction.h"
 #include "../analysis/TimeConstants.h"
 #include "../analysis/CompressionFamily.h"
+#include "../analysis/HarmonicFamily.h"
 #include "../analysis/MeasurementAnalysis.h"
 #include "../analysis/WavExporter.h"
 
@@ -1491,11 +1492,84 @@ juce::String CommandParser::handleDatasetExportCommands (const juce::DynamicObje
                 }
             }
 
+            // --- nonlinear_family (optional block, issue #102) ---
+            // THD per input level. levels_db defaults to the -60..0 dBFS grid;
+            // present but invalid (non-array / empty / non-numeric) → skipped.
+            // segment_duration_sec is optional (default 3.0 s per tone): it
+            // exists so a level grid does not have to cost 8 x 3 s of audio per
+            // level, and it is what the unit tests shorten the run with.
+            HarmonicFamily::FamilyResult nlResult;
+            bool nlOk = false;
+
+            auto nlVar = obj.getProperty ("nonlinear_family");
+            if (nlVar.isObject())
+            {
+                auto* nlObj = nlVar.getDynamicObject();
+
+                std::vector<double> levelsDB;
+                bool nlValid = true;
+
+                auto nlLevelsVar = nlObj->getProperty ("levels_db");
+                if (nlLevelsVar.isVoid())
+                {
+                    levelsDB = { -60.0, -48.0, -36.0, -24.0, -12.0, -6.0, 0.0 };
+                }
+                else if (! parseNumberArray (nlLevelsVar, levelsDB))
+                {
+                    nlValid = false;
+                }
+
+                if (nlValid)
+                {
+                    // Optional per-tone duration; ignored when not > 0 so the
+                    // session default (3.0 s) is untouched.
+                    auto nlDurationVar = nlObj->getProperty ("segment_duration_sec");
+                    double nlDurationSec = 0.0;
+                    if (nlDurationVar.isDouble() || nlDurationVar.isInt()
+                        || nlDurationVar.isInt64())
+                    {
+                        nlDurationSec = static_cast<double> (nlDurationVar);
+                    }
+
+                    // The measurement session is long-lived and shared with
+                    // every command, so the shortened duration is restored as
+                    // soon as this block is done — otherwise every later
+                    // harmonic run in this process would silently measure a
+                    // different excitation (same trap as the stale-MLS override
+                    // guarded at the freq-source branch).
+                    const double previousSegmentSec =
+                        session->getHarmonicSegmentDurationSec();
+                    if (nlDurationSec > 0.0)
+                        session->setHarmonicSegmentDurationSec (nlDurationSec);
+
+                    nlResult = HarmonicFamily::measure (session, levelsDB,
+                        [this] (int done, int total)
+                        {
+                            juce::MessageManager::callAsync ([this, done, total]
+                            {
+                                if (statusCallback)
+                                    statusCallback ("nonlinear family " + juce::String (done)
+                                                    + "/" + juce::String (total));
+                            });
+                        });
+
+                    session->setHarmonicSegmentDurationSec (previousSegmentSec);
+
+                    // A cancelled run, or one where every level failed to
+                    // measure, leaves no usable family → the block is skipped.
+                    bool anyValidEntry = false;
+                    for (const auto& entry : nlResult.entries)
+                        anyValidEntry = anyValidEntry || entry.valid;
+                    if (anyValidEntry && ! nlResult.cancelled)
+                        nlOk = true;
+                }
+            }
+
             // All blocks failed → the whole dataset fails (S2/S3).
             bool anyBatteryOk = false;
             for (const auto& b : battery)
                 anyBatteryOk = anyBatteryOk || b.ok;
-            if (! anyBatteryOk && ! scanOk && ! cfOk)
+            if (! anyBatteryOk && ! scanOk && ! cfOk && ! nlOk)
                 return Protocol::makeResponse (false, R"("error":"all measurements failed")");
 
             // Export-path validation (issue #40): an empty path used to
@@ -1518,6 +1592,7 @@ juce::String CommandParser::handleDatasetExportCommands (const juce::DynamicObje
             dataset.scan = scanOk ? &scanResult : nullptr;
             dataset.scanType = scanType;
             dataset.compressionFamily = cfOk ? &cfResult : nullptr;
+            dataset.nonlinearFamily = nlOk ? &nlResult : nullptr;
             dataset.grTimeline = grRun->ok ? &grRun->results.gr : nullptr;
             dataset.grTau = grRun->ok ? &grRun->results.tau : nullptr;
             dataset.freq = freqRun->ok ? &freqRun->results.freq : nullptr;
@@ -1558,7 +1633,8 @@ juce::String CommandParser::handleDatasetExportCommands (const juce::DynamicObje
                     d += ",";
             }
             d += R"(},"scan":)" + juce::String (scanOk ? "true" : "false")
-               + R"(,"compression_family":)" + juce::String (cfOk ? "true" : "false");
+               + R"(,"compression_family":)" + juce::String (cfOk ? "true" : "false")
+               + R"(,"nonlinear_family":)" + juce::String (nlOk ? "true" : "false");
             return Protocol::makeResponse (true, d);
         };
 

@@ -327,6 +327,42 @@ juce::String compressionFamilyToJSON (const CompressionFamily::FamilyResult& res
     return json;
 }
 
+juce::String harmonicFamilyToJSON (const HarmonicFamily::FamilyResult& result,
+                                    const Export::Context& context)
+{
+    juce::String json;
+    json += "{\n";
+    json += "  \"type\": \"nonlinear_family\",\n";
+    json += "  \"context\": {\n";
+    appendContextFields (json, context, "    ");
+    json = json.dropLastCharacters (2);  // remove trailing ",\n" after source
+    json += "\n";
+    json += "  },\n";
+
+    json += "  \"family\": [\n";
+    for (size_t i = 0; i < result.entries.size(); ++i)
+    {
+        const auto& entry = result.entries[i];
+        json += "    {\n";
+        json += "      \"input_level_db\": " + fmtDouble (entry.inputLevelDB) + ",\n";
+        json += "      \"valid\": " + juce::String (entry.valid ? "true" : "false") + ",\n";
+
+        // The shared body helper takes HarmonicAnalysis::Result; the family
+        // entry holds the tone list, so wrap it. Same serialization as the
+        // harmonic export — the dataset block reuses this exact path.
+        HarmonicAnalysis::Result toneBlock;
+        toneBlock.tones = entry.tones;
+        appendHarmonicTones (json, toneBlock, "      ", false);
+
+        json += "    }";
+        if (i < result.entries.size() - 1) json += ",";
+        json += "\n";
+    }
+    json += "  ]\n";
+    json += "}\n";
+    return json;
+}
+
 juce::String grTimelineToJSON (const GainReduction::Result& gr,
                                const TimeConstants::Result& tau,
                                const Export::Context& context)
@@ -519,6 +555,30 @@ juce::String datasetToJSON (const Dataset& dataset, const Export::Context& conte
             appendCompressionBody (json, entry.curve, "        ", true);
             appendGRBody (json, entry.gr, "        ", true);
             appendTauBody (json, entry.tau, "        ", false);
+            json += "      }";
+            if (i < family.entries.size() - 1) json += ",";
+            json += "\n";
+        }
+        json += "    ]\n";
+        json += "  },\n";
+    }
+
+    if (dataset.nonlinearFamily != nullptr)
+    {
+        const auto& family = *dataset.nonlinearFamily;
+        json += "  \"nonlinear_family\": {\n";
+        json += "    \"family\": [\n";
+        for (size_t i = 0; i < family.entries.size(); ++i)
+        {
+            const auto& entry = family.entries[i];
+            json += "      {\n";
+            json += "        \"input_level_db\": " + fmtDouble (entry.inputLevelDB) + ",\n";
+            json += "        \"valid\": " + juce::String (entry.valid ? "true" : "false") + ",\n";
+
+            HarmonicAnalysis::Result toneBlock;
+            toneBlock.tones = entry.tones;
+            appendHarmonicTones (json, toneBlock, "        ", false);
+
             json += "      }";
             if (i < family.entries.size() - 1) json += ",";
             json += "\n";

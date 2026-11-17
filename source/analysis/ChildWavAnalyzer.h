@@ -9,6 +9,11 @@
  * latency_samples) over IPC. This entry turns that WAV into the same export
  * JSON the in-process path (buildExportContext + Export::freqResponseToJSON)
  * produces — two paths coexist, D6 routes between them.
+ *
+ * Scope (issue #102): this module has no nonlinear-family (THD-vs-level)
+ * analyser. The nonlinear_family block is an optional dataset block, never a
+ * child measurement type, so it is not routed here; adding it later means
+ * reading the SequentialTone WAV the same way the harmonic analyser does.
  */
 namespace ChildWavAnalyzer
 {

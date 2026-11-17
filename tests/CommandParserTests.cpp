@@ -16,6 +16,7 @@
 
 #include "TestPlugin.h"
 #include "TestCompressorPlugin.h"
+#include "TestSaturatorPlugin.h"
 #include "../source/ipc/CommandParser.h"
 #include "../source/ipc/Protocol.h"
 #include "../source/capture/MeasurementSession.h"
@@ -3871,3 +3872,117 @@ TEST_CASE ("CommandParser: measure and dataset fail when the export write fails"
     datasetDir.deleteRecursively();
     tempDir.deleteRecursively();
 }
+
+//==============================================================================
+// Issue #102: dataset nonlinear_family block (THD versus input level).
+// The per-tone segment duration is shortened to 0.3 s here — the production
+// default is 3.0 s per tone, and a 7-level grid at that duration would make a
+// single unit test run for minutes.
+
+TEST_CASE ("CommandParser: dataset with nonlinear_family embeds the THD grid",
+           "[commandparser][dataset][dataset-nl]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestSaturatorPlugin>();
+    plugin->setDrive (2.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::File tempDir = uniqueTempPath ("dataset_nl");
+    tempDir.createDirectory();
+    const juce::File jsonPath = tempDir.getChildFile ("dataset_nl.json");
+
+    // ---- Act ----
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"dataset","path":)")
+        + juce::JSON::toString (jsonPath.getFullPathName())
+        + R"(,"nonlinear_family":{"levels_db":[-24,-6],"segment_duration_sec":0.3})" + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (400);
+
+    // ---- Assert ----
+    auto respJson = juce::JSON::parse (response);
+    auto* respObj = respJson.getDynamicObject();
+    REQUIRE (respObj != nullptr);
+    REQUIRE (respObj->getProperty ("ok") == juce::var (true));
+    REQUIRE (respObj->getProperty ("nonlinear_family") == juce::var (true));
+
+    REQUIRE (jsonPath.existsAsFile());
+    auto exportedJson = juce::JSON::parse (jsonPath.loadFileAsString());
+    REQUIRE (exportedJson["nonlinear_family"]["family"].size() == 2);
+
+    // Each level carries the harmonic body (tones with thd_percent).
+    auto firstLevel = exportedJson["nonlinear_family"]["family"][0];
+    REQUIRE (firstLevel.hasProperty ("input_level_db"));
+    REQUIRE (firstLevel["tones"].size() > 0);
+    REQUIRE (firstLevel["tones"][0].hasProperty ("thd_percent"));
+
+    // Cleanup
+    jsonPath.deleteFile();
+    tempDir.deleteRecursively();
+}
+
+TEST_CASE ("CommandParser: dataset nonlinear_family uses the default level grid",
+           "[commandparser][dataset][dataset-nl-defaults]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestSaturatorPlugin>();
+    plugin->setDrive (2.0);
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::File tempDir = uniqueTempPath ("dataset_nl_defaults");
+    tempDir.createDirectory();
+    const juce::File jsonPath = tempDir.getChildFile ("dataset_nl_defaults.json");
+
+    // ---- Act ----
+    // No levels_db: the -60..0 dBFS default grid (7 levels) applies.
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"dataset","path":)")
+        + juce::JSON::toString (jsonPath.getFullPathName())
+        + R"(,"nonlinear_family":{"segment_duration_sec":0.3})" + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (900);
+
+    // ---- Assert ----
+    auto respJson = juce::JSON::parse (response);
+    REQUIRE (respJson.getDynamicObject() != nullptr);
+    REQUIRE (respJson.getDynamicObject()->getProperty ("ok") == juce::var (true));
+    REQUIRE (respJson.getDynamicObject()->getProperty ("nonlinear_family")
+             == juce::var (true));
+
+    REQUIRE (jsonPath.existsAsFile());
+    auto exportedJson = juce::JSON::parse (jsonPath.loadFileAsString());
+    auto family = exportedJson["nonlinear_family"]["family"];
+    REQUIRE (family.size() == 7);
+    // The default grid spans -60..0 dBFS.
+    REQUIRE (static_cast<double> (family[0]["input_level_db"]) == Catch::Approx (-60.0));
+    REQUIRE (static_cast<double> (family[6]["input_level_db"]) == Catch::Approx (0.0));
+
+    // Cleanup
+    jsonPath.deleteFile();
+    tempDir.deleteRecursively();
+}
+

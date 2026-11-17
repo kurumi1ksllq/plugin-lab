@@ -59,6 +59,7 @@ target_sources(PluginLab PRIVATE
     source/analysis/GainReduction.cpp
     source/analysis/TimeConstants.cpp
     source/analysis/CompressionFamily.cpp
+    source/analysis/HarmonicFamily.cpp
     source/analysis/WavExporter.cpp
     source/analysis/WavCaptureReader.cpp
     source/analysis/ChildWavAnalyzer.cpp
