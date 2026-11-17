@@ -4,14 +4,17 @@
  * Exercises the THD-versus-input-level grid built on the existing
  * single-tone-per-segment harmonic excitation:
  *
- *   - [harmonic-family][grid-count]      : levels { -24, -12, -6 } -> one valid
- *                                          entry per level, 8 tones each
+ *   - [harmonic-family][grid-count]      : levels { -24, -12, -6 } -> one entry
+ *                                          per level, 7-8 tones each (the
+ *                                          12.8 kHz fundamental has no in-band
+ *                                          harmonic at 48 kHz)
  *   - [harmonic-family][thd-vs-level]    : THD grows monotonically with level
  *                                          against TestSaturatorPlugin (soft
  *                                          tanh saturation, drive 2)
- *   - [harmonic-family][hard-clip]       : the hard-clip curve is more
- *                                          non-linear than tanh at the same
- *                                          drive (the grid separates the two)
+ *   - [harmonic-family][hard-clip]       : a hard clipper shows a knee (THD ~0
+ *                                          below the clip point, >5% above) —
+ *                                          the single-drive "hard > soft THD"
+ *                                          comparison was dropped, see the spec
  *   - [harmonic-family][cancel]          : cancel() from another thread stops
  *                                          the grid at a level boundary
  *   - [harmonic-family][default-path]    : a session without an amplitude
@@ -26,11 +29,12 @@
  * 3.0 s is covered by [default-path].
  */
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <memory>
 #include <thread>
 #include <vector>
 
@@ -169,7 +173,7 @@ TEST_CASE ("HarmonicFamily: a hard clipper shows a knee, a soft saturator does n
 // 4. Cancellation
 //==============================================================================
 
-TEST_CASE ("HarmonicFamily: cancel() stops the grid at a level boundary",
+TEST_CASE ("HarmonicFamily: cancel() from another thread stops the grid",
            "[harmonic-family][cancel]")
 {
     TestSaturatorPlugin plugin;
@@ -177,31 +181,38 @@ TEST_CASE ("HarmonicFamily: cancel() stops the grid at a level boundary",
     MeasurementSession session;
     configureSession (session, plugin);
 
+    const std::vector<double> levels { -24.0, -18.0, -12.0, -6.0 };
     std::atomic<bool> firstLevelDone { false };
-    std::atomic<bool> cancelRequested { false };
+    HarmonicFamily::FamilyResult result;
 
-    auto worker = std::thread ([&]
+    // measure() runs on the worker; the cancellation request comes from this
+    // (main) thread as soon as the first level has been measured.
+    std::thread worker ([&]
     {
-        HarmonicFamily::measure (&session, { -24.0, -18.0, -12.0, -6.0 },
-                                 [&] (int done, int)
-                                 {
-                                     if (done == 1)
-                                     {
-                                         firstLevelDone.store (true);
-                                         HarmonicFamily::cancel();
-                                     }
-                                 });
+        result = HarmonicFamily::measure (&session, levels,
+                                          [&] (int done, int)
+                                          {
+                                              if (done == 1)
+                                                  firstLevelDone.store (true);
+                                          });
     });
 
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds (120);
+    const auto deadline = std::chrono::steady_clock::now()
+                          + std::chrono::seconds (30);
     while (! firstLevelDone.load() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for (std::chrono::milliseconds (20));
+        std::this_thread::sleep_for (std::chrono::milliseconds (2));
 
+    HarmonicFamily::cancel();
     worker.join();
-    cancelRequested.store (true);   // keeps the flag meaningful for readers
 
     REQUIRE (firstLevelDone.load());
-    REQUIRE (cancelRequested.load());
+    // The observable outcome, not a self-fulfilling flag: the run reports the
+    // cancellation and stops short of the full grid.
+    REQUIRE (result.cancelled);
+    REQUIRE_FALSE (result.entries.empty());
+    REQUIRE (result.entries.size() < levels.size());
+    REQUIRE (result.entries.front().inputLevelDB == levels.front());
+    REQUIRE (result.levelsDB == levels);
 }
 
 //==============================================================================
@@ -229,4 +240,47 @@ TEST_CASE ("HarmonicFamily: a session without an amplitude override keeps the 0.
 
     const auto& tones = session.getFundamentalFreqs();
     REQUIRE (tones.size() == 8);
+
+    // Observable form of the backward-compatibility promise: the excitation of
+    // the untouched default path is still the literal 0.4 amplitude.
+    const auto& dry = session.getResult().getDryBuffer();
+    REQUIRE (dry.getNumSamples() > 0);
+    double peak = 0.0;
+    for (int ch = 0; ch < dry.getNumChannels(); ++ch)
+        peak = std::max (peak, static_cast<double> (
+                                   dry.getMagnitude (ch, 0, dry.getNumSamples())));
+    REQUIRE (peak == Catch::Approx (0.4).margin (0.01));
+}
+
+//==============================================================================
+// 6. Session-state hygiene (review finding: an override must not leak)
+//==============================================================================
+
+TEST_CASE ("HarmonicFamily: the per-cell amplitude does not leak into the next measurement",
+           "[harmonic-family][session-state]")
+{
+    TestSaturatorPlugin plugin;
+    plugin.setDrive (kDrive);
+    MeasurementSession session;
+    configureSession (session, plugin);
+
+    const auto result = HarmonicFamily::measure (&session, { -6.0 }, {});
+    REQUIRE (result.entries.size() == 1);
+    REQUIRE (result.entries[0].valid);
+    // The grid is recorded on the session for introspection.
+    REQUIRE (session.getHarmonicLevelsDB().size() == 1);
+
+    // The override is scoped: the session is back on the default amplitude, so
+    // the next harmonic run measures 0.4 again. This is what keeps the legacy
+    // export byte-compatible inside a long-lived process (the same session is
+    // reused by every IPC command).
+    REQUIRE_FALSE (session.isHarmonicAmplitudeSet());
+    REQUIRE (session.run());
+
+    const auto& dry = session.getResult().getDryBuffer();
+    double peak = 0.0;
+    for (int ch = 0; ch < dry.getNumChannels(); ++ch)
+        peak = std::max (peak, static_cast<double> (
+                                   dry.getMagnitude (ch, 0, dry.getNumSamples())));
+    REQUIRE (peak == Catch::Approx (0.4).margin (0.01));
 }

@@ -61,6 +61,18 @@ grade: standard
 - 原因：激励含 8 个基频（100 Hz…12.8 kHz），12.8 kHz 的 2 次谐波 25.6 kHz 已超 Nyquist（48 kHz），该音没有带内谐波 → `HarmonicAnalysis::analyze` 不为它产出 tone。
 - 改为断言「≥7 且 ≤8，且 400 Hz tone 恒在」——钉住对消费者有价值的形状，不钉 FFT 的带边行为。
 
+### 变更点 3（双轴 review 后修订）：网格所有权、measure 签名与「不泄漏」
+
+- **签名**：spec T3 原写 `measure(plugin, session, levelsDB, progress)`，实现为 `measure(session, levelsDB, progress)`——谐波分析只用 wet 缓冲，不需要插件的 latency 对齐（压缩族才需要）；`plugin` 参数会是 /W4 下的未使用形参。
+- **网格所有权**：T4 原写「`run()` 的 harmonic 分支按非空 levels 网格逐格设幅度」，实际网格循环在 `HarmonicFamily` 里，`run()` 只认**标量**幅度覆盖。理由：`run()` 一次只产出一个测量结果，把网格塞进去会让 run() 长出第二个职责（测量 + 编排）。
+- **不泄漏（硬线）**：`session` 是进程内单例、被所有命令复用，所以幅度覆盖改为**作用域还原**（`ScopedHarmonicAmplitude`，含取消/提前返回路径），IPC 的 `segment_duration_sec` 同样保存-还原。否则一次 nonlinear 测量之后，同进程内的 harmonic / scan-harmonic 会沿用最后一格电平，向后兼容承诺不成立。
+- `setHarmonicLevelsDB/getHarmonicLevelsDB` 保留为「本次族的网格记录」（有测试读取），但**不是**测量输入——这是与 T4 措辞的偏离，按此记录。
+
+### 变更点 4（双轴 review 后修订）：失败电平与子进程边界
+
+- 每档电平都产出一条 entry（失败档 `valid=false`），导出新增 `family[].valid`——避免「少一行」被误读成「没有这一档」。
+- 在 `ChildMeasureOrchestrator` 的类型白名单处与 `ChildWavAnalyzer` 头注释写明：`nonlinear_family` 不是 4 类测量之一、dataset 可选块不走子进程，故不在此实现（纯注释，白名单零改动）。
+
 ### 变更点 2（CI 实测后修订）：硬削波的判别改用「膝点」，不用单点比较
 
 - 原设计断言「同 drive 下硬削波 THD > tanh THD」，在 -6 dBFS/drive 2 时反了：此时硬削波钳位刚好触及峰值（平顶极窄），而 tanh(2x) 全程弯曲，THD 反而更高。

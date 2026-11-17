@@ -345,6 +345,7 @@ juce::String harmonicFamilyToJSON (const HarmonicFamily::FamilyResult& result,
         const auto& entry = result.entries[i];
         json += "    {\n";
         json += "      \"input_level_db\": " + fmtDouble (entry.inputLevelDB) + ",\n";
+        json += "      \"valid\": " + juce::String (entry.valid ? "true" : "false") + ",\n";
 
         // The shared body helper takes HarmonicAnalysis::Result; the family
         // entry holds the tone list, so wrap it. Same serialization as the
@@ -572,6 +573,7 @@ juce::String datasetToJSON (const Dataset& dataset, const Export::Context& conte
             const auto& entry = family.entries[i];
             json += "      {\n";
             json += "        \"input_level_db\": " + fmtDouble (entry.inputLevelDB) + ",\n";
+            json += "        \"valid\": " + juce::String (entry.valid ? "true" : "false") + ",\n";
 
             HarmonicAnalysis::Result toneBlock;
             toneBlock.tones = entry.tones;

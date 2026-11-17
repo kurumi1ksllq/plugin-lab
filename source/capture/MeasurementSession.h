@@ -144,17 +144,29 @@ public:
     // Defaults reproduce the existing harmonic excitation exactly: the default
     // path keeps the literal 0.4 amplitude and the 3.0 s segment duration, so
     // exports without a level grid are byte-identical.
-    /** The THD-versus-level grid (dBFS) a family measurement sweeps. Empty by
-     *  default (single-level harmonic measurement). */
+    /** Record which THD-versus-level grid the last family measurement used
+     *  (HarmonicFamily owns the iteration; this is the session-side record).
+     *  Empty by default (single-level harmonic measurement). */
     void setHarmonicLevelsDB (const std::vector<double>& levelsDB) { harmonicLevelsDB = levelsDB; }
     const std::vector<double>& getHarmonicLevelsDB() const { return harmonicLevelsDB; }
 
     /** Per-cell input amplitude in dBFS. Unset by default — while unset the
-     *  excitation uses the literal 0.4 amplitude (backward compatibility). */
+     *  excitation uses the literal 0.4 amplitude (backward compatibility).
+     *  Callers that override it per cell must restore it (see
+     *  clearHarmonicAmplitudeOverride): a stale override would silently change
+     *  every later harmonic measurement on this session. */
     void setHarmonicAmplitudeDB (double db) { harmonicAmplitudeDB = db; harmonicAmplitudeSet = true; }
     bool isHarmonicAmplitudeSet() const { return harmonicAmplitudeSet; }
+    double getHarmonicAmplitudeDB() const { return harmonicAmplitudeDB; }
 
-    /** Single-tone segment duration in seconds (default 3.0 = unchanged). */
+    /** Drop the per-cell amplitude override: the excitation falls back to the
+     *  literal 0.4 amplitude. Restoring this is the caller's duty — the
+     *  measurement session is long-lived and reused by every command. */
+    void clearHarmonicAmplitudeOverride() { harmonicAmplitudeSet = false; harmonicAmplitudeDB = 0.0; }
+
+    /** Single-tone segment duration in seconds (default 3.0 = unchanged).
+     *  Like the amplitude override, a caller that shortens it must restore it
+     *  (HarmonicFamily does not touch it; the IPC block saves/restores). */
     void setHarmonicSegmentDurationSec (double sec) { harmonicSegmentDurationSec = sec; }
     double getHarmonicSegmentDurationSec() const { return harmonicSegmentDurationSec; }
 

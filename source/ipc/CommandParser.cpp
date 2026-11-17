@@ -1530,6 +1530,15 @@ juce::String CommandParser::handleDatasetExportCommands (const juce::DynamicObje
                     {
                         nlDurationSec = static_cast<double> (nlDurationVar);
                     }
+
+                    // The measurement session is long-lived and shared with
+                    // every command, so the shortened duration is restored as
+                    // soon as this block is done — otherwise every later
+                    // harmonic run in this process would silently measure a
+                    // different excitation (same trap as the stale-MLS override
+                    // guarded at the freq-source branch).
+                    const double previousSegmentSec =
+                        session->getHarmonicSegmentDurationSec();
                     if (nlDurationSec > 0.0)
                         session->setHarmonicSegmentDurationSec (nlDurationSec);
 
@@ -1544,8 +1553,14 @@ juce::String CommandParser::handleDatasetExportCommands (const juce::DynamicObje
                             });
                         });
 
-                    // Empty family (all levels failed) or cancellation → skip.
-                    if (! nlResult.entries.empty() && ! nlResult.cancelled)
+                    session->setHarmonicSegmentDurationSec (previousSegmentSec);
+
+                    // A cancelled run, or one where every level failed to
+                    // measure, leaves no usable family → the block is skipped.
+                    bool anyValidEntry = false;
+                    for (const auto& entry : nlResult.entries)
+                        anyValidEntry = anyValidEntry || entry.valid;
+                    if (anyValidEntry && ! nlResult.cancelled)
                         nlOk = true;
                 }
             }

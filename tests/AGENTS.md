@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；318 个 TEST_CASE（2026-09-12 静态复数：grep 命中 319 − 1 注释提及 = 318 生效；历史：2026-08-14 实测 312/312 绿：基线 208 + 块 D 新增 57 + issue #2/#3 并发改造新增 5 + 子进程测量扩展 T1/T2 新增 10 + #60 无限载波日志路径 1 + #52/#53/#58 各波增量，随 PR 逐次同步）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
+Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；328 个 TEST_CASE（2026-11-18 静态复数：grep 命中 329 − 1 注释提及 = 328 生效；#102 新增 10 条：harmonic-family 6 + export 2 + commandparser 2；历史：2026-08-14 实测 312/312 绿：基线 208 + 块 D 新增 57 + issue #2/#3 并发改造新增 5 + 子进程测量扩展 T1/T2 新增 10 + #60 无限载波日志路径 1 + #52/#53/#58 各波增量，随 PR 逐次同步）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
 
 ## RUN
 
@@ -15,11 +15,11 @@ Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`ju
 ## LAYOUT
 
 - 命名 1:1 镜像生产模块：`tests/<Module>Tests.cpp` ↔ `source/<module>/X.cpp`（如 `CommandParser.cpp` → `CommandParserTests.cpp`）；无同目录测试、无 `__tests__`
-- 37 个源文件：33 个 test .cpp + `CommandParserStubs.cpp` + `TestChildProcess.cpp`（子进程测试桩可执行）+ `TestPlugin.h` + `TestCompressorPlugin.h`
+- 39 个源文件：34 个 test .cpp + `CommandParserStubs.cpp` + `TestChildProcess.cpp`（子进程测试桩可执行）+ `TestPlugin.h` + `TestCompressorPlugin.h` + `TestSaturatorPlugin.h`
 - 覆盖映射：除 `ui/`、`utils/`（FftHelper/MathUtils/CrashLog 无直接测试文件）和 `Main.cpp` 外每个生产模块都有测试文件
   - signal → ToneBurst/NoiseGenerator/EnvelopeSignal/FilePlayback/MultiTone/SequentialTone
   - capture → SweepRunner/CaptureBuffer（2026-08-03 新增，WAV flush）/ParameterTimeline
-  - analysis → FreqResponse/GainReduction/TimeConstants/CompressionFamily/Export/WavCaptureReader/WavExporter/ChildWavAnalyzer（经 ChildHostParity）
+  - analysis → FreqResponse/GainReduction/TimeConstants/CompressionFamily/HarmonicFamily/Export/WavCaptureReader/WavExporter/ChildWavAnalyzer（经 ChildHostParity）
   - scan → ScanEngine；ipc → CommandParser（主/并发/路由/loadPlugin黑名单）/PipeServer；host → 经 stubs + ChildProcessCoordinator/Restart/Protocol/ChildMeasureOrchestrator/ChildHostParity/PluginHostChildIntegration
   - ui → ComponentVisibility（JUCE 可见性契约 pin：addAndMakeVisible 后隐藏，主测 grPlot 顺序防回归）
   - host → EditorCrashGuard（2026-08-08 块 C 任务 2：真实 EditorCrashGuard.cpp 编入测试目标，含 SEH 崩溃保护用例）

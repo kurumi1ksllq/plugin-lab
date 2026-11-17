@@ -721,6 +721,7 @@ issue #65：`loadPlugin` 是 AI/脚本加载被测插件的唯一入口（GUI �
   "family": [
     {
       "input_level_db": -24.0,
+      "valid": true,
       "tones": [
         {
           "fundamental_hz": 400.0,
@@ -739,9 +740,10 @@ issue #65：`loadPlugin` 是 AI/脚本加载被测插件的唯一入口（GUI �
 | 字段                      | 类型   | 说明                                                                 |
 | ------------------------- | ------ | -------------------------------------------------------------------- |
 | `family[].input_level_db` | number | 该条输入电平（dBFS），激励幅度 = 10^(db/20)                          |
+| `family[].valid`          | bool   | 该电平是否测到可用谐波；false 表示这一档没出数据（条目仍保留，不静默丢行） |
 | `family[].tones`          | array  | 该电平下的谐波 body（**与 §2 harmonic 的 `tones` 完全一致**，同一序列化助手） |
 
-**建模用途**：非线性随电平的增长形状——`thd_percent` 在钳位点以下≈0、越过钳位点突增的是硬削波；全程平滑增长的是软饱和；增长但主谐波阶次偏低的是谐波饱和（形状判定见 `tools/describe_chain.py` 与 `tools/stage_fusion.py` 的 nonlinearity 段）。
+**建模用途**：非线性随电平的增长形状——`thd_percent` 在钳位点以下≈0、越过钳位点突增的是硬削波；全程平滑增长的是软饱和；增长但主谐波阶次偏低的是谐波饱和。**注意**：现有的 `tools/describe_chain.py` / `tools/stage_fusion.py` 只消费 `harmonic` 行与 chain_doc，**尚未读取本块**——把 `nonlinear_family` 接进反推链路是后续 issue 的工作。
 
 **IPC（dataset 可选块）**：`"nonlinear_family": {"levels_db": [...], "segment_duration_sec": 0.3}`
 
@@ -750,7 +752,7 @@ issue #65：`loadPlugin` 是 AI/脚本加载被测插件的唯一入口（GUI �
 | `levels_db`            | array  | `[-60,-48,-36,-24,-12,-6,0]`                  | 电平网格（dBFS）；非数组/空/非数值 → 该块跳过                 |
 | `segment_duration_sec` | number | 3.0                                             | 每音分段时长（秒）；`<=0` 或省略 → 保持会话默认             |
 
-响应中带 `"nonlinear_family": true/false`（与 `"compression_family"` 同构）。**本块不进 `battery`、不进 `types`**（`types` 仍恒为 4 个测量类型），也不下发子进程（`ChildWavAnalyzer` 不实现该分析器，ADR-D-7 显式拒绝）。
+响应中带 `"nonlinear_family": true/false`（与 `"compression_family"` 同构）。**本块不进 `battery`、不进 `types`**（`types` 仍恒为 4 个测量类型），也不下发子进程：`nonlinear_family` 不是 `Protocol::MeasureType` 的 4 类测量之一，dataset 的可选块从不经子进程路径；`ChildWavAnalyzer` 没有对应分析器（若将来要支持，需另开票补 WAV 多轨解析）。
 
 **向后兼容**：不请求该块时，单电平 harmonic 激励仍是字面幅度 0.4、分段 3.0 s，既有 `harmonic` 导出字节不变。
 

@@ -2,7 +2,7 @@
   "issue": 102,
   "grade": "standard",
   "stage": "ci",
-  "updatedAt": "2026-11-18T02:40:00+08:00",
+  "updatedAt": "2026-11-18T04:00:00+08:00",
   "branch": "issue-102-nonlinear-family",
   "worktree": "/root/plugin-lab-102",
   "tickets": [
@@ -49,21 +49,22 @@
     {
       "id": 9,
       "title": "GuardDiff + ctest 双跑（CI 验证中）",
-      "state": "red"
+      "state": "todo"
     }
   ],
   "ci": {
-    "run": 1,
+    "run": 0,
     "max": 2,
     "status": "unknown"
   },
   "review": {
-    "state": "not-started",
-    "axes": 2
+    "state": "done",
+    "axes": 2,
+    "note": "two axes reported; P0 session-leak + empty cancel test + T3/T4 deviation + ADR comment all addressed"
   },
   "merge": {
     "authorized": false
   },
   "pr": "https://github.com/kurumi1ksllq/plugin-lab/pull/126",
-  "notes": "首次 CI：编译通过，2 个测试期望写错已修（tone 数 7/8、硬削波膝点）；本轮验证 Export+IPC 三块"
+  "notes": "首次 CI：编译通过，2 个测试期望写错已修（tone 数 7/8、硬削波膝点）；本轮验证 Export+IPC 三块 | git push 到 github.com 反复超时/低速，改用 GitHub REST API 发布提交（blob→tree→commit→update ref）后再 fetch 对齐；本地与远端同为 25b0520 | 25b0520 全绿(40m44s)；已把 main(#105 squash 70afe00) 合入分支(0e22ac4)，复跑 CI 验证组合态 | review P0 修复：harmonic 幅度/分段改为作用域还原（ScopedHarmonicAmplitude + IPC 保存-还原），并补 session-state 用例；取消用例改为跨线程并断言 cancelled/短数组"
 }

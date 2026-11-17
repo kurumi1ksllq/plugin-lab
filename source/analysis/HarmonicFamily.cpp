@@ -11,6 +11,37 @@ namespace
  *  convention as CompressionFamily — the host runs a single measurement). */
 std::atomic<bool> g_cancelled { false };
 
+/** Scope guard: restore the session's harmonic amplitude state on every exit
+ *  path of measure(). The session is reused by every IPC command, so a leaked
+ *  per-cell override would silently change the next harmonic measurement (and
+ *  break the byte-compatible default path). */
+class ScopedHarmonicAmplitude
+{
+public:
+    explicit ScopedHarmonicAmplitude (MeasurementSession& sessionToGuard)
+        : session (sessionToGuard),
+          hadOverride (sessionToGuard.isHarmonicAmplitudeSet()),
+          previousDB (sessionToGuard.getHarmonicAmplitudeDB())
+    {
+    }
+
+    ~ScopedHarmonicAmplitude()
+    {
+        if (hadOverride)
+            session.setHarmonicAmplitudeDB (previousDB);
+        else
+            session.clearHarmonicAmplitudeOverride();
+    }
+
+    ScopedHarmonicAmplitude (const ScopedHarmonicAmplitude&) = delete;
+    ScopedHarmonicAmplitude& operator= (const ScopedHarmonicAmplitude&) = delete;
+
+private:
+    MeasurementSession& session;
+    bool hadOverride;
+    double previousDB;
+};
+
 } // namespace
 
 //==============================================================================
@@ -33,6 +64,9 @@ HarmonicFamily::FamilyResult HarmonicFamily::measure (
     session->setHarmonicLevelsDB (levelsDB);
     g_cancelled.store (false);
 
+    // Restores the caller's amplitude state when measure() returns.
+    ScopedHarmonicAmplitude amplitudeGuard (*session);
+
     const int total = static_cast<int> (levelsDB.size());
     int done = 0;
 
@@ -48,6 +82,12 @@ HarmonicFamily::FamilyResult HarmonicFamily::measure (
         // Per-cell input level: amplitude is derived from dBFS inside run().
         session->setHarmonicAmplitudeDB (levelDB);
 
+        // One entry per requested level, even when the run fails: a silently
+        // shorter array would hide which level produced no data (the export
+        // carries valid=false for it instead).
+        FamilyEntry entry;
+        entry.inputLevelDB = levelDB;
+
         if (session->run())
         {
             const auto& capture = session->getResult();
@@ -58,13 +98,11 @@ HarmonicFamily::FamilyResult HarmonicFamily::measure (
                                               session->getFundamentalFreqs(),
                                               session->getSegmentDurationSec());
 
-            FamilyEntry entry;
-            entry.inputLevelDB = levelDB;
             entry.tones = std::move (analysis.tones);
             entry.valid = ! entry.tones.empty();
-
-            result.entries.push_back (std::move (entry));
         }
+
+        result.entries.push_back (std::move (entry));
 
         ++done;
         if (progress)

@@ -32,6 +32,11 @@
  *     MeasurementSession::setHarmonicAmplitudeDB, which leaves the default
  *     excitation (literal 0.4 amplitude) untouched — the existing harmonic
  *     export stays byte-identical when no family grid is requested.
+ *   - The session is long-lived and shared with every other command, so the
+ *     override is scoped: measure() saves the previous amplitude state and
+ *     restores it on every exit path (including early return and cancellation).
+ *     Without that, a later single-level harmonic measurement would inherit the
+ *     last cell's level and stop being byte-compatible.
  *
  * Threading: measure() may run on any thread (the session yields to the
  * message loop when running on the message thread). The cancellation flag is
@@ -51,8 +56,9 @@ public:
     /** Result of the full level grid. */
     struct FamilyResult
     {
-        std::vector<double> levelsDB;                 // scanned input levels (dBFS)
-        std::vector<FamilyEntry> entries;             // size == levelsDB.size()
+        std::vector<double> levelsDB;                 // requested input levels (dBFS)
+        std::vector<FamilyEntry> entries;             // entries <= levelsDB.size()
+                                                      // (shorter when a level failed or the run was cancelled)
         bool cancelled = false;
     };
 

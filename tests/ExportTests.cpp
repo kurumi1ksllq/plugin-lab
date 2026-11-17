@@ -940,6 +940,10 @@ TEST_CASE ("harmonicFamilyToJSON emits the nonlinear_family schema",
     // extracted double instead (same convention as the other export tests).
     REQUIRE (static_cast<double> (parsed["family"][0]["input_level_db"])
              == Catch::Approx (-24.0));
+    // Every level reports whether it produced usable tones (a failed level is
+    // kept in the array with valid=false instead of silently disappearing).
+    REQUIRE (parsed["family"][0]["valid"].isBool());
+    REQUIRE (parsed["family"][0]["valid"] == juce::var (true));
     REQUIRE (parsed["family"][0]["tones"].size() == 2);
     REQUIRE (static_cast<double> (parsed["family"][0]["tones"][0]["fundamental_hz"])
              == Catch::Approx (400.0));
