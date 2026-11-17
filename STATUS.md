@@ -547,3 +547,20 @@ DESIGN.md                 # 设计文档
 **T4 #100 直通检测补强**：`detect_passthrough`（freq 全 0+phase 0、compression unity、GR 0、harmonic 有基频但 THD 0 → not-exercised）+ `not-exercised` 状态（优先级高于 ok）+ describe_chain 强制 usable=False + 10 单测。**Ozone 12 Equalizer 从 dynamics-only usable=True 误判 → not-exercised usable=False 正确标记**（#94 泛化名误判的一个维度已闭环）。auto-key-2 / scepter 也正确标记（analyzer 直通无处理数据）。
 
 **全量工具测试**：230 passed（aggregate 71 / describe 76 / batch+repro+probe+compare+synthetic 83）。**全语料**：15 插件 ok=12 / not-exercised=3（auto-key-2, scepter, ozone-eq）/ degenerate=0 / derivation-failed=1（Pro-L 2）。
+
+## 采集方案完善块 B — T7 #105：chain_doc stages 处理段解耦（2026-11-18，分支 issue-105-chain-doc-stages）
+
+**背景**：块 B 的 T7（#105）——此前 chain_doc 只有 eq/dynamics/nonlinearity 三个整块，无法表达「取 A 插件的 EQ 段 + B 插件的压缩段」。本票把同一批证据拆成可单独取用的段，并给出融合 CLI，作为 #106（T8 复刻闭环）的前置契约。
+
+**契约 v2 → v3**（`tools/describe_schema.py`）：
+- `CONTRACT_VERSION = "3"`；顶层加 `contract_version`，**缺失即按 v2 校验**（既有文档不失效）；未知版本 → 单条确定性错误 `doc: contract_version '4' unsupported (known: 2, 3)`，不抛异常。
+- 每 plugin 加 `stages:[{kind, params, provenance:{source, basis[]}}]`，kind ∈ eq/dynamics/nonlinearity；`params` 为该段可开发参数摘要，`provenance.source` 记来源测量（frequency_response / compression+gr / harmonic）。
+- 顶层可选 `fusion:{inputs[],picks[]}`（仅融合产物有）。
+- 不变式：`usable_as_spec=true` 的插件必须阶段非空；测量全失败的插件允许 `stages: []`（诚实表达「没有可用段」）。
+
+**实现**：`describe_chain.build_stages`（固定顺序 eq→dynamics→nonlinearity；artifact 段同样描述并带其 verdict，绝不静默丢弃）；`describe_render` 增加 `Stages:` 头与每段一行、`## Fusion` 节——**无 stages 的旧文档输出与今日逐字节一致**；新增 `tools/stage_fusion.py`：`--pick a:eq --pick b:dynamics --out fused.json`，输入按位置命名 a/b/c，每个输入须恰含 1 个插件、pick 的段必须真实测得，provenance 附加 `input:{alias,slug,path}`，blocker 以 `inherited from <alias>: …` 继承，输出先过 `validate_chain_doc` 再落盘，**确定性**（generated_at 取输入最新戳，不用墙钟）。
+
+**验证**：`python -m pytest tools/ -q` → **274 passed / 1 skipped**（基线 230 passed / 1 skipped；新增 44 条：schema 15 / chain 10 / render 6 / fusion 13）。只测公开行为（CLI 与公开函数输出），不断言私有函数与调用次数。
+
+**未验证**：真实语料回归——`out/` 不入库、本机无测量数据，融合链路的真机数据验证留给 #106（T8）。
+

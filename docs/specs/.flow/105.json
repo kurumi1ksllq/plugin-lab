@@ -1,0 +1,47 @@
+{
+  "issue": 105,
+  "grade": "standard",
+  "stage": "dev",
+  "updatedAt": "2026-11-18T01:05:00+08:00",
+  "branch": "issue-105-chain-doc-stages",
+  "tickets": [
+    {
+      "id": 1,
+      "title": "schema v3：contract_version + stages/fusion 校验 + v2 兼容",
+      "state": "done"
+    },
+    {
+      "id": 2,
+      "title": "describe_chain：build_stages + provenance + contract_version",
+      "state": "done"
+    },
+    {
+      "id": 3,
+      "title": "describe_render：Stages 行 + Fusion 节",
+      "state": "done"
+    },
+    {
+      "id": 4,
+      "title": "stage_fusion.py CLI + 10 条拒绝/成功用例",
+      "state": "done"
+    },
+    {
+      "id": 5,
+      "title": "确定性：同输入字节相同",
+      "state": "done"
+    }
+  ],
+  "ci": {
+    "run": 0,
+    "max": 2,
+    "status": "unknown"
+  },
+  "review": {
+    "state": "not-started",
+    "axes": 2
+  },
+  "merge": {
+    "authorized": false
+  },
+  "notes": "tools/ 纯 Python；基线 230 passed / 1 skipped → 274 passed / 1 skipped"
+}

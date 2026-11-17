@@ -179,6 +179,44 @@ def _spec_line(plugin):
     return "Spec-usable: n/a"
 
 
+def _stage_line(stage):
+    """One bullet summarizing a v3 stage segment."""
+    kind = stage.get("kind")
+    params = stage.get("params") or {}
+    if kind == "eq":
+        sections = params.get("sections") or []
+        return "- eq: overall {}, {} section(s)".format(
+            _fmt_text(params.get("overall")), len(sections))
+    if kind == "dynamics":
+        line = "- dynamics: threshold {} dB / ratio {}".format(
+            _fmt_text(params.get("threshold_db")),
+            _fmt_text(params.get("ratio")))
+        if params.get("knee_db") is not None:
+            line += " / knee {}".format(_fmt_text(params.get("knee_db")))
+        if params.get("conflict") is True:
+            line += " (fit conflict)"
+        return line
+    if kind == "nonlinearity":
+        line = "- nonlinearity: verdict {}".format(
+            _fmt_text(params.get("verdict")))
+        thd_range = params.get("thd_range_pct")
+        if isinstance(thd_range, (list, tuple)) and len(thd_range) == 2:
+            line += " / THD {}-{}%".format(_fmt_text(thd_range[0]),
+                                           _fmt_text(thd_range[1]))
+        return line
+    return "- {}: n/a".format(_fmt_text(kind))
+
+
+def _stages_lines(plugin):
+    """Stage header + bullets; empty list for a pre-v3 (stageless) document."""
+    stages = plugin.get("stages") or []
+    if not isinstance(stages, list) or not stages:
+        return []
+    return ["Stages: {}".format(", ".join(
+        _fmt_text(stage.get("kind")) for stage in stages))] + [
+        _stage_line(stage) for stage in stages]
+
+
 def _render_plugin(plugin):
     """One markdown section per plugin, fixed line order."""
     plugin_name = _fmt_text(plugin.get("plugin"))
@@ -189,6 +227,7 @@ def _render_plugin(plugin):
         "Type: {} (confidence {})".format(
             _fmt_text(plugin_type.get("kind")),
             _fmt_text(plugin_type.get("confidence"))),
+        *_stages_lines(plugin),
         _eq_line(plugin.get("eq")),
         _compression_line(plugin.get("dynamics")),
         _gr_line(plugin.get("dynamics")),
@@ -199,11 +238,35 @@ def _render_plugin(plugin):
     return "\n".join(lines)
 
 
+def _render_fusion(fusion):
+    """Fusion section: which inputs were blended and which stages picked."""
+    inputs = fusion.get("inputs") or []
+    picks = fusion.get("picks") or []
+    input_text = ", ".join(
+        "{} ({})".format(_fmt_text(item.get("alias")),
+                         _fmt_text(item.get("plugin") or item.get("slug")))
+        for item in inputs)
+    pick_text = ", ".join(
+        "{}:{}".format(_fmt_text(item.get("alias")),
+                       _fmt_text(item.get("stage")))
+        for item in picks)
+    return "\n".join(["## Fusion",
+                      "Inputs: {}".format(input_text or "n/a"),
+                      "Picks: {}".format(pick_text or "n/a")])
+
+
 def render_markdown(chain_doc):
     """Return a deterministic per-plugin markdown report.
 
     Plugins are rendered in the order they appear in chain_doc["plugins"];
     each block is ## <slug> (<plugin>) followed by fixed-order verdict
-    lines. Unknown/None fields render as "n/a".
+    lines (v3 documents add their stage segment lines after the Type line).
+    A document carrying the optional top-level fusion block ends with a
+    ## Fusion section naming its inputs and picks. Unknown/None fields
+    render as "n/a".
     """
-    return "\n\n".join(_render_plugin(plugin) for plugin in chain_doc["plugins"]) + "\n"
+    sections = [_render_plugin(plugin) for plugin in chain_doc["plugins"]]
+    fusion = chain_doc.get("fusion")
+    if isinstance(fusion, dict):
+        sections.append(_render_fusion(fusion))
+    return "\n\n".join(sections) + "\n"

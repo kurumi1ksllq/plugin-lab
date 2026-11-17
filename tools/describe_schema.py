@@ -10,8 +10,10 @@ Wave-2 Task T5 of issue #26. Two jobs:
   2. `validate_chain_doc`, a pure structural validator for the full
      chain_doc shape built by describe_render.py / describe_chain.py:
 
-        {generated_at, source:{aggregate_report, dataset_dir,
-                               report_generated_at},
+        {contract_version: "3", generated_at,
+         source:{aggregate_report, dataset_dir, report_generated_at},
+         fusion?:{inputs:[{alias, path, slug, plugin}],
+                  picks:[{alias, stage}]},
          plugins:[{slug, plugin,
                    plugin_type:{kind,confidence,basis[]},
                    eq:{present, overall, sections[], notes[]},
@@ -19,7 +21,14 @@ Wave-2 Task T5 of issue #26. Two jobs:
                              notes[]},
                    nonlinearity:{verdict, ...},
                    processing_order:{order, confidence, basis[], ...},
+                   stages:[{kind, params, provenance:{source, basis[]}}],
                    usable_as_spec, why_not_spec[]}]}
+
+v3 (issue #105) added the per-plugin `stages[]` decomposition (eq /
+dynamics / nonlinearity, each with provenance) and the optional
+top-level `fusion` block that stage_fusion.py writes. A document without
+`contract_version` is validated under the v2 rules, so pre-v3 artifacts
+keep validating; an unknown version is a single deterministic error.
 
 Validation is structural only — presence, type and vocabulary of every
 contract field — never a plausibility judgement (that is
@@ -43,13 +52,25 @@ from describe_quality import (SANE_Q_MIN, SANE_Q_MAX, TAU_MIN_MS,
 # ---------------------------------------------------------------------------
 
 # Anchor for the T4 consumer: bump whenever the chain_doc contract changes.
-CONTRACT_VERSION = "2"
+# v3 (issue #105): top-level contract_version + per-plugin stages[] (+ the
+# optional top-level fusion block written by stage_fusion.py).
+CONTRACT_VERSION = "3"
+
+# Versions this validator understands. A document without a
+# contract_version is a pre-v3 (v2) document — validated under v2 rules so
+# existing artifacts keep validating. Anything else is a deterministic
+# error, never a silent pass.
+KNOWN_CONTRACT_VERSIONS = ("2", "3")
 
 VERDICT_OVERALL = {"none", "clean", "artifact"}
 VERDICT_NL = {"not-measured", "clean", "artifact"}
 KIND_VOCAB = {"analyzer", "compressor", "dynamics-only", "eq-dynamics",
               "eq-only", "processor", "unknown"}
 CONFIDENCE = {"high", "low"}
+
+# v3 stage vocabulary: the processing segments a plugin can be decomposed
+# into (issue #105). A fused spec picks one stage per alias.
+STAGE_KINDS = {"eq", "dynamics", "nonlinearity"}
 
 # ---------------------------------------------------------------------------
 # validate_chain_doc
@@ -133,7 +154,50 @@ def _check_eq_section(errors, path, section):
     _optional(errors, path, section, "reason", "str")
 
 
-def _check_plugin(errors, path, plugin):
+def _check_stage(errors, path, stage, idx):
+    """One v3 stage: {kind, params, provenance:{source, basis[]}}."""
+    if not isinstance(stage, dict):
+        errors.append(f"{path}: stages[{idx}] must be a dict")
+        return
+    _vocab_check(errors, path, stage, "kind", STAGE_KINDS,
+                 field=f"stages[{idx}].kind")
+    _required(errors, path, stage, "params", "dict",
+              field=f"stages[{idx}].params")
+    _required(errors, path, stage, "provenance", "dict",
+              field=f"stages[{idx}].provenance")
+    provenance = stage.get("provenance")
+    if isinstance(provenance, dict):
+        _required(errors, path, provenance, "source", "str",
+                  field=f"stages[{idx}].provenance.source")
+        _required(errors, path, provenance, "basis", "list",
+                  field=f"stages[{idx}].provenance.basis")
+
+
+def _check_fusion(errors, path, fusion):
+    """Optional v3 fusion block: {inputs:[{alias,...}], picks:[{alias,stage}]}."""
+    _required(errors, path, fusion, "inputs", "list", field="fusion.inputs")
+    inputs = fusion.get("inputs")
+    if isinstance(inputs, list):
+        for idx, item in enumerate(inputs):
+            if not isinstance(item, dict):
+                errors.append(f"{path}: fusion.inputs[{idx}] must be a dict")
+                continue
+            _required(errors, path, item, "alias", "str",
+                      field=f"fusion.inputs[{idx}].alias")
+    _required(errors, path, fusion, "picks", "list", field="fusion.picks")
+    picks = fusion.get("picks")
+    if isinstance(picks, list):
+        for idx, item in enumerate(picks):
+            if not isinstance(item, dict):
+                errors.append(f"{path}: fusion.picks[{idx}] must be a dict")
+                continue
+            _required(errors, path, item, "alias", "str",
+                      field=f"fusion.picks[{idx}].alias")
+            _vocab_check(errors, path, item, "stage", STAGE_KINDS,
+                         field=f"fusion.picks[{idx}].stage")
+
+
+def _check_plugin(errors, path, plugin, version="2"):
     if not isinstance(plugin, dict):
         errors.append(f"{path}: must be a dict")
         return
@@ -245,6 +309,22 @@ def _check_plugin(errors, path, plugin):
     _required(errors, path, plugin, "usable_as_spec", "bool")
     _required(errors, path, plugin, "why_not_spec", "list")
 
+    # stages (v3 only) -----------------------------------------------------
+    if version == "3":
+        _required(errors, path, plugin, "stages", "list")
+        stages = plugin.get("stages")
+        if isinstance(stages, list):
+            if not stages:
+                # A plugin whose measurements yielded no usable segment
+                # legitimately carries stages [] — but it must not claim to
+                # be a usable spec then (issue #105 contract invariant).
+                if plugin.get("usable_as_spec") is True:
+                    errors.append(f"{path}: stages must not be empty when "
+                                  f"usable_as_spec is true")
+            else:
+                for idx, stage in enumerate(stages):
+                    _check_stage(errors, path, stage, idx)
+
 
 def validate_chain_doc(doc):
     """Validate a chain_doc against the issue #26 contract.
@@ -262,6 +342,21 @@ def validate_chain_doc(doc):
     if not isinstance(doc, dict):
         return {"ok": False, "errors": ["doc must be a dict"]}
 
+    # -- contract version gate ------------------------------------------
+    # A missing contract_version is a pre-v3 document (v2 rules). An
+    # unsupported one is reported once, deterministically: validating a
+    # shape we do not know would only produce noise.
+    raw_version = doc.get("contract_version", _MISSING)
+    if raw_version is _MISSING or raw_version is None:
+        version = "2"
+    elif isinstance(raw_version, str) and raw_version in KNOWN_CONTRACT_VERSIONS:
+        version = raw_version
+    else:
+        return {"ok": False,
+                "errors": [f"doc: contract_version {raw_version!r} "
+                           f"unsupported (known: "
+                           f"{', '.join(KNOWN_CONTRACT_VERSIONS)})"]}
+
     # -- top level ------------------------------------------------------
     _required(errors, "doc", doc, "generated_at", "str")
     _required(errors, "doc", doc, "source", "dict")
@@ -278,6 +373,14 @@ def validate_chain_doc(doc):
             errors.append("doc: plugins must not be empty")
         else:
             for idx, plugin in enumerate(plugins):
-                _check_plugin(errors, f"plugins[{idx}]", plugin)
+                _check_plugin(errors, f"plugins[{idx}]", plugin, version)
+
+    # -- optional fusion block (v3, stage_fusion.py output) --------------
+    fusion = doc.get("fusion", _MISSING)
+    if fusion is not _MISSING and fusion is not None:
+        if not isinstance(fusion, dict):
+            errors.append("doc: fusion must be dict")
+        else:
+            _check_fusion(errors, "doc", fusion)
 
     return {"ok": not errors, "errors": errors}

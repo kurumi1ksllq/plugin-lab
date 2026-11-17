@@ -13,7 +13,8 @@ and processing ORDER is never asserted from measurements (always
 delegate to describe_quality.py predicates; the chain_doc contract below
 is pinned and consumed by describe_render.py (Wave-1 T3):
 
-    {slug, plugin, plugin_type:{kind,confidence,basis[]},
+    {contract_version:"3", generated_at, source:{...},
+     plugins:[{slug, plugin, plugin_type:{kind,confidence,basis[]},
      eq:{present,overall,sections[],notes[]},
      dynamics:{present,compression:{threshold_derived,ratio_derived,
              threshold_json?,ratio_json?,knee_json?,conflict,conflict_note?},
@@ -21,7 +22,13 @@ is pinned and consumed by describe_render.py (Wave-1 T3):
              release_flag?,note?,section_usable},notes[]},
      nonlinearity:{verdict,thd_range_pct?,description?,reason?},
      processing_order:{order,confidence,basis[],suggested?,suggestion_note?},
-     usable_as_spec:bool, why_not_spec[]}
+     stages:[{kind,params,provenance:{source,basis[]}}],
+     usable_as_spec:bool, why_not_spec[]}]}
+
+stages[] (v3, issue #105) is the same evidence decomposed into segments a
+consumer can pick individually (stage_fusion.py blends A's eq with B's
+dynamics); each stage records the measurement it came from and the evidence
+lines behind it.
 
 Stdlib only. Imports from the same tools/ directory: describe_quality
 (predicates), aggregate_report (LOCKED_TOLERANCES), describe_render
@@ -42,6 +49,7 @@ from pathlib import Path
 from aggregate_report import LOCKED_TOLERANCES
 import describe_quality as dq
 from describe_render import render_json, render_markdown
+from describe_schema import CONTRACT_VERSION
 
 # ---------------------------------------------------------------------------
 # Enrichment
@@ -580,6 +588,95 @@ def infer_order(plugin_type, eq, dynamics, snapshot):
 
 
 # ---------------------------------------------------------------------------
+# Stage decomposition (v3, issue #105)
+# ---------------------------------------------------------------------------
+
+# Measurement each stage's verdict came from — provenance.source values.
+_STAGE_SOURCE = {"eq": "frequency_response",
+                 "dynamics": "compression+gr",
+                 "nonlinearity": "harmonic"}
+
+
+def _stage(kind, params, basis):
+    """One stage: {kind, params, provenance:{source, basis[]}}."""
+    return {"kind": kind,
+            "params": params,
+            "provenance": {"source": _STAGE_SOURCE[kind],
+                           "basis": [line for line in basis if line]}}
+
+
+def _eq_stage(eq):
+    """EQ segment: the fitted band + its verdict, or None when absent."""
+    if not eq.get("present"):
+        return None
+    sections = [{"freq_hz": section.get("freq_hz"),
+                 "gain_db": section.get("gain_db"),
+                 "q": section.get("q")}
+                for section in eq.get("sections") or []]
+    return _stage("eq",
+                  {"overall": eq.get("overall"), "sections": sections},
+                  [f"eq overall {eq.get('overall')}"]
+                  + [f"flag {s.get('flag')}: {s.get('reason')}"
+                     for s in eq.get("sections") or []
+                     if s.get("plausible") is False]
+                  + list(eq.get("notes") or []))
+
+
+def _dynamics_stage(dynamics):
+    """Dynamics segment: compression fit + GR time constants, or None."""
+    if not dynamics.get("present"):
+        return None
+    compression = dynamics.get("compression") or {}
+    gr = dynamics.get("gr") or {}
+    basis = ["no fit conflict"]
+    if compression.get("conflict"):
+        basis = [f"compression conflict: {compression.get('conflict_note')}"]
+    if gr.get("attack_plausible") is False:
+        basis.append("attack implausible")
+    if gr.get("release_plausible") is False:
+        basis.append("release implausible")
+    basis += list(dynamics.get("notes") or [])
+    return _stage("dynamics",
+                  {"threshold_db": compression.get("threshold_derived"),
+                   "ratio": compression.get("ratio_derived"),
+                   "knee_db": compression.get("knee_json"),
+                   "attack_ms": gr.get("attack_ms"),
+                   "release_ms": gr.get("release_ms"),
+                   "conflict": bool(compression.get("conflict"))},
+                  basis)
+
+
+def _nonlinearity_stage(nonlinearity):
+    """Non-linearity segment: verdict + THD range, or None when not measured."""
+    verdict = nonlinearity.get("verdict")
+    if verdict not in ("clean", "artifact"):
+        return None
+    reasons = [line for line in (nonlinearity.get("reason") or "").split("; ")
+               if line]
+    return _stage("nonlinearity",
+                  {"verdict": verdict,
+                   "thd_range_pct": nonlinearity.get("thd_range_pct")},
+                  [f"harmonic verdict {verdict}"] + reasons)
+
+
+def build_stages(eq, dynamics, nonlinearity):
+    """Decompose the three measurement blocks into the v3 stages[] list.
+
+    Fixed order (eq, dynamics, nonlinearity) so the output is deterministic.
+    A segment is described only when it carries measured evidence
+    (eq/dynamics "present", nonlinearity measured at all) — an artifact
+    segment is still described together with its verdict, because dropping
+    it would silently lose why the plugin is not spec-usable.
+
+    Returns [stage, ...] where stage = {kind, params, provenance:{source,
+    basis[]}}; [] when no segment was measured.
+    """
+    stages = [_eq_stage(eq), _dynamics_stage(dynamics),
+              _nonlinearity_stage(nonlinearity)]
+    return [stage for stage in stages if stage is not None]
+
+
+# ---------------------------------------------------------------------------
 # Chain document assembly
 # ---------------------------------------------------------------------------
 
@@ -679,11 +776,16 @@ def build_chain_doc(rows, meta, dataset_dir=None):
             "dynamics": dynamics,
             "nonlinearity": nonlinearity,
             "processing_order": processing_order,
+            # Issue #105 T7: the same evidence, decomposed into segments a
+            # consumer can pick individually (stage_fusion.py), each with its
+            # provenance so a fused spec never loses where it came from.
+            "stages": build_stages(eq, dynamics, nonlinearity),
             "usable_as_spec": not why_not_spec,
             "why_not_spec": why_not_spec,
         })
 
-    return {"generated_at": meta["generated_at"],
+    return {"contract_version": CONTRACT_VERSION,
+            "generated_at": meta["generated_at"],
             "source": {"aggregate_report": meta["aggregate_report"],
                        "dataset_dir": dataset_dir,
                        "report_generated_at": meta["report_generated_at"]},
