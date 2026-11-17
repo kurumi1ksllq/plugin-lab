@@ -30,7 +30,7 @@ AI 通过 Named Pipe IPC（`\\.\pipe\PluginLab`）驱动 GUI：加载插件 → 
 
 > 需 Windows + MSVC。编译开启 `/W4 /permissive- /WX /utf-8`（警告即错误）；`build/` 是唯一构建树。
 
-```bash
+```
 cmake -S . -B build && cmake --build build --config Release
 # 运行
 build\PluginLab_artefacts\Release\Plugin Lab.exe
@@ -38,7 +38,7 @@ build\PluginLab_artefacts\Release\Plugin Lab.exe
 
 ## 测试
 
-```bash
+```
 cmake -S . -B build -DBUILD_TESTS=ON && cmake --build build --config Release
 ctest --test-dir build -C Release --timeout 180
 ```
@@ -47,7 +47,7 @@ Catch2 单元测试 318 项（计数以 `tests/AGENTS.md` 为准，连跑 2 次�
 
 ## AI / IPC 驱动
 
-Named Pipe `\\.\pipe\PluginLab`，JSON 行协议。命令：`loadPlugin` / `setParam` / `getParams` / `measure` / `scan` / `stop` / `exportData` / `getScanStatus` / `dataset`（协议契约见 `SPEC.md` 与 `source/ipc/AGENTS.md`）。
+Named Pipe `\\.\pipe\PluginLab`，JSON 行协议。命令：`loadPlugin` / `setParam` / `getParams` / `measure` / `scan` / `stop` / `exportData` / `exportWav` / `getScanStatus` / `dataset` / `recordTimeline` / `stopTimeline` / `playTimeline`（协议契约见 `SPEC.md` 与 `source/ipc/AGENTS.md` PROTOCOL 表）。
 
 ```
 → {"cmd":"loadPlugin","path":"C:/VST/MyPlugin.vst3"}

@@ -14,7 +14,7 @@ grade: standard（1 个内容文件新增 + 2 个流程文件；README 预计 >3
 ## 验收
 
 - `README.md` 存在于仓库根，中文内容 U+FFFD 计数为 0
-- 构建 / 测试命令与 `AGENTS.md` COMMANDS 节一致；IPC 命令名与 `DESIGN.md`「实际协议」注记一致
+- 构建 / 测试命令与 `AGENTS.md` COMMANDS 节一致；IPC 命令名以 `source/ipc/AGENTS.md` PROTOCOL 表 + `source/ipc/Protocol.h` 为权威（`DESIGN.md` 注记为 2026-07-31 草稿，仅参考）
 - 文档导航引用的文件全部真实存在（写入前逐项 existsSync 核验）
 
 ## 裁剪
@@ -24,4 +24,6 @@ grade: standard（1 个内容文件新增 + 2 个流程文件；README 预计 >3
 
 ## 变更点
 
-（无）
+1. README IPC 清单 9 → 13（双轴 review 指出 `DESIGN.md` 注记滞后，缺 `exportWav` / `recordTimeline` / `stopTimeline` / `playTimeline`）；权威锚改为 `source/ipc/AGENTS.md` PROTOCOL 表 + `Protocol.h`，README 补全；Windows 专用命令块去掉 `bash` 语言标注（轴2 #5）。
+2. gh 未认证缺口处置：已向用户报告并给出 `gh auth login` 命令；用户提供凭据保险库条目后继续，推送 / PR 路径恢复（issue 缺失期间分支名沿用仓库 `docs/*` 惯例、任务板文件名 `local-readme.json`）。
+3. 4 类型 × 4 激励源口径沿用根 AGENTS.md 原文（轴1 补充指出 gr_timeline×signal 进程内受限），不改动——知识库措辞不在本分支边界。

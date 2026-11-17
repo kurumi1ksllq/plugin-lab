@@ -1,8 +1,8 @@
 {
   "issue": null,
   "grade": "standard",
-  "stage": "dev",
-  "updatedAt": "2026-11-17T15:43:25.587Z",
+  "stage": "pr",
+  "updatedAt": "2026-11-17T15:56:30.749Z",
   "branch": "docs/readme-init",
   "tickets": [
     {
@@ -17,11 +17,13 @@
     "status": "unknown"
   },
   "review": {
-    "state": "not-started",
-    "axes": 2
+    "state": "done",
+    "axes": 2,
+    "note": "both axes reported; findings adjudicated in PR description"
   },
   "merge": {
     "authorized": false
   },
-  "notes": "gh 未认证：issue/PR 不可用，流程降级为本地分支 + 本地 diff review"
+  "notes": "gh 未认证：issue/PR 不可用，流程降级为本地分支 + 本地 diff review",
+  "pr": "https://github.com/kurumi1ksllq/plugin-lab/pull/124"
 }
