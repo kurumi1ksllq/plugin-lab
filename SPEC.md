@@ -62,6 +62,7 @@
 | `scan`               | `scanToJSON`              | param × (freq/level)                      |
 | `gr_timeline`        | `grTimelineToJSON`        | time                                      |
 | `compression_family` | `compressionFamilyToJSON` | level × time                              |
+| `nonlinear_family`  | `harmonicFamilyToJSON`   | level（THD 随电平，issue #102）           |
 | `dataset`            | `datasetToJSON`           | param × level × freq × time（聚合，T5.1） |
 
 ---
@@ -464,6 +465,7 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
 | `compression`        | object（可选） | 压缩块：`curve`/`fitted`（与 §3 body 一致）                                                       |
 | `scan`               | object（可选） | 参数扫描块：`param_id`/`param_name`/`values`/`param_texts` + **`family` 内嵌**（与 §5 family 布局一致） |
 | `compression_family` | object（可选） | 压缩响应族块：`family`（与 §7 条目布局一致）                                                            |
+| `nonlinear_family`  | object（可选） | 非线性族块：`family`（与 §13 条目布局一致，issue #102）                                                 |
 | `gr_timeline`        | object（可选） | GR 块：`gr` + `tau`（与 §6 body 一致，含 valid/details）                                                |
 
 **可选语义**：`Dataset` 各字段均为"可选测量"——调用方只填已完成的测量，未提供项在 JSON 中**整体省略**（空 dataset 仅含 `type` + `context`）。`grTau` 与 `grTimeline` 同现。
@@ -697,6 +699,60 @@ issue #65：`loadPlugin` 是 AI/脚本加载被测插件的唯一入口（GUI �
 ```
 
 客户端应读取 `candidates` 后用第 1 级精确名或完整路径重试。
+
+---
+
+## 13. nonlinear_family（THD 随电平，issue #102）
+
+单一维度的非线性族：**每个输入电平一条 entry**，条内是该电平下的谐波分析 body（每段单音、逐音 `thd_percent`）。用于区分硬削波 / 软饱和 / 谐波饱和三类非线性，覆盖 **level** 维度。
+
+```json
+{
+  "type": "nonlinear_family",
+  "context": {
+    "plugin": "MyPlugin",
+    "class_id": "com.example.myplugin",
+    "latency_samples": 0,
+    "sample_rate": 48000.0,
+    "measurement": { "sample_rate": 48000.0, "block_size": 512 },
+    "parameter_snapshot": {},
+    "source": { "type": "signal" }
+  },
+  "family": [
+    {
+      "input_level_db": -24.0,
+      "tones": [
+        {
+          "fundamental_hz": 400.0,
+          "fundamental_db": -27.9,
+          "thd_percent": 0.012,
+          "harmonics": [
+            { "order": 2, "freq": 800.0, "mag_db": -66.0, "percent": 0.05 }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+| 字段                      | 类型   | 说明                                                                 |
+| ------------------------- | ------ | -------------------------------------------------------------------- |
+| `family[].input_level_db` | number | 该条输入电平（dBFS），激励幅度 = 10^(db/20)                          |
+| `family[].tones`          | array  | 该电平下的谐波 body（**与 §2 harmonic 的 `tones` 完全一致**，同一序列化助手） |
+
+**建模用途**：非线性随电平的增长形状——`thd_percent` 在钳位点以下≈0、越过钳位点突增的是硬削波；全程平滑增长的是软饱和；增长但主谐波阶次偏低的是谐波饱和（形状判定见 `tools/describe_chain.py` 与 `tools/stage_fusion.py` 的 nonlinearity 段）。
+
+**IPC（dataset 可选块）**：`"nonlinear_family": {"levels_db": [...], "segment_duration_sec": 0.3}`
+
+| 参数                   | 类型   | 默认                                            | 说明                                                         |
+| ---------------------- | ------ | ----------------------------------------------- | ------------------------------------------------------------ |
+| `levels_db`            | array  | `[-60,-48,-36,-24,-12,-6,0]`                  | 电平网格（dBFS）；非数组/空/非数值 → 该块跳过                 |
+| `segment_duration_sec` | number | 3.0                                             | 每音分段时长（秒）；`<=0` 或省略 → 保持会话默认             |
+
+响应中带 `"nonlinear_family": true/false`（与 `"compression_family"` 同构）。**本块不进 `battery`、不进 `types`**（`types` 仍恒为 4 个测量类型），也不下发子进程（`ChildWavAnalyzer` 不实现该分析器，ADR-D-7 显式拒绝）。
+
+**向后兼容**：不请求该块时，单电平 harmonic 激励仍是字面幅度 0.4、分段 3.0 s，既有 `harmonic` 导出字节不变。
 
 ---
 
