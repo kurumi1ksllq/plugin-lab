@@ -936,11 +936,17 @@ TEST_CASE ("harmonicFamilyToJSON emits the nonlinear_family schema",
     REQUIRE (! parsed.isUndefined());
     REQUIRE (parsed["type"].toString() == "nonlinear_family");
     REQUIRE (parsed["family"].size() == 2);
-    REQUIRE (parsed["family"][0]["input_level_db"] == -24.0);
+    // juce::var has no unambiguous operator== against double — compare the
+    // extracted double instead (same convention as the other export tests).
+    REQUIRE (static_cast<double> (parsed["family"][0]["input_level_db"])
+             == Catch::Approx (-24.0));
     REQUIRE (parsed["family"][0]["tones"].size() == 2);
-    REQUIRE (parsed["family"][0]["tones"][0]["fundamental_hz"] == 400.0);
-    REQUIRE (parsed["family"][0]["tones"][0]["thd_percent"] == 0.0);
-    REQUIRE (parsed["family"][1]["tones"][0]["thd_percent"] == 9.0);
+    REQUIRE (static_cast<double> (parsed["family"][0]["tones"][0]["fundamental_hz"])
+             == Catch::Approx (400.0));
+    REQUIRE (static_cast<double> (parsed["family"][0]["tones"][0]["thd_percent"])
+             == Catch::Approx (0.0));
+    REQUIRE (static_cast<double> (parsed["family"][1]["tones"][0]["thd_percent"])
+             == Catch::Approx (9.0));
     REQUIRE (parsed["family"][1]["tones"][0]["harmonics"].size() == 2);
 }
 
