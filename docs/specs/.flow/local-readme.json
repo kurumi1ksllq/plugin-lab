@@ -1,0 +1,27 @@
+{
+  "issue": null,
+  "grade": "standard",
+  "stage": "dev",
+  "updatedAt": "2026-11-17T15:43:25.587Z",
+  "branch": "docs/readme-init",
+  "tickets": [
+    {
+      "id": 1,
+      "title": "README.md 撰写",
+      "state": "done"
+    }
+  ],
+  "ci": {
+    "run": 0,
+    "max": 2,
+    "status": "unknown"
+  },
+  "review": {
+    "state": "not-started",
+    "axes": 2
+  },
+  "merge": {
+    "authorized": false
+  },
+  "notes": "gh 未认证：issue/PR 不可用，流程降级为本地分支 + 本地 diff review"
+}
