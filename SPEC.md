@@ -13,7 +13,7 @@
 > schema 类型（复用 §5 scan + §6 gr_timeline + §7 compression_family 数据）。
 >
 > 2026-08-14 定位更新：本文件（测量导出 8 类 JSON + WAV）是"可带走开发规格"的**数据侧**；
-> 反推结论侧（chain_doc 处理链路描述）契约见 `tools/describe_schema.py`（`CONTRACT_VERSION="2"`，
+> 反推结论侧（chain_doc 处理链路描述）契约见 `tools/describe_schema.py`（`CONTRACT_VERSION="3"`，
 > 由 `describe_chain.py` 生成）——两者合起来构成交付给开发者的完整规格，见 DESIGN.md 开发目标「规格交付链路」。
 >
 > 2026-08-04 变更记录：新增 IPC 协议命令 `getScanStatus`（扫描状态快照，见

@@ -1,0 +1,49 @@
+{
+  "issue": 105,
+  "grade": "standard",
+  "stage": "ci",
+  "updatedAt": "2026-11-18T01:10:00+08:00",
+  "branch": "issue-105-chain-doc-stages",
+  "tickets": [
+    {
+      "id": 1,
+      "title": "schema v3：contract_version + stages/fusion 校验 + v2 兼容",
+      "state": "done"
+    },
+    {
+      "id": 2,
+      "title": "describe_chain：build_stages + provenance + blockers",
+      "state": "done"
+    },
+    {
+      "id": 3,
+      "title": "describe_render：Stages 行 + Fusion 节",
+      "state": "done"
+    },
+    {
+      "id": 4,
+      "title": "stage_fusion.py CLI + 拒绝/成功用例",
+      "state": "done"
+    },
+    {
+      "id": 5,
+      "title": "确定性：同输入字节相同",
+      "state": "done"
+    }
+  ],
+  "ci": {
+    "run": 0,
+    "max": 2,
+    "status": "unknown"
+  },
+  "review": {
+    "state": "done",
+    "axes": 2,
+    "note": "two axes reported; 8 finding groups adjudicated (7 fixed, 1 = doc anchors fixed here)"
+  },
+  "merge": {
+    "authorized": false
+  },
+  "pr": "https://github.com/kurumi1ksllq/plugin-lab/pull/125",
+  "notes": "290 passed / 1 skipped after review hardening (baseline 230 / 1)"
+}

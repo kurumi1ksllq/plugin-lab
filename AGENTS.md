@@ -49,6 +49,7 @@ PluginLab/
 | 导出 JSON 反推验证        | `tools/reverse_derive.py`、`tools/verify_export.py` | stdlib-only Python                         |
 | 批量聚合报告（out/ 扫描） | `tools/aggregate_report.py`                          | CLI 聚合 markdown+json 报告；默认态标 degenerate |
 | 处理链路描述生成          | `tools/describe_chain.py`                            | 反推报告 → markdown+json 处理链路描述（EQ/动态/非线性/顺序推断）；#17 决策 |
+| 处理段融合（chain_doc v3）| `tools/stage_fusion.py`                              | 跨插件取段融合：`--pick a:eq --pick b:dynamics`；stages+provenance+blocker 继承；#105 |
 | 四类型导出对比               | `tools/compare_all.py`                               | CLI: freq/compression/gr/harmonic 对比         |
 | IPC 手动客户端            | `tools/ipc_client.ps1`                               | NamedPipe 客户端，可配超时                  |
 | GUI 点击路径回归测试      | `tools/gui_test.py`                                  | issue #66；pywinauto UIA invoke-only；测试 seam `PLUGINLAB_GUI_MEASURE_DELAY_MS`；CI `gui-tests` job |

@@ -34,7 +34,7 @@
 
 **与路线图各块的关系**：A 批量采集 = 扩大可测范围与数据量；B 记录模式 = 干/湿对比 + 参数自动化录制回放，验证"参数变化 → 处理如何变化"；D 进程外托管 = 让 AI 能安全驱动所有插件（含会杀进程的）；E 测量质量 = 让反推的输入数据更准更快。
 
-**规格交付链路**：测量导出（8 类 JSON + WAV，见 `SPEC.md`）→ 反推聚合（`aggregate_report.py`）→ 处理链路描述（`describe_chain.py` → chain_doc，契约 `tools/describe_schema.py` `CONTRACT_VERSION="2"`）→ **交付给开发者**。反推结论以 chain_doc 为规格载体；测量原始数据 + 上下文随 dataset JSON 交付，保证开发者可复现测量条件、按规格实现效果一致的 DSP。
+**规格交付链路**：测量导出（8 类 JSON + WAV，见 `SPEC.md`）→ 反推聚合（`aggregate_report.py`）→ 处理链路描述（`describe_chain.py` → chain_doc，契约 `tools/describe_schema.py` `CONTRACT_VERSION="3"`）→ **交付给开发者**。反推结论以 chain_doc 为规格载体；测量原始数据 + 上下文随 dataset JSON 交付，保证开发者可复现测量条件、按规格实现效果一致的 DSP。
 
 ---
 

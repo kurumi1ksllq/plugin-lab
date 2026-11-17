@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import describe_chain as dc  # noqa: E402
 import describe_quality as dq  # noqa: E402
+from describe_schema import validate_chain_doc  # noqa: E402
 from test_data.chain_fixtures import (  # noqa: E402
     make_analyzer_snapshot,
     make_compression_clean,
@@ -641,6 +642,166 @@ def test_cli_success_with_dataset_dir(tmp_path):
     assert proc.returncode == 0, proc.stderr
     doc = json.loads(json_out.read_text(encoding="utf-8"))
     assert doc["plugins"][0]["plugin_type"]["kind"] == "analyzer"
+
+
+# ---------------------------------------------------------------------------
+# v3 stages (issue #105): per-plugin segment decomposition + provenance
+# ---------------------------------------------------------------------------
+
+
+def test_chain_doc_declares_contract_version_3():
+    """The assembled document carries the v3 contract version."""
+    doc = dc.build_chain_doc([make_dyn_active_row()], _META)
+    assert doc["contract_version"] == "3"
+
+
+def test_stages_cover_every_present_segment_in_fixed_order():
+    """All three measured segments appear, always in eq/dynamics/nonlinearity
+    order (deterministic, never dependent on dict iteration)."""
+    plugin = dc.build_chain_doc([make_dyn_active_row()], _META)["plugins"][0]
+    assert [stage["kind"] for stage in plugin["stages"]] == [
+        "eq", "dynamics", "nonlinearity"]
+
+
+def test_eq_stage_params_carry_the_measured_band():
+    """The eq stage repeats the fitted band so a consumer need not read eq."""
+    stages = dc.build_chain_doc([make_dyn_active_row()], _META)["plugins"][0][
+        "stages"]
+    eq_stage = stages[0]
+    assert eq_stage["kind"] == "eq"
+    assert eq_stage["params"]["overall"] == "clean"
+    assert eq_stage["params"]["sections"] == [
+        {"freq_hz": 1000.0, "gain_db": 6.0, "q": 1.5}]
+
+
+def test_dynamics_stage_params_carry_fits_and_taus():
+    """The dynamics stage carries threshold/ratio/knee + attack/release."""
+    stages = dc.build_chain_doc([make_dyn_active_row()], _META)["plugins"][0][
+        "stages"]
+    params = stages[1]["params"]
+    assert stages[1]["kind"] == "dynamics"
+    assert params["threshold_db"] == -30.0
+    assert params["ratio"] == 4.0
+    assert params["knee_db"] == 0.0
+    assert params["attack_ms"] == 3.859
+    assert params["release_ms"] == 50.0
+    assert params["conflict"] is False
+
+
+def test_nonlinearity_stage_params_carry_the_thd_range():
+    """The nonlinearity stage carries the verdict + THD range."""
+    stages = dc.build_chain_doc([make_dyn_active_row()], _META)["plugins"][0][
+        "stages"]
+    assert stages[2]["kind"] == "nonlinearity"
+    assert stages[2]["params"] == {"verdict": "clean",
+                                   "thd_range_pct": [0.8, 2.1]}
+
+
+def test_stage_provenance_names_its_measurement_and_evidence():
+    """Every stage records which measurement produced it plus non-empty,
+    string-only evidence lines."""
+    stages = dc.build_chain_doc([make_dyn_active_row()], _META)["plugins"][0][
+        "stages"]
+    assert [stage["provenance"]["source"] for stage in stages] == [
+        "frequency_response", "compression+gr", "harmonic"]
+    for stage in stages:
+        basis = stage["provenance"]["basis"]
+        assert basis
+        assert all(isinstance(line, str) for line in basis)
+
+
+def test_artifact_segment_keeps_its_verdict_in_the_stage():
+    """An artifact segment is still described (with its verdict) — dropping
+    it would silently lose the reason the plugin is not spec-usable."""
+    plugin = dc.build_chain_doc([make_pro_c3_row()], _META)["plugins"][0]
+    stages = {stage["kind"]: stage for stage in plugin["stages"]}
+    assert stages["eq"]["params"]["overall"] == "artifact"
+    assert stages["dynamics"]["params"]["conflict"] is True
+    assert stages["nonlinearity"]["params"]["verdict"] == "artifact"
+
+
+def test_degenerate_plugin_only_emits_the_measured_segment():
+    """A plugin whose EQ/dynamics fits all failed emits no eq/dynamics stage."""
+    plugin = dc.build_chain_doc([make_scepter_row()], _META)["plugins"][0]
+    assert [stage["kind"] for stage in plugin["stages"]] == ["nonlinearity"]
+
+
+def test_chain_doc_with_stages_passes_the_validator():
+    """The generated v3 document validates against its own contract."""
+    doc = dc.build_chain_doc(
+        [make_dyn_active_row(), make_pro_c3_row(), make_scepter_row()], _META)
+    assert validate_chain_doc(doc) == {"ok": True, "errors": []}
+
+
+def test_stages_are_stable_across_two_builds():
+    """Two builds from the same rows serialize byte-identically.
+
+    Deliberately NOT sort_keys=True: key-insertion-order drift is exactly the
+    property under test (issue #105 review, finding 3).
+    """
+    rows = [make_dyn_active_row(), make_pro_c3_row()]
+    first = json.dumps(dc.build_chain_doc(rows, _META))
+    second = json.dumps(dc.build_chain_doc(rows, _META))
+    assert first == second
+
+
+def test_stage_blockers_come_from_the_plugin_verdict():
+    """Artifact segments carry the exact why_not_spec reasons that apply to
+    them — the fused document inherits these, it never re-derives them."""
+    plugin = dc.build_chain_doc([make_pro_c3_row()], _META)["plugins"][0]
+    stages = {stage["kind"]: stage for stage in plugin["stages"]}
+
+    assert stages["eq"]["blockers"] == ["eq artifact"]
+    assert stages["dynamics"]["blockers"] == ["compression fit conflict",
+                                              "release implausible"]
+    assert stages["nonlinearity"]["blockers"] == ["harmonic artifact"]
+    assert stages["eq"]["usable"] is False
+
+
+def test_stage_blockers_are_empty_on_a_clean_plugin():
+    """A spec-usable plugin's segments carry no blockers and are usable."""
+    plugin = dc.build_chain_doc([make_dyn_active_row()], _META)["plugins"][0]
+    assert plugin["usable_as_spec"] is True
+    for stage in plugin["stages"]:
+        assert stage["blockers"] == []
+        assert stage["usable"] is True
+
+
+def test_not_exercised_blocks_every_segment():
+    """#100: a plugin that did nothing under measurement must not become a
+    spec through fusion — the plugin-level reason lands on every segment."""
+    row = make_dyn_active_row()
+    row["status"] = "not-exercised"
+    plugin = dc.build_chain_doc([row], _META)["plugins"][0]
+
+    assert plugin["usable_as_spec"] is False
+    assert plugin["stages"]
+    for stage in plugin["stages"]:
+        assert any("not-exercised" in blocker for blocker in stage["blockers"])
+        assert stage["usable"] is False
+
+
+def test_saturation_downgrade_keeps_the_dynamics_stage_usable():
+    """#79: on a saturation-dominant plugin the compression-fit conflict does
+    not block the spec, so the dynamics stage must not carry it either."""
+    row = make_pro_c3_row()
+    row["compression"] = make_compression_conflict()
+    row["harmonic"] = make_harmonic_clean()   # THD up to 2.1% > saturation bound
+    plugin = dc.build_chain_doc([row], _META)["plugins"][0]
+
+    stages = {stage["kind"]: stage for stage in plugin["stages"]}
+    assert "compression fit conflict" not in stages["dynamics"]["blockers"]
+    assert stages["dynamics"]["blockers"] == []
+
+
+def test_dynamics_stage_reports_no_knee_on_a_fit_conflict():
+    """A knee only exists in the json fit: reporting it beside derived
+    threshold/ratio would invent a parameter set that was never measured."""
+    plugin = dc.build_chain_doc([make_pro_c3_row()], _META)["plugins"][0]
+    stages = {stage["kind"]: stage for stage in plugin["stages"]}
+    assert stages["dynamics"]["params"]["knee_db"] is None
+    assert any("conflict" in line
+               for line in stages["dynamics"]["provenance"]["basis"])
 
 
 def test_cli_missing_input(tmp_path):
