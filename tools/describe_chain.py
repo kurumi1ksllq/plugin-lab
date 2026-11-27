@@ -357,15 +357,18 @@ def classify_plugin_type(snapshot, row=None):
                  "generic Gain/Power names are not family evidence (issue #94)"]
     else:
         basis = ["no recognized parameter keys"]
+    # A passthrough row carries no discriminative data (issue #100), so it
+    # must never be typed from the measurement either.
+    if isinstance(row, dict) and row.get("status") == "not-exercised":
+        basis.append("plugin not exercised under measurement (passthrough)")
+        return {"kind": "unknown", "confidence": "low", "basis": basis}
     measured_fit = _measured_eq_fit(row)
     if measured_fit is not None:
         basis.append("measured frequency response fits a plausible EQ peak "
                      f"({measured_fit.get('freq_hz')!r} Hz, "
                      f"{measured_fit.get('gain_db')!r} dB)")
         return {"kind": "eq-only", "confidence": "low", "basis": basis}
-    if isinstance(row, dict) and row.get("status") == "not-exercised":
-        basis.append("plugin not exercised under measurement (passthrough)")
-    elif _dynamics_not_exercised(row):
+    if _dynamics_not_exercised(row):
         basis.append("dynamics not exercised in measurement")
     return {"kind": "unknown", "confidence": "low", "basis": basis}
 

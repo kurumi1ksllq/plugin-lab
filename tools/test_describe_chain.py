@@ -299,6 +299,17 @@ def _write_snapshot_dataset(tmp_path, slug, snapshot):
     }), encoding="utf-8")
 
 
+def test_classify_passthrough_row_never_typed_from_measurement():
+    """Issue #94: a not-exercised row (issue #100) carries no discriminative
+    data, so even a plausible freq fit must not type it — the passthrough
+    verdict wins over the measurement fallback."""
+    row = make_gem_eqp_row()
+    row["status"] = "not-exercised"
+    result = dc.classify_plugin_type(make_gem_eqp_snapshot(), row=row)
+    assert result["kind"] == "unknown"
+    assert any("not exercised" in item for item in result["basis"])
+
+
 def test_chain_doc_gem_eqp_is_an_eq_plugin(tmp_path):
     """Issue #94 acceptance 2 end-to-end: Gem EQP's chain_doc entry is typed
     eq-only from its measured curve, with a clean EQ section."""
