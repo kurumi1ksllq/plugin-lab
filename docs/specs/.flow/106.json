@@ -1,0 +1,45 @@
+{
+  "issue": 106,
+  "grade": "standard",
+  "stage": "pr",
+  "updatedAt": "2026-11-27T13:04:11.047Z",
+  "tickets": [
+    {
+      "id": 1,
+      "title": "replica_proto.py 五类合成导出(SPEC schema)",
+      "state": "done"
+    },
+    {
+      "id": 2,
+      "title": "gap_report.py 差距报告 JSON+markdown+阶段归因",
+      "state": "done"
+    },
+    {
+      "id": 3,
+      "title": "测试 test_replica_proto / test_gap_report",
+      "state": "done"
+    },
+    {
+      "id": 4,
+      "title": "pytest 全绿(324 passed)",
+      "state": "done"
+    },
+    {
+      "id": 5,
+      "title": "PR + CI",
+      "state": "todo"
+    }
+  ],
+  "ci": {
+    "run": 0,
+    "max": 2,
+    "status": "unknown"
+  },
+  "review": {
+    "state": "not-started",
+    "axes": 2
+  },
+  "merge": {
+    "authorized": false
+  }
+}
