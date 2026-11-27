@@ -482,7 +482,7 @@ def test_stereo_width_measure(app):
 
     只断言公开可观测的行为（按钮状态 + 状态栏文案），不断言绘制像素：
     PlotWidget 是通用 XY 曲线控件，width_db / correlation 作为两条 series
-    画在第 4 个实例上（Main.cpp renderStereoWidth）。
+    画在第 4 个 PlotWidget 实例上（Main.cpp renderStereoWidth）。
     """
     ensure_alive(app)
     app.wait_scan_done()
