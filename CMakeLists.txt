@@ -225,8 +225,8 @@ set_source_files_properties(source/capture/SweepRunner.cpp PROPERTIES
 # These checks fail the CONFIGURE step loudly when the crash-protection wiring
 # above is silently lost (e.g. a refactor drops a set_source_files_properties
 # block or a translation unit from one of the dual-compile manifests).
-# MSVC-only: /EHa is an MSVC flag; on other platforms there is nothing to
-# assert, so both guards are skipped.
+# Guard 1 is MSVC-only (/EHa is an MSVC flag); Guard 2 is platform-independent
+# (the dual-compile contract is about which files are compiled, not how).
 
 # Guard 1: the /EHa crash-protection blocks must all still be present.
 # /EHa is wired via per-source COMPILE_FLAGS on 5 call sites in this file
@@ -237,63 +237,174 @@ set_source_files_properties(source/capture/SweepRunner.cpp PROPERTIES
 # ChildHostParityTests.cpp). The regex matches only real call lines
 # (name immediately followed by an open paren), never comment mentions.
 if(MSVC)
-    file(STRINGS "${CMAKE_CURRENT_LIST_FILE}" CMAKE_EHA_CALLS
-         REGEX "set_source_files_properties\\(")
-    list(LENGTH CMAKE_EHA_CALLS CMAKE_EHA_COUNT)
-    if(NOT CMAKE_EHA_COUNT EQUAL 5)
+    # A bare call count is not enough: /EHa could be swapped for /EHsc, a block
+    # could be commented out, or the source file could change — all silently.
+    # So assert BOTH the flag text and the authorized file list.
+    set(EHA_ROOT_AUTHORIZED
+        source/child/PluginHostChild.cpp
+        source/capture/SweepRunner.cpp
+        source/host/PluginManager.cpp
+        source/host/EditorCrashGuard.cpp
+        source/capture/SweepRunner.cpp)
+    set(EHA_TESTS_AUTHORIZED
+        ../source/capture/SweepRunner.cpp
+        ../source/host/EditorCrashGuard.cpp
+        ChildHostParityTests.cpp)
+
+    # Collect every (file, flag) pair from a real, uncommented call block:
+    # "set_source_files_properties(<file> PROPERTIES" on one line, then the
+    # COMPILE_FLAGS line that follows. Commented-out blocks start with "#"
+    # and are dropped by the regex anchor.
+    function(pluginlab_collect_eha_blocks list_file out_pairs)
+        file(STRINGS "${list_file}" _calls
+             REGEX "^[ \t]*set_source_files_properties\\([^)]*PROPERTIES")
+        file(STRINGS "${list_file}" _flags
+             REGEX "^[ \t]*COMPILE_FLAGS[ \t]+\"/EHa\"")
+        set(_pairs "")
+        foreach(_call IN LISTS _calls)
+            string(REGEX REPLACE
+                   "^[ \t]*set_source_files_properties\\(([^)]*) PROPERTIES.*$"
+                   "\\1" _file "${_call}")
+            string(STRIP "${_file}" _file)
+            list(APPEND _pairs "${_file}")
+        endforeach()
+        list(LENGTH _calls _n_calls)
+        list(LENGTH _flags _n_flags)
+        set(${out_pairs} "${_pairs}" PARENT_SCOPE)
+        set(${out_pairs}_CALLS ${_n_calls} PARENT_SCOPE)
+        set(${out_pairs}_FLAGS ${_n_flags} PARENT_SCOPE)
+    endfunction()
+
+    pluginlab_collect_eha_blocks("${CMAKE_CURRENT_LIST_FILE}" ROOT_EHA)
+    if(NOT ROOT_EHA_FLAGS EQUAL ROOT_EHA_CALLS)
         message(FATAL_ERROR
-            "[EHa guard] Root CMakeLists.txt: expected 5 set_source_files_properties"
-            " /EHa call sites (PluginManager.cpp, EditorCrashGuard.cpp and"
-            " SweepRunner.cpp for PluginLab; PluginHostChild.cpp and SweepRunner.cpp"
-            " for PluginHostChild), found ${CMAKE_EHA_COUNT}. A /EHa block was"
-            " removed — crash protection (/EHa + catch(...) + CRASH_LOG) would be"
-            " silently lost. Restore it.")
+            "[EHa guard] Root CMakeLists.txt: ${ROOT_EHA_CALLS} "
+            "set_source_files_properties(...PROPERTIES) blocks but "
+            "${ROOT_EHA_FLAGS} COMPILE_FLAGS \"/EHa\" lines. A /EHa flag was "
+            "changed or dropped — crash protection (/EHa + catch(...) + "
+            "CRASH_LOG) would be silently lost. Restore it.")
     endif()
-    file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/tests/CMakeLists.txt" TESTS_EHA_CALLS
-         REGEX "set_source_files_properties\\(")
-    list(LENGTH TESTS_EHA_CALLS TESTS_EHA_COUNT)
-    if(NOT TESTS_EHA_COUNT EQUAL 3)
+    set(_root_missing "")
+    foreach(_want IN LISTS EHA_ROOT_AUTHORIZED)
+        list(FIND ROOT_EHA "${_want}" _idx)
+        if(_idx EQUAL -1)
+            list(APPEND _root_missing "${_want}")
+        endif()
+    endforeach()
+    if(_root_missing)
         message(FATAL_ERROR
-            "[EHa guard] tests/CMakeLists.txt: expected 3 set_source_files_properties"
-            " /EHa call sites (SweepRunner.cpp, EditorCrashGuard.cpp,"
-            " ChildHostParityTests.cpp), found ${TESTS_EHA_COUNT}. Restore it.")
+            "[EHa guard] Root CMakeLists.txt: these authorized translation units "
+            "no longer carry a /EHa block: ${_root_missing}. Crash protection "
+            "would be silently lost. Restore it.")
+    endif()
+
+    pluginlab_collect_eha_blocks("${CMAKE_CURRENT_LIST_DIR}/tests/CMakeLists.txt"
+                                 TESTS_EHA)
+    if(NOT TESTS_EHA_FLAGS EQUAL TESTS_EHA_CALLS)
+        message(FATAL_ERROR
+            "[EHa guard] tests/CMakeLists.txt: ${TESTS_EHA_CALLS} blocks but "
+            "${TESTS_EHA_FLAGS} COMPILE_FLAGS \"/EHa\" lines. Restore them.")
+    endif()
+    set(_tests_missing "")
+    foreach(_want IN LISTS EHA_TESTS_AUTHORIZED)
+        list(FIND TESTS_EHA "${_want}" _idx)
+        if(_idx EQUAL -1)
+            list(APPEND _tests_missing "${_want}")
+        endif()
+    endforeach()
+    if(_tests_missing)
+        message(FATAL_ERROR
+            "[EHa guard] tests/CMakeLists.txt: these authorized translation units "
+            "no longer carry a /EHa block: ${_tests_missing}. Restore them.")
     endif()
 endif()
 
-# Guard 2: dual-compile manifest consistency for the key modules
-# (capture / analysis / ipc / signal / scan / host). Every production .cpp in
-# these modules must also appear in tests/CMakeLists.txt's unit_tests
-# target_sources — with no static library each new .cpp has to be added to
-# BOTH lists; missing one side silently changes the compile context (flags,
-# defines) between the app and the tests. Entry point (Main.cpp), the
-# standalone child executable (source/child/) and UI code are intentionally
-# not covered by the test manifest and are excluded here.
+# Guard 2: dual-compile manifest consistency for the key modules.
+# With no static library every production .cpp must be listed in BOTH the
+# PluginLab target_sources (root) and the unit_tests target_sources
+# (tests/CMakeLists.txt); missing one side silently changes the compile
+# context (flags, defines) between the app and the tests.
+#
+# Matching only inside the unit_tests target_sources block, with comment lines
+# removed and the path escaped: searching the whole file would also hit the
+# /EHa property blocks and commented-out entries, which is how the first
+# version of this guard passed while a real manifest entry was deleted.
 set(GUARD_MODULES capture analysis ipc signal scan host)
+set(GUARD_EXCLUDED_DIRS child ui utils)
+
+# Slice tests/CMakeLists.txt down to the unit_tests target_sources block.
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/tests/CMakeLists.txt" _tests_lines)
+set(_in_block FALSE)
+set(_tests_manifest "")
+foreach(_line IN LISTS _tests_lines)
+    if(_line MATCHES "^[ \t]*target_sources\\(unit_tests")
+        set(_in_block TRUE)
+        continue()
+    endif()
+    if(_in_block)
+        if(_line MATCHES "^[ \t]*\\)")
+            set(_in_block FALSE)
+            continue()
+        endif()
+        # Drop comment lines so a commented-out entry does not count as listed.
+        if(NOT _line MATCHES "^[ \t]*#")
+            string(APPEND _tests_manifest "${_line} ")
+        endif()
+    endif()
+endforeach()
+if(_tests_manifest STREQUAL "")
+    message(FATAL_ERROR
+        "[Dual-compile guard] Could not locate target_sources(unit_tests ...) in"
+        " tests/CMakeLists.txt — the guard cannot verify the dual-compile"
+        " contract. Fix the guard rather than removing it.")
+endif()
+
+# Same slice for the root PluginLab target_sources, to check the other direction.
+file(STRINGS "${CMAKE_CURRENT_LIST_FILE}" _root_lines)
+set(_in_block FALSE)
+set(_root_manifest "")
+foreach(_line IN LISTS _root_lines)
+    if(_line MATCHES "^[ \t]*target_sources\\(PluginLab")
+        set(_in_block TRUE)
+        continue()
+    endif()
+    if(_in_block)
+        if(_line MATCHES "^[ \t]*\\)")
+            set(_in_block FALSE)
+            continue()
+        endif()
+        if(NOT _line MATCHES "^[ \t]*#")
+            string(APPEND _root_manifest "${_line} ")
+        endif()
+    endif()
+endforeach()
+
 set(DUAL_COMPILE_MISSING "")
 foreach(_mod IN LISTS GUARD_MODULES)
-    file(GLOB _mod_cpps
-         "${CMAKE_CURRENT_SOURCE_DIR}/source/${_mod}/*.cpp")
+    file(GLOB _mod_cpps "${CMAKE_CURRENT_SOURCE_DIR}/source/${_mod}/*.cpp")
     foreach(_cpp IN LISTS _mod_cpps)
         file(RELATIVE_PATH _rel "${CMAKE_CURRENT_SOURCE_DIR}" "${_cpp}")
         file(TO_CMAKE_PATH "${_rel}" _rel)
-        file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/tests/CMakeLists.txt" _hit
-             REGEX "${_rel}")
-        list(LENGTH _hit _hits)
-        if(_hits EQUAL 0)
-            list(APPEND DUAL_COMPILE_MISSING "${_rel}")
+        # Escape the path before using it as a regex (dots and slashes).
+        string(REPLACE "." "\\." _rel_re "${_rel}")
+        string(REPLACE "/" "\\/" _rel_re "${_rel_re}")
+        if(NOT _root_manifest MATCHES "${_rel_re}")
+            list(APPEND DUAL_COMPILE_MISSING "${_rel} (missing from PluginLab)")
         endif()
-        unset(_hit)
-        unset(_hits)
+        if(NOT _tests_manifest MATCHES "${_rel_re}")
+            list(APPEND DUAL_COMPILE_MISSING "${_rel} (missing from unit_tests)")
+        endif()
     endforeach()
     unset(_mod_cpps)
 endforeach()
 if(DUAL_COMPILE_MISSING)
     message(FATAL_ERROR
-        "[Dual-compile guard] The following production sources are in"
-        " PluginLab's target_sources but MISSING from tests/CMakeLists.txt's"
-        " unit_tests target_sources (dual-compile contract, AGENTS.md"
-        " CONVENTIONS): ${DUAL_COMPILE_MISSING}. Add them to both lists.")
+        "[Dual-compile guard] Dual-compile contract violated (AGENTS.md"
+        " CONVENTIONS): ${DUAL_COMPILE_MISSING}. Every production .cpp in"
+        " ${GUARD_MODULES} must be listed in BOTH the PluginLab and unit_tests"
+        " target_sources. Excluded by design: ${GUARD_EXCLUDED_DIRS}.")
 endif()
+
 
 # ── Tests ───────────────────────────────────────────────────────────────────
 option(BUILD_TESTS "Build PluginLab unit tests" OFF)
