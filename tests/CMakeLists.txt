@@ -115,6 +115,12 @@ add_dependencies(unit_tests PluginHostChild)
 target_compile_definitions(unit_tests PRIVATE
     PLUGIN_HOST_CHILD_EXE="$<TARGET_FILE:PluginHostChild>"
     CHILD_PARITY_PLUGIN="C:/Program Files/Common Files/VST3/magic.CURVE.vst3"
+    # Issue #116: the host/child loadPlugin contract parity cases read the two
+    # source files as TEXT — the child's load constants live in an anonymous
+    # namespace inside a separate executable, so no link-time symbol ties them
+    # to PluginManager's. Absolute path at generation time; forward slashes
+    # throughout (avoids MSVC C4129).
+    PLUGINLAB_SOURCE_DIR="${CMAKE_SOURCE_DIR}/source"
     # SuicidePlugin artifact (tests/CMakeLists.txt juce_add_plugin below):
     #   build/tests/SuicidePlugin_artefacts/<CONFIG>/VST3/SuicidePlugin.vst3
     # A .vst3 is a DIRECTORY — tests use exists() not existsAsFile().

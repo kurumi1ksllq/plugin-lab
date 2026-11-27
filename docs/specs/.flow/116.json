@@ -1,0 +1,48 @@
+{
+  "issue": 116,
+  "grade": "standard",
+  "stage": "dev",
+  "updatedAt": "2026-11-27T20:55:00+08:00",
+  "branch": "refactor/issue-116-loadplugin-parity",
+  "tickets": [
+    {
+      "id": 1,
+      "title": "读全：PluginHostChild handleLoad / PluginManager::loadPlugin / ChildHostParityTests / TestChildProcess / AGENTS 铁律",
+      "state": "done"
+    },
+    {
+      "id": 2,
+      "title": "方案裁决：选双边契约测试，不抽共享 helper（线程模型 + 失败语义不同）",
+      "state": "done"
+    },
+    {
+      "id": 3,
+      "title": "ChildHostParityTests 新增 5 个契约用例（超时常量/迟到回调/心跳间隔/错误文案/48k-512 默认值）",
+      "state": "done"
+    },
+    {
+      "id": 4,
+      "title": "tests/CMakeLists.txt 加 PLUGINLAB_SOURCE_DIR 定义（契约用例读源码文本）",
+      "state": "done"
+    },
+    {
+      "id": 5,
+      "title": "PR + CI（C++ 编译与运行由 CI 验证，本机无 cmake）",
+      "state": "open"
+    }
+  ],
+  "ci": {
+    "run": 0,
+    "max": 2,
+    "status": "unknown"
+  },
+  "review": {
+    "state": "pending",
+    "axes": 0,
+    "note": ""
+  },
+  "merge": {
+    "authorized": false
+  },
+  "notes": "生产逻辑零改动；只新增测试 + 一个测试编译定义。为何不抽 helper：child 主线程即消息线程（runDispatchLoopUntil 泵）vs host 专用线程 WaitableEvent 等待；失败语义不同（host: nullptr + 预防性黑名单 + 持久化；child: {\"ok\":false,\"error\":\"load timeout\"} 且不黑名单）。共享的只剩常量与文案，抽 helper 会引入跨进程/跨 TU 的新耦合面，收益低于契约测试。"
+}
