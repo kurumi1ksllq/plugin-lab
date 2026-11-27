@@ -62,13 +62,21 @@ _DEGENERATE_STATUSES = ("degenerate", "no-data", "not-exercised")
 # Keyword families for classify_plugin_type (deterministic key matching).
 _ANALYZER_KEYS = ("FFT Size", "Hold Peaks", "Smoothing")
 _BAND_KEY_RE = re.compile(r"Band \d+ (Used|Frequency|Q|Gain)")
-_DYNAMICS_SUBSTRINGS = ("Threshold", "Ratio", "Attack", "Release", "Makeup",
-                        "Gain")
+# Issue #94: "Gain" and "Power" are generic words that every plugin family
+# exposes (an EQ band level, a makeup level, a mains/power switch), so they
+# are NOT family evidence on their own — only a strong word decides. Ozone 12
+# Equalizer names its bands "EQ: Stereo Gain 1" and Gem EQP only exposes
+# "Power"/"EQP Power" switches; both used to be mistyped.
+_DYNAMICS_SUBSTRINGS = ("Threshold", "Ratio", "Attack", "Release", "Makeup")
 # Weak non-linear/saturation family markers (checked AFTER eq/dynamics, so
 # an EQ or compressor that also exposes a Drive/Character key keeps its
 # stronger classification).
-_NONLINEAR_SUBSTRINGS = ("Power", "Machine", "Param", "Drive", "Character",
-                         "Saturation", "Tape")
+_NONLINEAR_STRONG = ("Machine", "Param", "Drive", "Character", "Saturation",
+                     "Tape")
+_NONLINEAR_SUBSTRINGS = _NONLINEAR_STRONG + ("Power",)
+# The generic words themselves (issue #94): present on every family, so the
+# basis names them as abstention evidence rather than as a family tell.
+_GENERIC_SUBSTRINGS = ("Gain", "Power")
 
 # Plugin families for which the EQ single-peak fit model does not apply
 # (issue #78): a non-EQ plugin's frequency response reverse-derived as one
@@ -190,6 +198,40 @@ def _dynamics_keys(snapshot):
             and any(sub in key for sub in _DYNAMICS_SUBSTRINGS)]
 
 
+def _dynamics_not_exercised(row):
+    """True when the row's dynamics blocks show nothing was exercised.
+
+    No usable compression fit, a unity ratio (derived) or an invalid GR fit:
+    the parameter face proves the ABILITY to compress, the measurement proves
+    it never happened (issue #73).
+    """
+    if not isinstance(row, dict):
+        return False
+    compression = row.get("compression")
+    gr = row.get("gr")
+    comp_degenerate = (not isinstance(compression, dict)
+                       or compression.get("status") in _DEGENERATE_STATUSES)
+    ratio = compression.get("ratio") if isinstance(compression, dict) else None
+    ratio_unity = (ratio is not None
+                   and abs(ratio - 1.0) / 1.0 * 100.0
+                   <= LOCKED_TOLERANCES["ratio_pct"])
+    gr_invalid = isinstance(gr, dict) and gr.get("valid", True) is False
+    return comp_degenerate or ratio_unity or gr_invalid
+
+
+def _measured_eq_fit(row):
+    """The row's freq section when it is a usable, plausible EQ fit, else None.
+
+    Only a status "ok" section (a fit was actually derived) that
+    describe_quality.classify_freq_peak accepts counts — an implausible
+    single-peak fit is a model mismatch, not EQ evidence.
+    """
+    freq = row.get("freq") if isinstance(row, dict) else None
+    if not isinstance(freq, dict) or freq.get("status") != "ok":
+        return None
+    return freq if dq.classify_freq_peak(freq)["plausible"] else None
+
+
 def classify_plugin_type(snapshot, row=None):
     """Classify the plugin family from its parameter snapshot keys.
 
@@ -203,7 +245,7 @@ def classify_plugin_type(snapshot, row=None):
       - eq-only:       EQ-band keys present AND no dynamics keys; basis
                        notes whether every "Band N Used" is 0.0 (all bands
                        unused) or not (eq-active)
-      - dynamics:      any Threshold/Ratio/Attack/Release/Makeup/Gain key —
+      - dynamics:      any Threshold/Ratio/Attack/Release/Makeup key —
                        "compressor" when both Threshold and Ratio present,
                        else "dynamics-only"
       - processor:     snapshot empty/None BUT the aggregate row carries
@@ -211,6 +253,14 @@ def classify_plugin_type(snapshot, row=None):
                        without a parameter snapshot; heuristic, basis
                        explains) — only when `row` is given
       - unknown:       nothing matched (or no snapshot at all)
+
+    Issue #94: the generic words Gain and Power belong to every family (an EQ
+    band level, a makeup level, a mains switch), so they never decide a type
+    on their own. When the names leave nothing but generic keys, the verdict
+    abstains (unknown, low) and the MEASUREMENT decides: a plausible EQ peak
+    in the row's freq section marks an EQ plugin (eq-only, low confidence,
+    basis names the measured curve); otherwise the basis states that the
+    plugin was not exercised under measurement (passthrough).
 
     Hybrid disambiguator: bands + dynamics keys alone would be ambiguous
     (multiband compressors expose the same band keys). A Ratio key
@@ -257,21 +307,9 @@ def classify_plugin_type(snapshot, row=None):
             # never exercised (a static EQ run: compression ratio unity or
             # a degenerate/no GR fit). Downgrade confidence then — the
             # label reflects the active behavior, not just the capability.
-            if isinstance(row, dict):
-                comp = row.get("compression")
-                gr = row.get("gr")
-                comp_degenerate = (not isinstance(comp, dict)
-                                   or comp.get("status")
-                                   in _DEGENERATE_STATUSES)
-                ratio = comp.get("ratio") if isinstance(comp, dict) else None
-                ratio_unity = (ratio is not None
-                               and abs(ratio - 1.0) / 1.0 * 100.0
-                               <= LOCKED_TOLERANCES["ratio_pct"])
-                gr_invalid = (isinstance(gr, dict)
-                              and gr.get("valid", True) is False)
-                if comp_degenerate or ratio_unity or gr_invalid:
-                    confidence = "low"
-                    basis.append("dynamics not exercised in measurement")
+            if _dynamics_not_exercised(row):
+                confidence = "low"
+                basis.append("dynamics not exercised in measurement")
             return {"kind": "eq-dynamics", "confidence": confidence,
                     "basis": basis}
         # Ratio present → multiband compressor: fall through to the
@@ -300,13 +338,36 @@ def classify_plugin_type(snapshot, row=None):
 
     nonlinear_keys = [key for key in snapshot
                       if any(sub in key for sub in _NONLINEAR_SUBSTRINGS)]
-    if nonlinear_keys:
+    # Issue #94: a bare "Power" switch is not saturation evidence — only a
+    # strong non-linear word (Drive/Character/Machine/Tape/...) decides.
+    if any(any(sub in key for sub in _NONLINEAR_STRONG)
+           for key in nonlinear_keys):
         return {"kind": "saturation", "confidence": "low",
                 "basis": ["nonlinear/saturation keys present: "
                           + ", ".join(sorted(nonlinear_keys))]}
 
-    return {"kind": "unknown", "confidence": "low",
-            "basis": ["no recognized parameter keys"]}
+    # Nothing decisive in the names. Say so, then let the measurement decide
+    # (issue #94): a plausible measured EQ peak marks an EQ plugin even when
+    # its parameter face only carries generic words.
+    generic_keys = sorted(key for key in snapshot
+                          if any(sub in key for sub in _GENERIC_SUBSTRINGS))
+    if generic_keys:
+        basis = [f"generic keys only ({len(generic_keys)}): "
+                 + ", ".join(generic_keys),
+                 "generic Gain/Power names are not family evidence (issue #94)"]
+    else:
+        basis = ["no recognized parameter keys"]
+    measured_fit = _measured_eq_fit(row)
+    if measured_fit is not None:
+        basis.append("measured frequency response fits a plausible EQ peak "
+                     f"({measured_fit.get('freq_hz')!r} Hz, "
+                     f"{measured_fit.get('gain_db')!r} dB)")
+        return {"kind": "eq-only", "confidence": "low", "basis": basis}
+    if isinstance(row, dict) and row.get("status") == "not-exercised":
+        basis.append("plugin not exercised under measurement (passthrough)")
+    elif _dynamics_not_exercised(row):
+        basis.append("dynamics not exercised in measurement")
+    return {"kind": "unknown", "confidence": "low", "basis": basis}
 
 
 # ---------------------------------------------------------------------------

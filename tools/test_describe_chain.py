@@ -34,6 +34,10 @@ import describe_quality as dq  # noqa: E402
 from describe_schema import validate_chain_doc  # noqa: E402
 from test_data.chain_fixtures import (  # noqa: E402
     make_analyzer_snapshot,
+    make_gem_eqp_row,
+    make_gem_eqp_snapshot,
+    make_ozone_eq_row,
+    make_ozone_eq_snapshot,
     make_compression_clean,
     make_compression_conflict,
     make_compression_degenerate,
@@ -219,6 +223,106 @@ def test_classify_eq_dynamic_measured_active():
     assert result["kind"] == "eq-dynamics"
     assert result["confidence"] == "high"
     assert all("not exercised" not in item for item in result["basis"])
+
+
+# ---------------------------------------------------------------------------
+# Issue #94: generic parameter names must not decide the plugin type
+# ---------------------------------------------------------------------------
+
+
+def test_classify_generic_gain_keys_never_dynamics():
+    """Issue #94: the Ozone 12 Equalizer surface names its 8 EQ bands
+    "EQ: <channel> Gain <n>" — the generic word Gain is NOT dynamics
+    evidence (no Threshold/Ratio/Attack/Release anywhere). Names alone
+    abstain: unknown, low confidence, and the basis says why."""
+    result = dc.classify_plugin_type(make_ozone_eq_snapshot())
+    assert result["kind"] != "dynamics-only"
+    assert result["kind"] == "unknown"
+    assert result["confidence"] == "low"
+    assert any("Gain" in item and "generic" in item.lower()
+               for item in result["basis"])
+
+
+def test_classify_generic_power_keys_never_saturation():
+    """Issue #94: the Gem EQP surface only exposes Power switches (Power /
+    EQP Power / HPF Power / LPF Power) — a generic power switch is NOT
+    saturation evidence. Names alone abstain: unknown, low confidence."""
+    result = dc.classify_plugin_type(make_gem_eqp_snapshot())
+    assert result["kind"] != "saturation"
+    assert result["kind"] == "unknown"
+    assert result["confidence"] == "low"
+    assert any("Power" in item and "generic" in item.lower()
+               for item in result["basis"])
+
+
+def test_classify_gem_eqp_measured_eq_from_frequency_response():
+    """Issue #94 acceptance 2: Gem EQP's measured freq curve is a real,
+    plausible EQ bell (-30.8 .. +8.75 dB) — when the names abstain, the
+    measurement decides: eq-only, basis names the measured curve."""
+    result = dc.classify_plugin_type(make_gem_eqp_snapshot(),
+                                     row=make_gem_eqp_row())
+    assert result["kind"] == "eq-only"
+    assert result["confidence"] == "low"
+    assert any("frequency response" in item.lower() for item in result["basis"])
+
+
+def test_classify_measurement_fallback_requires_a_plausible_fit():
+    """Issue #94: the measurement fallback only fires on a plausible EQ fit —
+    an implausible single-peak fit (pro-c-3 Q 18098) stays unknown."""
+    row = make_gem_eqp_row()
+    row["freq"] = make_freq_artifact()
+    result = dc.classify_plugin_type(make_gem_eqp_snapshot(), row=row)
+    assert result["kind"] == "unknown"
+    assert result["confidence"] == "low"
+
+
+def test_classify_ozone_eq_passthrough_not_exercised():
+    """Issue #94 acceptance 1 + requirement 4: Ozone 12 Equalizer measured a
+    headless passthrough (freq flat, compression unity, invalid GR) — the
+    classifier must say the processing was not exercised (issue #73 pattern)
+    instead of labelling it dynamics-only."""
+    result = dc.classify_plugin_type(make_ozone_eq_snapshot(),
+                                     row=make_ozone_eq_row())
+    assert result["kind"] != "dynamics-only"
+    assert result["kind"] == "unknown"
+    assert result["confidence"] == "low"
+    assert any("not exercised" in item for item in result["basis"])
+
+
+def _write_snapshot_dataset(tmp_path, slug, snapshot):
+    """Write one plugin's dataset.json carrying just the parameter snapshot."""
+    plugin_dir = tmp_path / slug
+    plugin_dir.mkdir()
+    (plugin_dir / "dataset.json").write_text(json.dumps({
+        "context": {"parameter_snapshot": snapshot, "sample_rate": 48000},
+        "harmonic": {"tones": []},
+    }), encoding="utf-8")
+
+
+def test_chain_doc_gem_eqp_is_an_eq_plugin(tmp_path):
+    """Issue #94 acceptance 2 end-to-end: Gem EQP's chain_doc entry is typed
+    eq-only from its measured curve, with a clean EQ section."""
+    _write_snapshot_dataset(tmp_path, "gem-eqp", make_gem_eqp_snapshot())
+    plugin = dc.build_chain_doc([make_gem_eqp_row()], _META,
+                                dataset_dir=str(tmp_path))["plugins"][0]
+    assert plugin["plugin_type"]["kind"] == "eq-only"
+    assert plugin["plugin_type"]["confidence"] == "low"
+    assert plugin["eq"]["overall"] == "clean"
+    assert plugin["usable_as_spec"] is True, plugin["why_not_spec"]
+
+
+def test_chain_doc_ozone_eq_passthrough_not_usable(tmp_path):
+    """Issue #94 acceptance 1 end-to-end: Ozone 12 Equalizer is typed unknown
+    (the parameter names abstain) and never ships as a usable spec — the
+    measurement is a headless passthrough."""
+    _write_snapshot_dataset(tmp_path, "ozone-12-equalizer",
+                            make_ozone_eq_snapshot())
+    plugin = dc.build_chain_doc([make_ozone_eq_row()], _META,
+                                dataset_dir=str(tmp_path))["plugins"][0]
+    assert plugin["plugin_type"]["kind"] == "unknown"
+    assert plugin["plugin_type"]["confidence"] == "low"
+    assert plugin["usable_as_spec"] is False
+    assert any("not-exercised" in reason for reason in plugin["why_not_spec"])
 
 
 # ---------------------------------------------------------------------------

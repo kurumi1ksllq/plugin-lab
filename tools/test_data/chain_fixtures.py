@@ -303,6 +303,37 @@ def make_multiband_comp_snapshot():
             "Band 2 Attack": 0.1, "Band 2 Release": 0.2}
 
 
+def make_ozone_eq_snapshot():
+    """Return the Ozone 12 Equalizer surface (issue #94).
+
+    A real 8-band stereo/main EQ whose band keys are named
+    "EQ: <channel> <field> <n>" — they never match the "Band N <field>"
+    pattern, so the ONLY word the classifier's tables can see is the generic
+    "Gain" (EQ: Stereo/Main Gain N). That made it a dynamics-only plugin.
+    """
+    snapshot = {"Global Amount": 1.0, "Enable": 1.0, "Bypass": 0.0}
+    for index in range(1, 9):
+        for channel in ("Stereo", "Main"):
+            snapshot["EQ: {} Frequency {}".format(channel, index)] = 0.5752
+            snapshot["EQ: {} Q {}".format(channel, index)] = 0.707
+            snapshot["EQ: {} Gain {}".format(channel, index)] = 0.5
+    return snapshot
+
+
+def make_gem_eqp_snapshot():
+    """Return the Gem EQP surface (issue #94).
+
+    A Pultec EQ clone: the parameter face only exposes generic Power switches
+    (Power / EQP Power / HPF Power / LPF Power) plus boost/attenuation names —
+    no Band / Threshold / Drive / Character key. "Power" alone is not
+    saturation evidence; the measured EQ curve decides.
+    """
+    return {"Power": 1.0, "EQP Power": 1.0, "HPF Power": 0.0,
+            "LPF Power": 0.0, "Low Boost": 0.6, "Low Attenuation": 0.4,
+            "High Boost": 0.6, "High Attenuation": 0.5, "Bandwidth": 0.5,
+            "Master Bypass": 0.0}
+
+
 def make_saturation_snapshot():
     """Return the uadx-vibe saturation snapshot: generic non-linear keys
     (Power / Machine / Param 1) plus a host bypass — no EQ-band or
@@ -333,6 +364,29 @@ def make_dyn_active_row():
             "freq": make_freq_clean(),
             "compression": make_compression_clean(), "gr": make_gr_clean(),
             "harmonic": make_harmonic_clean(), "status": "ok"}
+
+
+def make_ozone_eq_row():
+    """Return the Ozone 12 Equalizer row (issue #94): real EQ parameter
+    surface, headless passthrough measurement (#100 not-exercised)."""
+    return {"slug": "ozone-12-equalizer", "plugin": "Ozone 12 Equalizer",
+            "has_freq": True, "has_compression": True, "has_gr": True,
+            "has_harmonic": True, "freq": make_freq_degenerate(),
+            "compression": make_compression_unity_threshold_mismatch(),
+            "gr": make_gr_invalid(), "harmonic": make_harmonic_clean(),
+            "status": "not-exercised"}
+
+
+def make_gem_eqp_row():
+    """Return the Gem EQP row (issue #94): a Pultec EQ clone whose measured
+    freq curve is a real low-frequency boost (-30.8 .. +8.75 dB)."""
+    return {"slug": "gem-eqp", "plugin": "Gem EQP", "has_freq": True,
+            "has_compression": True, "has_gr": True, "has_harmonic": True,
+            "freq": {"freq_hz": 100.0, "gain_db": 8.75, "q": 0.7,
+                     "status": "ok"},
+            "compression": make_compression_unity_threshold_mismatch(),
+            "gr": make_gr_invalid(), "harmonic": make_harmonic_clean(),
+            "status": "ok"}
 
 
 # ======================= chain_doc builders ==================================
