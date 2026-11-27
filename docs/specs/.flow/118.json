@@ -1,8 +1,8 @@
 {
   "issue": 118,
   "grade": "standard",
-  "stage": "ci",
-  "updatedAt": "2026-11-27T14:59:31.677Z",
+  "stage": "merge",
+  "updatedAt": "2026-11-27T15:57:00.276Z",
   "branch": "chore/issue-118-eha-build-guard",
   "worktree": "/root/pl-wt-118",
   "tickets": [
@@ -28,9 +28,9 @@
     }
   ],
   "ci": {
-    "run": 0,
+    "run": 1,
     "max": 2,
-    "status": "unknown"
+    "status": "green"
   },
   "review": {
     "state": "done",
