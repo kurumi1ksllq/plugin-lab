@@ -1,8 +1,8 @@
 {
   "issue": 104,
   "grade": "standard",
-  "stage": "pr",
-  "updatedAt": "2026-11-27T14:10:23.884Z",
+  "stage": "ci-green",
+  "updatedAt": "2026-11-27T17:26:08.000Z",
   "tickets": [
     {
       "id": 1,
@@ -37,13 +37,13 @@
     {
       "id": 7,
       "title": "PR + CI",
-      "state": "todo"
+      "state": "done"
     }
   ],
   "ci": {
-    "run": 0,
+    "run": 1,
     "max": 2,
-    "status": "unknown"
+    "status": "green"
   },
   "review": {
     "state": "not-started",
