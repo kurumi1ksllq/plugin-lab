@@ -276,6 +276,35 @@ def test_classify_measurement_fallback_requires_a_plausible_fit():
     assert result["confidence"] == "low"
 
 
+def test_measured_dynamics_beats_the_eq_fallback():
+    """Issue #94 review: abstaining on generic names must not turn a working
+    compressor into an EQ plugin. A usable compression fit (ratio away from
+    unity) plus a valid GR edge is direct dynamic evidence, even when a freq
+    fit is also present."""
+    row = {
+        "compression": {"status": "ok", "ratio": 4.0, "threshold_db": -20.0},
+        "gr": {"valid": True, "attack_ms": 10.0, "release_ms": 100.0},
+        "freq": {"status": "ok", "freq_hz": 1000.0, "gain_db": 6.0, "q": 1.0},
+    }
+    result = dc.classify_plugin_type({"Output Gain": 0.5}, row=row)
+    assert result["kind"] == "dynamics-only"
+    assert any("dynamics evidence" in item.lower() for item in result["basis"])
+    assert not any("EQ peak" in item for item in result["basis"])
+
+
+def test_peak_above_nyquist_is_not_eq_evidence():
+    """Issue #94 review: the fallback must judge peaks exactly like build_eq.
+    A 60 kHz peak at 48 kHz is out of range there, so it cannot be EQ evidence
+    here — otherwise plugin_type and the eq section contradict each other."""
+    row = {"freq": {"status": "ok", "freq_hz": 60000.0, "gain_db": 6.0, "q": 1.0}}
+    above = dc.classify_plugin_type({"Knob A": 0.5}, row=row, sample_rate=48000.0)
+    assert above["kind"] == "unknown"
+    # The same peak inside the band is still EQ evidence.
+    row["freq"]["freq_hz"] = 1000.0
+    inside = dc.classify_plugin_type({"Knob A": 0.5}, row=row, sample_rate=48000.0)
+    assert inside["kind"] == "eq-only"
+
+
 def test_passthrough_never_typed_from_a_stale_freq_section():
     """Issue #94 review: the passthrough guard must win over the measurement
     fallback. A not-exercised row can still carry a stale (plausible-looking)

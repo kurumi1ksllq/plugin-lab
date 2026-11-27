@@ -219,6 +219,30 @@ def _dynamics_not_exercised(row):
     return comp_degenerate or ratio_unity or gr_invalid
 
 
+def _measured_dynamics_evidence(row):
+    """True when the row's dynamics blocks show compression actually happened.
+
+    The mirror of the EQ fallback (issue #94 review): abstaining on generic
+    names must not turn a working compressor into an EQ plugin just because a
+    freq fit is also present. A usable compression fit with a ratio away from
+    unity, or a valid GR edge, is direct evidence of dynamic processing.
+    """
+    if not isinstance(row, dict):
+        return False
+    compression = row.get("compression")
+    if isinstance(compression, dict):
+        if compression.get("status") in _DEGENERATE_STATUSES:
+            pass
+        else:
+            ratio = compression.get("ratio")
+            if ratio is not None and abs(ratio - 1.0) / 1.0 * 100.0 > LOCKED_TOLERANCES["ratio_pct"]:
+                return True
+    gr = row.get("gr")
+    if isinstance(gr, dict) and gr.get("valid") is True:
+        return True
+    return False
+
+
 def _measured_eq_fit(row, nyquist=None):
     """The row's freq section when it is a usable, plausible EQ fit, else None.
 
@@ -238,7 +262,7 @@ def _measured_eq_fit(row, nyquist=None):
     return freq if verdict["plausible"] else None
 
 
-def classify_plugin_type(snapshot, row=None):
+def classify_plugin_type(snapshot, row=None, sample_rate=None):
     """Classify the plugin family from its parameter snapshot keys.
 
     Deterministic keyword rules, checked in this order:
@@ -374,14 +398,15 @@ def classify_plugin_type(snapshot, row=None):
     if isinstance(row, dict) and row.get("status") == "not-exercised":
         basis.append("plugin not exercised under measurement (passthrough)")
         return {"kind": "unknown", "confidence": "low", "basis": basis}
-    # The row's freq section carries the measurement sample rate; pass it as
-    # Nyquist so this fallback judges peaks exactly like build_eq does.
-    row_nyquist = None
-    if isinstance(row, dict):
-        freq_section = row.get("freq")
-        if isinstance(freq_section, dict):
-            row_nyquist = freq_section.get("sample_rate")
-    measured_fit = _measured_eq_fit(row, nyquist=row_nyquist)
+    # A working compressor keeps its dynamics label: the EQ fallback only
+    # applies when the measurement shows no dynamic processing (issue #94).
+    if _measured_dynamics_evidence(row):
+        basis.append("measured dynamics evidence (compression fit / GR edge)")
+        return {"kind": "dynamics-only", "confidence": "low", "basis": basis}
+    # sample_rate comes from the caller: the aggregate row's freq section has
+    # no sample_rate key (aggregate_report emits freq_hz/gain_db/q/status), so
+    # reading it from the row was dead code (issue #94 review).
+    measured_fit = _measured_eq_fit(row, nyquist=sample_rate)
     if measured_fit is not None:
         basis.append("measured frequency response fits a plausible EQ peak "
                      f"({measured_fit.get('freq_hz')!r} Hz, "
@@ -881,7 +906,9 @@ def build_chain_doc(rows, meta, dataset_dir=None):
     plugins = []
     for row, enrichment in zip(rows, enrichments):
         snapshot = enrichment["parameter_snapshot"]
-        plugin_type = classify_plugin_type(snapshot, row=row)
+        plugin_type = classify_plugin_type(
+            snapshot, row=row,
+            sample_rate=(enrichment or {}).get("sample_rate"))
         eq = build_eq(row.get("freq"), enrichment)
         dynamics = build_dynamics(row.get("compression"), row.get("gr"),
                                   enrichment)
