@@ -1,8 +1,8 @@
 {
   "issue": 106,
   "grade": "standard",
-  "stage": "pr",
-  "updatedAt": "2026-11-27T13:04:11.047Z",
+  "stage": "ci",
+  "updatedAt": "2026-11-27T13:50:55.824Z",
   "tickets": [
     {
       "id": 1,
@@ -21,25 +21,35 @@
     },
     {
       "id": 4,
-      "title": "pytest 全绿(324 passed)",
+      "title": "pytest 全绿(327 passed)",
       "state": "done"
     },
     {
       "id": 5,
-      "title": "PR + CI",
-      "state": "todo"
+      "title": "PR #131 + CI",
+      "state": "done"
     }
   ],
   "ci": {
-    "run": 0,
+    "run": 1,
     "max": 2,
     "status": "unknown"
   },
   "review": {
-    "state": "not-started",
+    "state": "running",
     "axes": 2
   },
   "merge": {
     "authorized": false
-  }
+  },
+  "changes": [
+    {
+      "point": "compare_all 扩展(compare_nonlinearity/compare_stereo)未做",
+      "reason": "轴1 指出 issue 要求此项。裁决:延后——gap_report 已覆盖同样的比较语义(按 SPEC 形状逐类型 diff + 归因),在 compare_all 里再实现一套会造成两处容差定义。建议另开 issue 统一 compare_all 与 gap_report 的容差来源。"
+    },
+    {
+      "point": "THD 容差 0.5 vs compare_all 的 20%",
+      "reason": "有意更严:replica 的 THD 是解析推导,不是测量,允许偏差应远小于实测对比。"
+    }
+  ]
 }

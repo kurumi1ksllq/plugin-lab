@@ -20,11 +20,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import replica_proto as rp  # noqa: E402
 
-# Per-type tolerance for "match", mirroring compare_all's curve limits (dB).
-MATCH_LIMIT_DB = 1.0
+# Per-type tolerance for "match". compare_all defaults to 0.5 dB for every
+# curve (--limit-db / --limit-output-db / --limit-gr-db), so the same value
+# here keeps the two tools from disagreeing about the same data.
+MATCH_LIMIT_DB = 0.5
 
-# THD is a percentage, so the family comparison needs its own tolerance
-# (percentage points), mirroring compare_all's harmonic tone matching.
+# THD is a percentage, so the family comparison needs its own tolerance.
+# compare_all's harmonic limit is 20 % (mean THD delta); this one is far
+# stricter because the replica models THD analytically rather than measuring
+# it. Deliberately not the same number — documented so the two tools are not
+# assumed interchangeable here.
 MATCH_LIMIT_THD_PCT = 0.5
 
 # Which stage owns which measured type — the attribution table.
@@ -81,6 +86,26 @@ def _diff_curve(measured_pts, replica_pts, x_key, y_key):
     return deltas
 
 
+def _gr_points(block):
+    """Timeline points from a SPEC §6 gr_timeline block (nested under gr)."""
+    if not isinstance(block, dict):
+        return []
+    gr = block.get("gr")
+    if isinstance(gr, dict):
+        return gr.get("timeline") or []
+    return []
+
+
+def _stereo_width_points(block):
+    """width_db points from a SPEC §14 stereo_width block."""
+    if not isinstance(block, dict):
+        return []
+    points = block.get("width_db")
+    if isinstance(points, list):
+        return points
+    return []
+
+
 def _family_thd_by_level(block):
     """{input_level_db: thd_percent} from a SPEC §13 nonlinear_family block.
 
@@ -125,7 +150,10 @@ def _verdict(stats, limit=MATCH_LIMIT_DB):
     worst_abs is still reported alongside, for the reader.
     """
     if stats["n"] == 0:
-        return "match"
+        # Nothing overlapped: "not comparable" is not the same claim as
+        # "verified equal", and reporting it as match would hand out a pass
+        # for data the tool never actually compared.
+        return "not-comparable"
     return "match" if stats["mean_abs"] < limit else "mismatch"
 
 
@@ -159,8 +187,9 @@ def build_report(measured, replica):
             stats = _stats(deltas)
             stats["verdict"] = _verdict(stats)
         elif key == "gr_timeline":
-            deltas = _diff_curve(_curve_points(measured_block),
-                                 _curve_points(replica_block), "t", "gr_db")
+            # SPEC.md §6 nests the timeline under gr.timeline.
+            deltas = _diff_curve(_gr_points(measured_block),
+                                 _gr_points(replica_block), "t", "gr_db")
             stats = _stats(deltas)
             stats["verdict"] = _verdict(stats)
         elif key == "nonlinear_family":
@@ -175,20 +204,12 @@ def build_report(measured, replica):
             stats["verdict"] = _verdict(stats)
             continue
         else:
-            # stereo_width: width_db is a per-frequency curve (SPEC stereo_width).
-            deltas = _diff_curve(_curve_points(measured_block),
-                                 _curve_points(replica_block), "f", "width_db")
-            if not deltas:
-                a = measured_block.get("width_db")
-                b = replica_block.get("width_db")
-                if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
-                    per_type[key] = {"verdict": "not-measured", "mean_abs": 0.0,
-                                     "mean": 0.0, "worst_abs": 0.0, "n": 0}
-                    continue
-                deltas = [abs(float(a) - float(b))]
+            # stereo_width: width_db is a per-frequency array (SPEC §14).
+            deltas = _diff_curve(_stereo_width_points(measured_block),
+                                 _stereo_width_points(replica_block),
+                                 "f", "width_db")
             stats = _stats(deltas)
             stats["verdict"] = _verdict(stats, MATCH_LIMIT_THD_PCT)
-            continue
 
         per_type[key] = stats
 
