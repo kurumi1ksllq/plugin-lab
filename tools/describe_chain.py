@@ -219,17 +219,23 @@ def _dynamics_not_exercised(row):
     return comp_degenerate or ratio_unity or gr_invalid
 
 
-def _measured_eq_fit(row):
+def _measured_eq_fit(row, nyquist=None):
     """The row's freq section when it is a usable, plausible EQ fit, else None.
 
     Only a status "ok" section (a fit was actually derived) that
     describe_quality.classify_freq_peak accepts counts — an implausible
     single-peak fit is a model mismatch, not EQ evidence.
+
+    nyquist is threaded through exactly as the chain_doc EQ path does
+    (build_eq passes ctx.sample_rate), so a peak above Nyquist is rejected
+    here too — otherwise plugin_type would call a plugin EQ while its own eq
+    section says "no resolvable EQ" for the same row.
     """
     freq = row.get("freq") if isinstance(row, dict) else None
     if not isinstance(freq, dict) or freq.get("status") != "ok":
         return None
-    return freq if dq.classify_freq_peak(freq)["plausible"] else None
+    verdict = dq.classify_freq_peak(freq, nyquist=nyquist)
+    return freq if verdict["plausible"] else None
 
 
 def classify_plugin_type(snapshot, row=None):
@@ -256,11 +262,17 @@ def classify_plugin_type(snapshot, row=None):
 
     Issue #94: the generic words Gain and Power belong to every family (an EQ
     band level, a makeup level, a mains switch), so they never decide a type
-    on their own. When the names leave nothing but generic keys, the verdict
-    abstains (unknown, low) and the MEASUREMENT decides: a plausible EQ peak
-    in the row's freq section marks an EQ plugin (eq-only, low confidence,
-    basis names the measured curve); otherwise the basis states that the
-    plugin was not exercised under measurement (passthrough).
+    on their own. Two fallbacks follow the keyword rules, in this order:
+
+      1. passthrough row (row.status == "not-exercised"): stay unknown. A
+         plugin that did nothing under measurement carries no discriminative
+         data, so the measurement must not type it either.
+      2. measurement fallback: a plausible EQ peak in the row's freq section
+         marks an EQ plugin (eq-only, low confidence, basis names the curve).
+
+    The passthrough check comes first on purpose: a passthrough row can still
+    contain a stale freq section, and typing from it would contradict the
+    measurement that says nothing happened.
 
     Hybrid disambiguator: bands + dynamics keys alone would be ambiguous
     (multiband compressors expose the same band keys). A Ratio key
@@ -362,7 +374,14 @@ def classify_plugin_type(snapshot, row=None):
     if isinstance(row, dict) and row.get("status") == "not-exercised":
         basis.append("plugin not exercised under measurement (passthrough)")
         return {"kind": "unknown", "confidence": "low", "basis": basis}
-    measured_fit = _measured_eq_fit(row)
+    # The row's freq section carries the measurement sample rate; pass it as
+    # Nyquist so this fallback judges peaks exactly like build_eq does.
+    row_nyquist = None
+    if isinstance(row, dict):
+        freq_section = row.get("freq")
+        if isinstance(freq_section, dict):
+            row_nyquist = freq_section.get("sample_rate")
+    measured_fit = _measured_eq_fit(row, nyquist=row_nyquist)
     if measured_fit is not None:
         basis.append("measured frequency response fits a plausible EQ peak "
                      f"({measured_fit.get('freq_hz')!r} Hz, "

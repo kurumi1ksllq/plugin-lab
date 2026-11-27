@@ -276,6 +276,20 @@ def test_classify_measurement_fallback_requires_a_plausible_fit():
     assert result["confidence"] == "low"
 
 
+def test_passthrough_never_typed_from_a_stale_freq_section():
+    """Issue #94 review: the passthrough guard must win over the measurement
+    fallback. A not-exercised row can still carry a stale (plausible-looking)
+    freq section; typing it as eq-only would contradict the measurement that
+    says the plugin did nothing."""
+    row = make_gem_eqp_row()
+    row["status"] = "not-exercised"
+    result = dc.classify_plugin_type(make_gem_eqp_snapshot(), row=row)
+    assert result["kind"] == "unknown"
+    assert not any("frequency response" in item.lower()
+                   for item in result["basis"])
+    assert any("not exercised" in item.lower() for item in result["basis"])
+
+
 def test_classify_ozone_eq_passthrough_not_exercised():
     """Issue #94 acceptance 1 + requirement 4: Ozone 12 Equalizer measured a
     headless passthrough (freq flat, compression unity, invalid GR) — the
