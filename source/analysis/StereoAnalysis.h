@@ -43,7 +43,14 @@ public:
         double phaseDeg = 0.0;
     };
 
-    /** One point of the L/R correlation curve (rho in [-1, 1]). */
+    /** One point of the L/R correlation curve.
+
+        rho is the magnitude-squared coherence |Sxy|^2 / (Sxx*Syy), so it lives
+        in [0, 1]: 1.0 = perfectly correlated (mono/untouched), lower = the
+        plugin decorrelated the field. It is deliberately unsigned — a polarity
+        flip (L = -R) also reads 1.0, because this measure asks "how related",
+        not "in which polarity". */
+
     struct CorrelationPoint
     {
         double frequency = 0.0;

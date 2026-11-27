@@ -315,31 +315,46 @@ bool MeasurementSession::run()
 
     if (type == Type::stereoWidth && source == Source::signal)
     {
+        // Clear first: a failed or partial run must never leave the previous
+        // run's buffers behind for the analyser to read as fresh data.
+        stereoMidDry.setSize (0, 0);
+        stereoMidWet.setSize (0, 0);
+        stereoSideDry.setSize (0, 0);
+        stereoSideWet.setSize (0, 0);
+
+        // No early returns in here: the R2 restore below must run on every
+        // exit path, so a failure only clears runOk.
         auto* sweep = dynamic_cast<SineSweep*> (gen.get());
         if (sweep == nullptr)
-            return false;
+        {
+            runOk = false;
+        }
+        else
+        {
+            // Run A: mid-only excitation.
+            sweep->setChannelMode (SignalGenerator::ChannelMode::mid);
+            runOk = runPass();
 
-        // Run A: mid-only excitation.
-        sweep->setChannelMode (SignalGenerator::ChannelMode::mid);
-        if (! runPass())
-            return false;
+            if (runOk)
+            {
+                const auto& midCapture = runner.getResult();
+                stereoMidDry.makeCopyOf (midCapture.getDryBuffer());
+                stereoMidWet.makeCopyOf (midCapture.getWetBuffer());
 
-        const auto& midCapture = runner.getResult();
-        stereoMidDry.makeCopyOf (midCapture.getDryBuffer());
-        stereoMidWet.makeCopyOf (midCapture.getWetBuffer());
+                // Run B: side-only excitation. runner.run() prepares + resets
+                // the generator, so this is a deterministic phase restart
+                // (same sweep from sample 0), not a continuation.
+                sweep->setChannelMode (SignalGenerator::ChannelMode::side);
+                runOk = runPass();
 
-        // Run B: side-only excitation. runner.run() prepares + resets the
-        // generator, so this is a deterministic phase restart (same sweep from
-        // sample 0), not a continuation.
-        sweep->setChannelMode (SignalGenerator::ChannelMode::side);
-        if (! runPass())
-            return false;
-
-        const auto& sideCapture = runner.getResult();
-        stereoSideDry.makeCopyOf (sideCapture.getDryBuffer());
-        stereoSideWet.makeCopyOf (sideCapture.getWetBuffer());
-
-        runOk = true;
+                if (runOk)
+                {
+                    const auto& sideCapture = runner.getResult();
+                    stereoSideDry.makeCopyOf (sideCapture.getDryBuffer());
+                    stereoSideWet.makeCopyOf (sideCapture.getWetBuffer());
+                }
+            }
+        }
     }
     else
     {

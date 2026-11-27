@@ -832,6 +832,15 @@ juce::String CommandParser::handleMeasurementCommands (const juce::DynamicObject
             return Protocol::makeResponse (false,
                 R"("error":"gr_timeline requires a non-signal source")");
 
+        // stereo_width needs the Mid/Side dual excitation, which only the
+        // built-in signal source provides. Without this guard a file/noise/
+        // dynamic source would silently run a single pass and the analyser
+        // would read the previous run's buffers (issue #104 review).
+        if (t == Protocol::MeasureType::stereoWidth
+            && source != MeasurementSession::Source::signal)
+            return Protocol::makeResponse (false,
+                R"("error":"stereo_width requires the signal source")");
+
         // --- source-specific configuration ---
         auto sourceError = configureSessionSource (*session, obj, source);
         if (sourceError.isNotEmpty())
@@ -1364,16 +1373,28 @@ juce::String CommandParser::handleDatasetExportCommands (const juce::DynamicObje
                 juce::String error;
                 if (runAndAnalyze (session, plugin, run->source, run->sourceStr, run->results, error))
                 {
-                    run->ok = true;
-                    // Issue #39: keep the last successful battery run (with
-                    // its own per-source context) for exportData.
-                    Export::Context runCtx = buildExportContext (plugin, *session,
-                                                                 run->source, run->sourceStr);
+                    // Same guard as the single measure path: a mono /
+                    // channel-mismatched plugin must not export an empty
+                    // stereo_width block that looks like valid data.
+                    if (run->results.type == MeasurementSession::Type::stereoWidth
+                        && ! run->results.stereo.valid)
                     {
-                        std::lock_guard<std::mutex> lock (pluginLock);
-                        lastResults = run->results;
-                        lastExportContext = runCtx;
-                        hasLastResults = true;
+                        run->ok = false;
+                        error = "stereo_width requires a stereo plugin, mono or channel-mismatched output";
+                    }
+                    else
+                    {
+                        run->ok = true;
+                        // Issue #39: keep the last successful battery run (with
+                        // its own per-source context) for exportData.
+                        Export::Context runCtx = buildExportContext (plugin, *session,
+                                                                     run->source, run->sourceStr);
+                        {
+                            std::lock_guard<std::mutex> lock (pluginLock);
+                            lastResults = run->results;
+                            lastExportContext = runCtx;
+                            hasLastResults = true;
+                        }
                     }
                 }
                 // Per-type failure: record types[type] = false and continue

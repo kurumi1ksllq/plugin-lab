@@ -4067,6 +4067,65 @@ TEST_CASE ("CommandParser: measure accepts the stereo_width type and exports its
     juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
 
+TEST_CASE ("CommandParser: stereo_width reports a widened field for a side-attenuating plugin",
+           "[commandparser][measure-stereo]")
+{
+    // Issue #104 review: the original end-to-end case only asserted "four
+    // arrays are non-empty" with a passthrough fixture, so the core claim
+    // (rho < 1 = widening evidence, width_db positive when S is attenuated)
+    // had no coverage. This drives TestStereoPlugin with a known S gain.
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestStereoPlugin>();
+    plugin->setBehaviour (TestStereoPlugin::Behaviour::sideAttenuation);
+    plugin->setSideGain (0.5);            // -6.02 dB on the side channel
+    plugin->prepareToPlay (44100.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (44100.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    MeasurementResults capturedResult;
+    parser.setMeasureCompleteCallback ([&] (const MeasurementResults& r)
+    {
+        capturedResult = r;
+    });
+
+    const juce::String exportPath =
+        juce::File::getCurrentDirectory()
+            .getNonexistentChildFile ("test_stereo_widened_", ".json")
+            .getFullPathName();
+
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","source":"signal","type":"stereo_width","path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (capturedResult.stereo.valid);
+
+    // Side attenuated by half -> |M|/|S| doubles -> ~+6 dB width.
+    REQUIRE_FALSE (capturedResult.stereo.widthDB.empty());
+    const auto& widthPoint = capturedResult.stereo.widthDB[capturedResult.stereo.widthDB.size() / 2];
+    REQUIRE (widthPoint.widthDB > 3.0);
+    REQUIRE (widthPoint.widthDB < 9.0);
+
+    // The L/R pair is no longer identical -> coherence drops below 1.
+    REQUIRE_FALSE (capturedResult.stereo.correlation.empty());
+    const auto& corrPoint = capturedResult.stereo.correlation[capturedResult.stereo.correlation.size() / 2];
+    REQUIRE (corrPoint.rho < 0.999);
+
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+}
+
 TEST_CASE ("CommandParser: measure rejects an unknown measure type", "[commandparser][measure-stereo]")
 {
     ensureMessageManager();

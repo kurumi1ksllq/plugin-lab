@@ -763,7 +763,9 @@ issue #65：`loadPlugin` 是 AI/脚本加载被测插件的唯一入口（GUI �
 
 ## 14. stereo_width（声场类测量，ADR-0003 / issue #104）
 
-Mid/Side 双激励测量声场类处理（立体声宽度、M/S 处理器、立体声化）。两次扫频：Run A mid-only（L=R）测 mid→side 交叉，Run B side-only（L=−R）测 side→mid 交叉。
+Mid/Side 双激励测量声场类处理（立体声宽度、M/S 处理器、立体声化）。两次扫频：Run A mid-only（L=R）测 mid 通路响应，Run B side-only（L=−R）测 side 通路响应。
+
+**注意**：导出的是两条通路的**对角项**（wetM/dryM、wetS/dryS），交叉项（Run A 的 wet S、Run B 的 wet M）目前不计算。即本 schema 描述的是「mid 与 side 各自的响应 + L/R 相关度」，不是完整 2×2 M/S 传递矩阵。
 
 ```json
 {
