@@ -2,7 +2,7 @@
   "issue": 94,
   "grade": "standard",
   "stage": "ci",
-  "updatedAt": "2026-11-27T13:40:00.000Z",
+  "updatedAt": "2026-11-27T14:00:00.000Z",
   "tickets": [
     {
       "id": 1,
@@ -21,17 +21,20 @@
     }
   ],
   "ci": {
-    "run": 3,
+    "run": 4,
     "max": 2,
-    "status": "running"
+    "status": "running",
+    "note": "python-tools job 全绿；build-and-test 为 Windows/MSVC C++ 构建，单次约 15-20 分钟。此前几次 run 因分支连续追加提交被 concurrency 取消（cancel-in-progress），非失败。"
   },
   "review": {
     "state": "done",
     "axes": 2,
     "findings": [
-      "axis-1 medium: _measured_eq_fit 未透传 nyquist（已由 lead 提交 97972ba 修复）",
-      "axis-2 medium: docstring 未写直通守卫顺序（已由 97972ba 修复）",
-      "axis-2 low: 直通守卫缺锁定用例（已由 97972ba 补）"
+      "axis-1 medium: _measured_eq_fit 未透传 nyquist（lead 97972ba 修）",
+      "axis-2 medium: docstring 未写直通守卫顺序（lead 97972ba 修）",
+      "axis-2 low: 直通守卫缺锁定用例（lead 97972ba 补）",
+      "axis-2 blocker: EQ 补位忽略 dynamics 证据，会把真压缩器重判 eq-only（lead a374cc8 修）",
+      "axis-2 blocker: nyquist 守卫读 row.freq.sample_rate 是死代码（lead a374cc8 改为显式参数）"
     ]
   },
   "merge": {
