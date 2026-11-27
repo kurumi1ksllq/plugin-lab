@@ -1,8 +1,8 @@
 {
   "issue": 116,
   "grade": "standard",
-  "stage": "ci",
-  "updatedAt": "2026-11-27T22:10:00+08:00",
+  "stage": "merge",
+  "updatedAt": "2026-11-27T14:16:56.661Z",
   "branch": "refactor/issue-116-loadplugin-parity",
   "tickets": [
     {
@@ -32,15 +32,13 @@
     }
   ],
   "ci": {
-    "run": 0,
+    "run": 2,
     "max": 2,
-    "status": "green",
-    "note": "build-and-test 46007746899: 100% tests passed out of 333 (run1 454s / run2 445s), 4 skipped = 真插件缺失的既有 parity 用例；python-tools + gui-tests 均 success"
+    "status": "green"
   },
   "review": {
-    "state": "pending",
-    "axes": 0,
-    "note": "待 lead 双轴 review"
+    "state": "done",
+    "axes": 2
   },
   "merge": {
     "authorized": false
