@@ -55,15 +55,16 @@ Gem EQP -> eq-only low
 | --- | --- | --- |
 | T1 | 复现 + 定位（fixture 化 Ozone/Gem 参数面与 row） | 修前输出留证：dynamics-only high / saturation low |
 | T2 | 红：新增 7 个用例（泛化名不判 dynamics-only / 不判 saturation / Gem 由 freq 判 eq-only / 不可信拟合不补位 / Ozone 直通 not-exercised / 两条 chain_doc 端到端） | 先红：6 failed |
-| T3 | 绿：泛化名降权 + 弃权 + 测量补位 | 全绿；`pytest tools/ -q` 297 passed |
-| T4 | 回归：#73/#78/#79/#80/#86 既有用例不退化 | 基线 290 passed → 297 passed，0 failed |
+| T3 | 绿：泛化名降权 + 弃权 + 测量补位 | 全绿；`pytest tools/ -q` 298 passed |
+| T4 | 回归：#73/#78/#79/#80/#86 既有用例不退化 | 基线 290 passed → 298 passed，0 failed |
 | T5 | PR + CI 绿 | PR 描述含复现/理由/测试证据 |
 
 ## 验收
 
 - [x] Ozone 12 Equalizer 不再判 dynamics-only（unknown + low，basis 记"not exercised"），chain_doc `usable_as_spec=False`（#100 的 not-exercised 拦截）
 - [x] Gem EQP 判回 eq-only（low，basis 记测量曲线 100 Hz / 8.75 dB），chain_doc eq overall clean、usable_as_spec=True
-- [x] 回归：`PYTHONPATH=... python3 -m pytest tools/ -q --ignore=tools/gui_test.py` → **297 passed**
+- [x] 回归：`PYTHONPATH=... python3 -m pytest tools/ -q --ignore=tools/gui_test.py` → **298 passed**
+- [x] 直通行（#100 `not-exercised`）优先于测量补位：没有判别力的数据也不许拿来定性
 - [x] 只测公开行为（`classify_plugin_type` / `build_chain_doc`），不测私有函数与调用次数
 
 ## 裁剪
@@ -75,3 +76,4 @@ Gem EQP -> eq-only low
 
 - 2026-11-27：开工，T1 复现完成（HEAD 版输出留证），T2 红（6 failed）。
 - 2026-11-27：T3 绿——`_DYNAMICS_SUBSTRINGS` 去掉 `Gain`、`_NONLINEAR_STRONG` 拆出（`Power` 单独不算证据）、新增 `_GENERIC_SUBSTRINGS` / `_dynamics_not_exercised` / `_measured_eq_fit`；`classify_plugin_type` 末尾加弃权 + 测量补位分支。`pytest tools/` 297 passed。
+- 2026-11-27：自查补强——直通行（`not-exercised`）必须先于测量补位返回（否则直通数据里的"看似 plausible"拟合会反被判 eq-only，与 #100 冲突）；补 1 个用例，298 passed。
