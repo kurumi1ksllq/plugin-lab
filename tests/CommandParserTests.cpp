@@ -4117,10 +4117,16 @@ TEST_CASE ("CommandParser: stereo_width reports a widened field for a side-atten
     REQUIRE (widthPoint.widthDB > 3.0);
     REQUIRE (widthPoint.widthDB < 9.0);
 
-    // The L/R pair is no longer identical -> coherence drops below 1.
+    // rho stays 1 here, and that is the correct result, not a gap: rho is the
+    // magnitude-squared coherence |Sxy|^2/(Sxx*Syy) of the OUTPUT L/R pair, and
+    // any purely linear time-invariant processing (a side gain, a delay, an EQ)
+    // keeps coherence at 1 — L and R remain perfectly linearly related. A pure
+    // MS gain therefore shows up in width_db only, which is why width_db is the
+    // discriminating width metric. rho drops below 1 for time-varying or
+    // nonlinear processing (modulation, noise, per-sample state).
     REQUIRE_FALSE (capturedResult.stereo.correlation.empty());
     const auto& corrPoint = capturedResult.stereo.correlation[capturedResult.stereo.correlation.size() / 2];
-    REQUIRE (corrPoint.rho < 0.999);
+    REQUIRE (corrPoint.rho == Catch::Approx (1.0).margin (1.0e-3));
 
     juce::File (exportPath).deleteFile();
     juce::File (exportPath).withFileExtension (".wav").deleteFile();
@@ -4218,8 +4224,24 @@ TEST_CASE ("CommandParser: default dataset battery stays the 4 types (stereo_wid
     parser.setSession (&session);
 
     // The response's "types" object lists exactly the battery that ran.
-    auto response = parser.handleCommand (R"({"cmd":"dataset","types":["harmonic"]})");
+    // A path is required: without one the command fails on "invalid path"
+    // before the response object is built.
+    const juce::String exportPath =
+        juce::File::getSpecialLocation (juce::File::SpecialLocationType::tempDirectory)
+            .getNonexistentChildFile ("test_dataset_default_battery_", ".json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"dataset","types":["harmonic"],"path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
 
     REQUIRE (response.contains ("\"types\":{"));
     REQUIRE_FALSE (response.contains ("\"stereo_width\":true"));
+
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
 }
