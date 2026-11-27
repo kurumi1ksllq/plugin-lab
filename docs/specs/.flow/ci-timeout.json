@@ -1,0 +1,25 @@
+{
+  "issue": 0,
+  "grade": "trivial",
+  "stage": "pr",
+  "updatedAt": "2026-11-27T21:11:11.927Z",
+  "tickets": [
+    {
+      "id": 1,
+      "title": "build-and-test timeout 45→60 分钟",
+      "state": "done"
+    }
+  ],
+  "ci": {
+    "run": 0,
+    "max": 2,
+    "status": "unknown"
+  },
+  "review": {
+    "state": "not-started",
+    "axes": 2
+  },
+  "merge": {
+    "authorized": false
+  }
+}

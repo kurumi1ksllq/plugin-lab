@@ -19,7 +19,11 @@ jobs:
   build-and-test:
     name: build-and-test
     runs-on: windows-latest
-    timeout-minutes: 45
+    # 45 min was too tight: the suite grew to ~340 Catch2 cases run twice, and
+    # a legitimate build+test takes 31-41 min. Three runs hit the cap and were
+    # reported as "cancelled", which reads like a failure in the PR. 60 leaves
+    # headroom without letting a genuinely hung job sit for an hour.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
