@@ -1,0 +1,35 @@
+{
+  "issue": 93,
+  "grade": "trivial",
+  "stage": "dev",
+  "updatedAt": "2026-11-27T12:43:58.988Z",
+  "tickets": [
+    {
+      "id": 1,
+      "title": "定位根因:共享 CWD 固定文件名 + 4s 性能断言",
+      "state": "done"
+    },
+    {
+      "id": 2,
+      "title": "改为 temp 唯一路径 + 放宽到 8s(仍抓 sweep 回归)",
+      "state": "done"
+    },
+    {
+      "id": 3,
+      "title": "PR + CI 双跑验证",
+      "state": "todo"
+    }
+  ],
+  "ci": {
+    "run": 0,
+    "max": 2,
+    "status": "unknown"
+  },
+  "review": {
+    "state": "not-started",
+    "axes": 2
+  },
+  "merge": {
+    "authorized": false
+  }
+}
