@@ -1,8 +1,8 @@
 {
   "issue": 118,
   "grade": "standard",
-  "stage": "done-ci-green",
-  "updatedAt": "2026-11-27T22:05:00+08:00",
+  "stage": "ci",
+  "updatedAt": "2026-11-27T14:59:31.677Z",
   "branch": "chore/issue-118-eha-build-guard",
   "worktree": "/root/pl-wt-118",
   "tickets": [
@@ -28,18 +28,17 @@
     }
   ],
   "ci": {
-    "run": 2,
+    "run": 0,
     "max": 2,
-    "status": "pass"
+    "status": "unknown"
   },
   "review": {
-    "state": "todo",
-    "axes": 2,
-    "note": "等待 lead 双轴 review"
+    "state": "done",
+    "axes": 2
   },
   "merge": {
     "authorized": false
   },
   "pr": "https://github.com/kurumi1ksllq/plugin-lab/pull/129",
-  "notes": "最终 head c7cade4 CI: build-and-test pass 37m35s（Configure success=守卫真机验证、Build /W4 /WX 零警告、ctest 双跑过）+ python-tools pass；gui-tests pending（软门禁，非本 PR 范围）。禁合并（lead 授权）。"
+  "notes": "guards rewritten twice after review; the recorded green run predates the rewrite — CI must re-run on the new head"
 }
