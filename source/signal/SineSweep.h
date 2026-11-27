@@ -8,6 +8,11 @@
  *
  * Formula: x(t) = sin(2π * f0 * L * (exp(t/L) - 1))
  * where L = T / ln(f1/f0)
+ *
+ * Issue #104 (ADR-0003): setChannelMode(mid/side) turns the sweep into the
+ * MidSide excitation pair the stereo_width measurement drives the plugin with.
+ * The sweep is fully deterministic from currentSample alone, so a reset() is a
+ * deterministic phase restart - the same run always produces the same samples.
  */
 class SineSweep : public SignalGenerator
 {

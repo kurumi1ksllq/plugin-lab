@@ -6,6 +6,7 @@
 #include "CompressionCurve.h"
 #include "CompressionFamily.h"
 #include "HarmonicFamily.h"
+#include "StereoAnalysis.h"
 #include "../scan/ScanEngine.h"
 #include "../capture/MeasurementSession.h"
 
@@ -96,6 +97,12 @@ namespace Export
     juce::String harmonicFamilyToJSON (const HarmonicFamily::FamilyResult& result,
                                        const Context& context);
 
+    /** Export a stereo_width measurement (issue #104) to JSON: the MidSide
+     *  responses (mid_response / side_response), the L/R correlation and the
+     *  width curve. Schema: SPEC.md §stereo_width. */
+    juce::String stereoWidthToJSON (const StereoAnalysis::Result& result,
+                                    const Context& context);
+
     /** Export a gain-reduction timeline (T4.4) to JSON: the GR-over-time
      *  curve (GainReduction convention — negative dB = reduction) plus the
      *  attack/release time constants (valid=false when no controlled edges
@@ -122,6 +129,7 @@ namespace Export
         const FreqResponse::Result* freq = nullptr;                // frequency-response measurement (optional)
         const HarmonicAnalysis::Result* harmonic = nullptr;        // harmonic analysis (optional)
         const CompressionCurve::Result* compression = nullptr;     // compression curve (optional)
+        const StereoAnalysis::Result* stereo = nullptr;            // stereo_width measurement (optional, issue #104)
         juce::String measurementNote;                              // fitting advice / notes (optional)
     };
 

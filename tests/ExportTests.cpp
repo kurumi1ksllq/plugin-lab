@@ -975,3 +975,112 @@ TEST_CASE ("dataset nonlinear_family block is data-equivalent to the standalone 
     REQUIRE (parsed["nonlinear_family"]["family"] == nlStd["family"]);
 }
 
+//==============================================================================
+// stereo_width (issue #104 / ADR-0003): schema lock + dataset body equivalence.
+
+namespace
+{
+StereoAnalysis::Result makeStereoResult()
+{
+    StereoAnalysis::Result result;
+    result.sampleRate = 48000.0;
+    result.valid = true;
+
+    result.midResponse = { { 100.0, -1.5, 12.0 }, { 1000.0, 0.25, -3.0 } };
+    result.sideResponse = { { 100.0, -4.5, 7.0 }, { 1000.0, 3.75, 1.0 } };
+    result.correlation = { { 100.0, 0.875 }, { 1000.0, 0.5 } };
+    result.widthDB = { { 100.0, 3.0 }, { 1000.0, -3.5 } };
+    return result;
+}
+}  // namespace
+
+TEST_CASE ("stereoWidthToJSON emits the stereo_width schema", "[export][stereo-schema]")
+{
+    const auto result = makeStereoResult();
+
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+    ctx.classId = "com.example.stereo";
+    ctx.latencySamples = 0;
+    ctx.sampleRate = 48000.0;
+    ctx.blockSize = 512;
+
+    const auto parsed = juce::JSON::parse (Export::stereoWidthToJSON (result, ctx));
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (parsed["type"].toString() == "stereo_width");
+
+    // Context block (SPEC.md §stereo_width uses the nested context layout).
+    REQUIRE (parsed["context"]["plugin"].toString() == "UnitTest");
+    REQUIRE (parsed["context"]["class_id"].toString() == "com.example.stereo");
+    REQUIRE (static_cast<int> (parsed["context"]["measurement"]["block_size"]) == 512);
+
+    // The four required arrays, with their documented field names.
+    REQUIRE (parsed["mid_response"].size() == 2);
+    REQUIRE (parsed["mid_response"][0]["f"].isDouble());
+    REQUIRE (parsed["mid_response"][0]["mag"].isDouble());
+    REQUIRE (parsed["mid_response"][0]["phase"].isDouble());
+
+    REQUIRE (parsed["side_response"].size() == 2);
+    REQUIRE (parsed["side_response"][1]["mag"].isDouble());
+
+    REQUIRE (parsed["correlation"].size() == 2);
+    REQUIRE (parsed["correlation"][0]["rho"].isDouble());
+
+    REQUIRE (parsed["width_db"].size() == 2);
+    REQUIRE (parsed["width_db"][1]["width_db"].isDouble());
+
+    // Values round-trip exactly (no precision loss).
+    REQUIRE (static_cast<double> (parsed["correlation"][0]["rho"]) == Catch::Approx (0.875));
+    REQUIRE (static_cast<double> (parsed["width_db"][1]["width_db"]) == Catch::Approx (-3.5));
+    REQUIRE (static_cast<double> (parsed["mid_response"][1]["mag"]) == Catch::Approx (0.25));
+}
+
+TEST_CASE ("stereo_width dataset block is data-equivalent to the standalone export",
+           "[export][dataset-body-equiv]")
+{
+    const auto stereo = makeStereoResult();
+
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+    ctx.classId = "com.example.stereo";
+    ctx.sampleRate = 48000.0;
+    ctx.blockSize = 256;
+
+    Export::Dataset dataset;
+    dataset.stereo = &stereo;
+
+    const auto parsed = juce::JSON::parse (Export::datasetToJSON (dataset, ctx));
+    const auto std = juce::JSON::parse (Export::stereoWidthToJSON (stereo, ctx));
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (! std.isUndefined());
+
+    // Every body array of the dataset block equals the standalone export body.
+    REQUIRE (parsed["stereo_width"]["mid_response"] == std["mid_response"]);
+    REQUIRE (parsed["stereo_width"]["side_response"] == std["side_response"]);
+    REQUIRE (parsed["stereo_width"]["correlation"] == std["correlation"]);
+    REQUIRE (parsed["stereo_width"]["width_db"] == std["width_db"]);
+
+    // No other measurement block leaked in.
+    REQUIRE (! parsed.hasProperty ("frequency_response"));
+    REQUIRE (! parsed.hasProperty ("gr_timeline"));
+}
+
+TEST_CASE ("stereoWidthToJSON handles an empty result without breaking the schema",
+           "[export][stereo-schema]")
+{
+    StereoAnalysis::Result empty;
+
+    Export::Context ctx;
+    ctx.pluginName = "UnitTest";
+
+    const auto parsed = juce::JSON::parse (Export::stereoWidthToJSON (empty, ctx));
+
+    REQUIRE (! parsed.isUndefined());
+    REQUIRE (parsed["type"].toString() == "stereo_width");
+    REQUIRE (parsed["mid_response"].size() == 0);
+    REQUIRE (parsed["side_response"].size() == 0);
+    REQUIRE (parsed["correlation"].size() == 0);
+    REQUIRE (parsed["width_db"].size() == 0);
+}
