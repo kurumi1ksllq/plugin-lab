@@ -39,7 +39,10 @@ Gem EQP -> eq-only low
 
 ## 方向选择：为什么选 (b) 而不是 (a)
 
-- **(b) 泛化名降权 → 弃权，再由测量定性**：`Gain`/`Power` 从"家族证据"表里摘掉（保留 `Threshold/Ratio/Attack/Release/Makeup` 与 `Drive/Character/Machine/Tape/Saturation/Param`），命中泛化名时 unknown + low，随后用 row 的 freq 段（status ok 且 `describe_quality.classify_freq_peak` 判 plausible）定性 eq-only。
+- **(b) 泛化名降权 → 弃权，再由测量定性**：`Gain`/`Power` 从"家族证据"表里摘掉（保留 `Threshold/Ratio/Attack/Release/Makeup` 与 `Drive/Character/Machine/Tape/Saturation/Param`），命中泛化名时 unknown + low，随后按**固定顺序**用测量定性（顺序本身是约束）：
+  1. 直通行（`not-exercised`）→ 保持 unknown（没有判别力的数据不许定性）；
+  2. 动态证据（可用压缩拟合 ratio 远离 unity，或 GR 有效）→ `dynamics-only`，否则真压缩器会被顺带的 freq 拟合重判成 EQ（经 #78 降级后 `usable_as_spec` 从 true 翻 false）；
+  3. EQ 证据（freq 段 status ok 且 `classify_freq_peak` 带 nyquist 判 plausible）→ `eq-only`。
 - **(a) 直接拿测量重判类型**会与 #78 的既定语义冲突：非 EQ 插件（压缩/饱和）的单峰拟合经常"plausible"却无意义，若允许测量盖过参数面，会把这些插件判成 EQ。弃权 + 测量补位把测量只用在**参数面不可辨识**的场景，改动面最小。
 - 弃权而非"低置信猜一个"，符合项目"诚实描述"原则：宁可说不知道，也不贴错标签。
 
@@ -55,16 +58,18 @@ Gem EQP -> eq-only low
 | --- | --- | --- |
 | T1 | 复现 + 定位（fixture 化 Ozone/Gem 参数面与 row） | 修前输出留证：dynamics-only high / saturation low |
 | T2 | 红：新增 7 个用例（泛化名不判 dynamics-only / 不判 saturation / Gem 由 freq 判 eq-only / 不可信拟合不补位 / Ozone 直通 not-exercised / 两条 chain_doc 端到端） | 先红：6 failed |
-| T3 | 绿：泛化名降权 + 弃权 + 测量补位 | 全绿；`pytest tools/ -q` 298 passed |
-| T4 | 回归：#73/#78/#79/#80/#86 既有用例不退化 | 基线 290 passed → 298 passed，0 failed |
+| T3 | 绿：泛化名降权 + 弃权 + 三级测量判定 | 全绿；`pytest tools/ -q` 301 passed |
+| T4 | 回归：#73/#78/#79/#80/#86 既有用例不退化 | 基线 290 passed → 301 passed，0 failed |
 | T5 | PR + CI 绿 | PR 描述含复现/理由/测试证据 |
 
 ## 验收
 
 - [x] Ozone 12 Equalizer 不再判 dynamics-only（unknown + low，basis 记"not exercised"），chain_doc `usable_as_spec=False`（#100 的 not-exercised 拦截）
 - [x] Gem EQP 判回 eq-only（low，basis 记测量曲线 100 Hz / 8.75 dB），chain_doc eq overall clean、usable_as_spec=True
-- [x] 回归：`PYTHONPATH=... python3 -m pytest tools/ -q --ignore=tools/gui_test.py` → **298 passed**
+- [x] 回归：`PYTHONPATH=... python3 -m pytest tools/ -q --ignore=tools/gui_test.py` → **301 passed**
 - [x] 直通行（#100 `not-exercised`）优先于测量补位：没有判别力的数据也不许拿来定性
+- [x] 动态证据优先于 EQ 证据：弃权不许把工作中的压缩器重判成 EQ
+- [x] nyquist 由调用方显式传入（`sample_rate` 参数），与 `build_eq` 判定一致
 - [x] 只测公开行为（`classify_plugin_type` / `build_chain_doc`），不测私有函数与调用次数
 
 ## 裁剪
@@ -77,3 +82,10 @@ Gem EQP -> eq-only low
 - 2026-11-27：开工，T1 复现完成（HEAD 版输出留证），T2 红（6 failed）。
 - 2026-11-27：T3 绿——`_DYNAMICS_SUBSTRINGS` 去掉 `Gain`、`_NONLINEAR_STRONG` 拆出（`Power` 单独不算证据）、新增 `_GENERIC_SUBSTRINGS` / `_dynamics_not_exercised` / `_measured_eq_fit`；`classify_plugin_type` 末尾加弃权 + 测量补位分支。`pytest tools/` 297 passed。
 - 2026-11-27：自查补强——直通行（`not-exercised`）必须先于测量补位返回（否则直通数据里的"看似 plausible"拟合会反被判 eq-only，与 #100 冲突）；补 1 个用例，298 passed。
+- 2026-11-27：双轴 review（提交 97972ba / a374cc8）——
+  - [medium] `_measured_eq_fit` 未透传 nyquist → 同一 row 可能 plugin_type 判 EQ 而 eq 段判"无可解析 EQ"；改为透传。
+  - [medium] docstring 只写测量补位、没写它前面的守卫 → 按代码实际顺序重写。
+  - [low] 直通守卫缺锁定用例 → 补用例 + 反向验证。
+  - [blocker] EQ 补位忽略 dynamics 证据 → 真压缩器会被重判 eq-only；新增 `_measured_dynamics_evidence` 并让它先于 EQ 补位。
+  - [blocker] nyquist 守卫读 `row.freq.sample_rate` 是死代码（aggregate_report 不发该键）→ `classify_plugin_type` 增加显式 `sample_rate` 参数，由 `build_chain_doc` 从 enrichment 透传。
+  - 合计 301 passed。
