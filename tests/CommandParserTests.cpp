@@ -4091,13 +4091,13 @@ TEST_CASE ("CommandParser: stereo_width reports a widened field for a side-atten
     parser.setSession (&session);
 
     MeasurementResults capturedResult;
-    parser.setMeasureCompleteCallback ([&] (const MeasurementResults& r)
+    parser.setMeasurementCompleteCallback ([&] (const MeasurementResults& r)
     {
         capturedResult = r;
     });
 
     const juce::String exportPath =
-        juce::File::getCurrentDirectory()
+        juce::File::getSpecialLocation (juce::File::SpecialLocationType::tempDirectory)
             .getNonexistentChildFile ("test_stereo_widened_", ".json")
             .getFullPathName();
 
