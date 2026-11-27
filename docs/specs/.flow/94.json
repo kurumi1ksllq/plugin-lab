@@ -1,0 +1,35 @@
+{
+  "issue": 94,
+  "grade": "standard",
+  "stage": "merge",
+  "updatedAt": "2026-11-27T15:57:00.278Z",
+  "tickets": [
+    {
+      "id": 1,
+      "title": "复现误判+定位 classify_plugin_type 根因",
+      "state": "done"
+    },
+    {
+      "id": 2,
+      "title": "修复+回归测试(#73/#78/#79/#80/#86 不退化)",
+      "state": "done"
+    },
+    {
+      "id": 3,
+      "title": "PR+CI 绿",
+      "state": "done"
+    }
+  ],
+  "ci": {
+    "run": 1,
+    "max": 2,
+    "status": "green"
+  },
+  "review": {
+    "state": "done",
+    "axes": 2
+  },
+  "merge": {
+    "authorized": false
+  }
+}
