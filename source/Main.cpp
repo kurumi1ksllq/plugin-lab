@@ -164,9 +164,20 @@ public:
         // addAndMakeVisible forces setVisible(true) — the hide must come after adding.
         grPlot->setVisible (false);
 
+        // stereo_width plot (issue #104 / ADR-0003): width dB + correlation vs
+        // frequency (log X). Visible only while the stereo_width type is
+        // selected; it shares the header strip with the GR plot.
+        stereoPlot.reset (new PlotWidget());
+        stereoPlot->setAxisLabels ("Frequency (Hz)", "Width (dB)");
+        stereoPlot->setXAxisLog (true);
+        stereoPlot->setAutoFitY (true);
+        addAndMakeVisible (stereoPlot.get());
+        stereoPlot->setVisible (false);
+
         // Measurement control row (right panel, above the plots).
-        // All four measurement types are wired end-to-end (freq, harmonic,
-        // compression, GR timeline) — rendered in handleAsyncUpdate.
+        // All five measurement types are wired end-to-end (freq, harmonic,
+        // compression, GR timeline, stereo width) — rendered in
+        // handleAsyncUpdate.
         measureFreqButton.reset (new juce::TextButton ("Freq Response"));
         measureFreqButton->onClick = [this]
         {
@@ -208,6 +219,18 @@ public:
             startMeasurement (currentMeasureType);
         };
         addAndMakeVisible (measureGRButton.get());
+
+        // Stereo width (issue #104): MidSide dual excitation -> width_db /
+        // correlation curves in the header plot.
+        measureStereoButton.reset (new juce::TextButton ("Stereo"));
+        measureStereoButton->onClick = [this]
+        {
+            currentMeasureType = juce::String (Protocol::MeasureType::stereoWidth);
+            updateScanEstimate();
+            updateGRPlotVisibility();
+            startMeasurement (currentMeasureType);
+        };
+        addAndMakeVisible (measureStereoButton.get());
 
         // Input source selector (signal | file | noise | dynamic). The source
         // decides which signal is generated; non-signal sources are captured
@@ -602,14 +625,16 @@ public:
             const int comboW = 110;
             sourceCombo->setBounds (row1.removeFromRight (comboW));
             row1.removeFromRight (gap);
-            const int btnW = (row1.getWidth() - 3 * gap) / 4;
+            const int btnW = (row1.getWidth() - 4 * gap) / 5;
             measureFreqButton->setBounds (row1.removeFromLeft (btnW));
             row1.removeFromLeft (gap);
             measureHarmonicButton->setBounds (row1.removeFromLeft (btnW));
             row1.removeFromLeft (gap);
             measureCompressionButton->setBounds (row1.removeFromLeft (btnW));
             row1.removeFromLeft (gap);
-            measureGRButton->setBounds (row1);
+            measureGRButton->setBounds (row1.removeFromLeft (btnW));
+            row1.removeFromLeft (gap);
+            measureStereoButton->setBounds (row1);
 
             // Row 2: source-specific parameters (file chooser / noise duration).
             controls.removeFromTop (4);
@@ -649,16 +674,22 @@ public:
 
         // GR header strip (T4.4): takes the top of the plot area while the
         // GR timeline type is selected; the freq plots shrink below it.
-        juce::Rectangle<int> grArea;
-        if (grPlot->isVisible())
-            grArea = plotArea.removeFromTop (110);
+        // The GR and stereo_width headers share the top strip; only one is
+        // visible at a time (updateGRPlotVisibility), so the same area serves
+        // whichever type is selected.
+        juce::Rectangle<int> headerArea;
+        const bool headerVisible = grPlot->isVisible() || stereoPlot->isVisible();
+        if (headerVisible)
+            headerArea = plotArea.removeFromTop (110);
 
         auto phaseArea = plotArea.removeFromBottom (juce::roundToInt (plotArea.getHeight() * 0.35f));
         magPlot->setBounds (plotArea);
         phasePlot->setBounds (phaseArea);
 
         if (grPlot->isVisible())
-            grPlot->setBounds (grArea.reduced (0, 2));
+            grPlot->setBounds (headerArea.reduced (0, 2));
+        if (stereoPlot->isVisible())
+            stereoPlot->setBounds (headerArea.reduced (0, 2));
     }
 
     //==============================================================================
@@ -848,6 +879,7 @@ public:
                 measureHarmonicButton->setEnabled (true);
                 measureCompressionButton->setEnabled (true);
                 measureGRButton->setEnabled (true);
+                measureStereoButton->setEnabled (true);
                 renderScanResult();
             }
             catch (...)
@@ -873,6 +905,7 @@ public:
             measureHarmonicButton->setEnabled (true);
             measureCompressionButton->setEnabled (true);
             measureGRButton->setEnabled (true);
+            measureStereoButton->setEnabled (true);
 
             // Non-signal sources are captured raw — show the capture summary
             // instead of analysis plots. Exception: the GR timeline analysis
@@ -889,6 +922,10 @@ public:
                         break;
                     case MeasurementSession::Type::compressionCurve:
                         renderCompressionCurve();
+                        break;
+
+                    case MeasurementSession::Type::stereoWidth:
+                        renderStereoWidth();
                         break;
 
                     // Unreachable — the parser rejects gr_timeline for
@@ -1111,6 +1148,68 @@ private:
         statusLabel->setText ("Ratio " + juce::String (f.ratio, 2) + ":1, threshold "
             + juce::String (f.thresholdDB, 1) + " dB, knee "
             + juce::String (f.kneeDB, 1) + " dB", juce::dontSendNotification);
+    }
+
+    /** stereo_width (issue #104): width_db(f) and correlation(f) on the header
+     *  plot (log X). The mid/side magnitude responses share the same data but
+     *  are two more curves on a different dB scale, so they are not drawn here;
+     *  the exported JSON carries all four arrays. */
+    void renderStereoWidth() const
+    {
+        stereoPlot->setAxisLabels ("Frequency (Hz)", "Width (dB) / Correlation");
+        stereoPlot->setXAxisLog (true);
+        stereoPlot->setAutoFitY (true);
+        stereoPlot->clear();
+
+        const auto& stereo = measurementResult.stereo;
+
+        if (stereo.widthDB.empty() && stereo.correlation.empty())
+        {
+            statusLabel->setText ("Measurement complete (no data)",
+                                  juce::dontSendNotification);
+            stereoPlot->repaint();
+            return;
+        }
+
+        PlotWidget::Series widthSeries;
+        widthSeries.name = "Width";
+        widthSeries.colour = juce::Colours::cyan;
+        widthSeries.lineWidth = 2.0f;
+        widthSeries.x.reserve (stereo.widthDB.size());
+        widthSeries.y.reserve (stereo.widthDB.size());
+        for (const auto& p : stereo.widthDB)
+        {
+            widthSeries.x.push_back (static_cast<float> (p.frequency));
+            widthSeries.y.push_back (static_cast<float> (p.widthDB));
+        }
+        stereoPlot->addSeries (std::move (widthSeries));
+
+        PlotWidget::Series corrSeries;
+        corrSeries.name = "Correlation";
+        corrSeries.colour = juce::Colours::orange;
+        corrSeries.lineWidth = 1.5f;
+        corrSeries.x.reserve (stereo.correlation.size());
+        corrSeries.y.reserve (stereo.correlation.size());
+        for (const auto& p : stereo.correlation)
+        {
+            corrSeries.x.push_back (static_cast<float> (p.frequency));
+            corrSeries.y.push_back (static_cast<float> (p.rho));
+        }
+        stereoPlot->addSeries (std::move (corrSeries));
+
+        stereoPlot->repaint();
+
+        // Mean correlation is the one-number summary a user can act on:
+        // 1.0 = untouched/mono, lower = the plugin widened the field.
+        double meanRho = 0.0;
+        for (const auto& p : stereo.correlation)
+            meanRho += p.rho;
+        if (! stereo.correlation.empty())
+            meanRho /= static_cast<double> (stereo.correlation.size());
+
+        statusLabel->setText ("Stereo width: " + juce::String (static_cast<int> (stereo.widthDB.size()))
+                              + " points, mean correlation " + juce::String (meanRho, 3),
+                              juce::dontSendNotification);
     }
 
     //==============================================================================
@@ -1392,6 +1491,7 @@ private:
         measureHarmonicButton->setEnabled (false);
         measureCompressionButton->setEnabled (false);
         measureGRButton->setEnabled (false);
+        measureStereoButton->setEnabled (false);
         statusLabel->setText ("Measuring...", juce::dontSendNotification);
 
         // Issue #66 test seam: measurements process offline (a 5 s sweep
@@ -1453,6 +1553,7 @@ private:
                 measureHarmonicButton->setEnabled (true);
                 measureCompressionButton->setEnabled (true);
                 measureGRButton->setEnabled (true);
+                measureStereoButton->setEnabled (true);
                 statusLabel->setText ("Measure failed: "
                     + obj->getProperty (Protocol::Status::error).toString(),
                     juce::dontSendNotification);
@@ -1662,6 +1763,7 @@ private:
         measureHarmonicButton->setEnabled (false);
         measureCompressionButton->setEnabled (false);
         measureGRButton->setEnabled (false);
+        measureStereoButton->setEnabled (false);
         scanProgressLabel->setText ("", juce::dontSendNotification);
         statusLabel->setText ("Scanning...", juce::dontSendNotification);
         updateScanEstimate();
@@ -1714,6 +1816,7 @@ private:
                 measureHarmonicButton->setEnabled (true);
                 measureCompressionButton->setEnabled (true);
                 measureGRButton->setEnabled (true);
+                measureStereoButton->setEnabled (true);
                 statusLabel->setText ("Scan failed: "
                     + obj->getProperty (Protocol::Status::error).toString(),
                     juce::dontSendNotification);
@@ -2025,9 +2128,13 @@ private:
     {
         const bool showGR = (currentMeasureType
                              == juce::String (Protocol::MeasureType::grTimeline));
+        const bool showStereo = (currentMeasureType
+                                 == juce::String (Protocol::MeasureType::stereoWidth));
         grPlot->setVisible (showGR);
+        stereoPlot->setVisible (showStereo);
         resized();
         grPlot->repaint();
+        stereoPlot->repaint();
     }
 
     //==============================================================================
@@ -2225,6 +2332,7 @@ private:
     std::unique_ptr<juce::TextButton> measureHarmonicButton;
     std::unique_ptr<juce::TextButton> measureCompressionButton;
     std::unique_ptr<juce::TextButton> measureGRButton;
+    std::unique_ptr<juce::TextButton> measureStereoButton;   // stereo_width (issue #104)
 
     // Input source selector + source-specific controls
     std::unique_ptr<juce::ComboBox> sourceCombo;
@@ -2283,6 +2391,7 @@ private:
 
     // GR header (T4.4): GR_dB(t) timeline, live while measuring.
     std::unique_ptr<PlotWidget> grPlot;
+    std::unique_ptr<PlotWidget> stereoPlot;   // stereo_width header (issue #104)
     bool grLiveActive = false;
     juce::AudioBuffer<float> liveDry;          // accumulated dry blocks
     juce::AudioBuffer<float> liveWet;          // accumulated wet blocks

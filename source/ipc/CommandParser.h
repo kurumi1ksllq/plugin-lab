@@ -11,6 +11,7 @@
 #include "../analysis/CompressionCurve.h"
 #include "../analysis/GainReduction.h"
 #include "../analysis/TimeConstants.h"
+#include "../analysis/StereoAnalysis.h"
 #include "../scan/ScanEngine.h"
 #include "../host/ChildMeasureContract.h"
 
@@ -32,6 +33,7 @@ struct MeasurementResults
     CompressionCurve::Result compression;
     GainReduction::Result gr;        // populated for Type::grTimeline
     TimeConstants::Result tau;       // populated for Type::grTimeline
+    StereoAnalysis::Result stereo;   // populated for Type::stereoWidth
 
     /** Input source that produced this result (Protocol::Source value). */
     juce::String source;

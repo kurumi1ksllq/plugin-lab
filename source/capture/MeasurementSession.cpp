@@ -192,6 +192,20 @@ bool MeasurementSession::run()
                     break;
                 }
 
+                case Type::stereoWidth:
+                {
+                    // MidSide dual excitation (issue #104 / ADR-0003): the same
+                    // sweep twice — mid-only then side-only — with the channel
+                    // polarity set per pass below. Deterministic phase restart
+                    // comes from runner.run() calling generator->reset().
+                    auto sweep = std::make_unique<SineSweep>();
+                    sweep->setFrequencyRange (20.0, 20000.0);
+                    sweep->setDuration (5.0);
+                    sweep->setAmplitude (0.5);
+                    gen = std::move (sweep);
+                    break;
+                }
+
                 // grTimeline has no signal-source generator — the CommandParser
                 // rejects gr_timeline for Source::signal, so this is defensive
                 // (also keeps the enum switch exhaustive).
@@ -292,8 +306,69 @@ bool MeasurementSession::run()
     // Capture the parameter snapshot before running
     captureParameterSnapshot();
 
-    // Run
-    const bool runOk = runner.run();
+    // Run. stereo_width is the one type that needs TWO passes: the same sweep
+    // once mid-only (L = R) and once side-only (L = -R), so the analyser can
+    // read the M response from one and the S response from the other
+    // (issue #104 / ADR-0003). Every other type runs exactly one pass.
+    const auto runPass = [this] { return runner.run(); };
+    bool runOk = false;
+
+    if (type == Type::stereoWidth && source == Source::signal)
+    {
+        // Clear first: a failed or partial run must never leave the previous
+        // run's buffers behind for the analyser to read as fresh data.
+        stereoMidDry.setSize (0, 0);
+        stereoMidWet.setSize (0, 0);
+        stereoSideDry.setSize (0, 0);
+        stereoSideWet.setSize (0, 0);
+
+        // The capture buffer is always allocated as a stereo pair (SweepRunner
+        // prepares 2 channels), so StereoAnalysis cannot tell a mono plugin
+        // from a stereo one by looking at the buffers — ch1 would just be
+        // silence. Ask the plugin itself; without this a mono plugin exports
+        // mono data under a stereo_width label.
+        const bool stereoCapable = plugin != nullptr
+            && plugin->getTotalNumInputChannels() >= 2
+            && plugin->getTotalNumOutputChannels() >= 2;
+
+        // No early returns in here: the R2 restore below must run on every
+        // exit path, so a failure only clears runOk. setChannelMode lives on
+        // the SignalGenerator base, so no downcast is needed.
+        if (gen == nullptr || ! stereoCapable)
+        {
+            runOk = false;
+        }
+        else
+        {
+            // Run A: mid-only excitation.
+            gen->setChannelMode (SignalGenerator::ChannelMode::mid);
+            runOk = runPass();
+
+            if (runOk)
+            {
+                const auto& midCapture = runner.getResult();
+                stereoMidDry.makeCopyOf (midCapture.getDryBuffer());
+                stereoMidWet.makeCopyOf (midCapture.getWetBuffer());
+
+                // Run B: side-only excitation. runner.run() prepares + resets
+                // the generator, so this is a deterministic phase restart
+                // (same sweep from sample 0), not a continuation.
+                gen->setChannelMode (SignalGenerator::ChannelMode::side);
+                runOk = runPass();
+
+                if (runOk)
+                {
+                    const auto& sideCapture = runner.getResult();
+                    stereoSideDry.makeCopyOf (sideCapture.getDryBuffer());
+                    stereoSideWet.makeCopyOf (sideCapture.getWetBuffer());
+                }
+            }
+        }
+    }
+    else
+    {
+        runOk = runPass();
+    }
 
     // R2: restore the parameters the playback timeline touched — also on a
     // failed/cancelled run, so the host never keeps the playback values.

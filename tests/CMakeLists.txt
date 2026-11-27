@@ -30,6 +30,7 @@ target_sources(unit_tests PRIVATE
     ../source/analysis/WavCaptureReader.cpp
     ../source/analysis/ChildWavAnalyzer.cpp
     ../source/analysis/MeasurementAnalysis.cpp
+    ../source/analysis/StereoAnalysis.cpp
     ../source/utils/FftHelper.cpp ../source/utils/MathUtils.cpp
     ../source/ipc/CommandParser.cpp
     ../source/ipc/PipeServer.cpp
@@ -39,6 +40,7 @@ target_sources(unit_tests PRIVATE
     ../source/host/ChildMeasureOrchestrator.cpp
     CommandParserStubs.cpp
     TestPlugin.h TestPluginTests.cpp TestCompressorPlugin.h TestCompressorPluginTests.cpp TestSaturatorPlugin.h ToneBurstTests.cpp SweepRunnerTests.cpp CaptureBufferTests.cpp FreqResponseTests.cpp ExportTests.cpp
+    TestStereoPlugin.h StereoAnalysisTests.cpp
     CommandParserTests.cpp PipeServerTests.cpp
     CommandParserConcurrencyTests.cpp
     CommandParserRoutingTests.cpp

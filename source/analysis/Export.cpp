@@ -363,6 +363,71 @@ juce::String harmonicFamilyToJSON (const HarmonicFamily::FamilyResult& result,
     return json;
 }
 
+
+/** Serialize the stereo_width analysis body (mid_response / side_response /
+ *  correlation / width_db). Ends with a trailing ",\n" so the caller can drop
+ *  it or continue with more members (dataset block reuse). */
+static void appendStereoArrays (juce::String& json, const StereoAnalysis::Result& result,
+                                const juce::String& indent)
+{
+    auto writeResponse = [&] (const juce::String& name,
+                              const std::vector<StereoAnalysis::Point>& points)
+    {
+        json += indent + "\"" + name + "\": [\n";
+        for (size_t i = 0; i < points.size(); ++i)
+        {
+            json += indent + "  {\"f\": " + fmtDouble (points[i].frequency, 1)
+                    + ", \"mag\": " + fmtDouble (points[i].magnitudeDB)
+                    + ", \"phase\": " + fmtDouble (points[i].phaseDeg) + "}";
+            if (i < points.size() - 1) json += ",";
+            json += "\n";
+        }
+        json += indent + "],\n";
+    };
+
+    writeResponse ("mid_response", result.midResponse);
+    writeResponse ("side_response", result.sideResponse);
+
+    json += indent + "\"correlation\": [\n";
+    for (size_t i = 0; i < result.correlation.size(); ++i)
+    {
+        json += indent + "  {\"f\": " + fmtDouble (result.correlation[i].frequency, 1)
+                + ", \"rho\": " + fmtDouble (result.correlation[i].rho, 4) + "}";
+        if (i < result.correlation.size() - 1) json += ",";
+        json += "\n";
+    }
+    json += indent + "],\n";
+
+    json += indent + "\"width_db\": [\n";
+    for (size_t i = 0; i < result.widthDB.size(); ++i)
+    {
+        json += indent + "  {\"f\": " + fmtDouble (result.widthDB[i].frequency, 1)
+                + ", \"width_db\": " + fmtDouble (result.widthDB[i].widthDB) + "}";
+        if (i < result.widthDB.size() - 1) json += ",";
+        json += "\n";
+    }
+    json += indent + "],\n";
+}
+
+juce::String stereoWidthToJSON (const StereoAnalysis::Result& result,
+                                const Export::Context& context)
+{
+    juce::String json;
+    json.preallocateBytes (4096 + result.midResponse.size() * 4 * 80);
+    json += "{\n";
+    json += "  \"type\": \"stereo_width\",\n";
+    json += "  \"context\": {\n";
+    appendContextFields (json, context, "    ");
+    json = json.dropLastCharacters (2);  // remove trailing ",\n" after source
+    json += "\n";
+    json += "  },\n";
+    appendStereoArrays (json, result, "  ");
+    json = json.dropLastCharacters (2);  // remove trailing ",\n" after width_db
+    json += "\n";
+    json += "}\n";
+    return json;
+}
+
 juce::String grTimelineToJSON (const GainReduction::Result& gr,
                                const TimeConstants::Result& tau,
                                const Export::Context& context)
@@ -439,6 +504,11 @@ juce::String scanToJSON (const ScanEngine::ScanResult& scan,
             // gr_timeline) — defensive case to keep the enum switch exhaustive.
             case MeasurementSession::Type::grTimeline:
                 break;
+
+            // Scans never produce stereo_width either (the scan command
+            // rejects it) — same defensive case, keeps /W4 C4062 quiet.
+            case MeasurementSession::Type::stereoWidth:
+                break;
         }
 
         json = json.dropLastCharacters (2);  // remove trailing ",\n"
@@ -488,6 +558,11 @@ static void appendDatasetScanFamily (juce::String& json,
             // Scans never produce a GR timeline (the scan command rejects
             // gr_timeline) — defensive case to keep the enum switch exhaustive.
             case MeasurementSession::Type::grTimeline:
+                break;
+
+            // Scans never produce stereo_width either (the scan command
+            // rejects it) — same defensive case, keeps /W4 C4062 quiet.
+            case MeasurementSession::Type::stereoWidth:
                 break;
         }
 
@@ -625,6 +700,15 @@ juce::String datasetToJSON (const Dataset& dataset, const Export::Context& conte
     {
         json += "  \"compression\": {\n";
         appendCompressionBody (json, *dataset.compression, "    ", false);
+        json += "  },\n";
+    }
+
+    if (dataset.stereo != nullptr)
+    {
+        json += "  \"stereo_width\": {\n";
+        appendStereoArrays (json, *dataset.stereo, "    ");
+        json = json.dropLastCharacters (2);  // remove trailing ",\n" after width_db
+        json += "\n";
         json += "  },\n";
     }
 
