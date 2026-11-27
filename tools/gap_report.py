@@ -23,13 +23,19 @@ import replica_proto as rp  # noqa: E402
 # Per-type tolerance for "match", mirroring compare_all's curve limits (dB).
 MATCH_LIMIT_DB = 1.0
 
+# THD is a percentage, so the family comparison needs its own tolerance
+# (percentage points), mirroring compare_all's harmonic tone matching.
+MATCH_LIMIT_THD_PCT = 0.5
+
 # Which stage owns which measured type — the attribution table.
 STAGE_OWNER = {
     "frequency_response": "eq",
     "compression": "dynamics",
     "gr_timeline": "dynamics",
     "nonlinear_family": "nonlinearity",
-    "stereo_width": "stereo",
+    # chain_doc v3 has no stereo stage kind (ADR-0003 / issue #104), so a
+    # width gap cannot be attributed to a stage that exists.
+    "stereo_width": None,
 }
 
 # Keys match replica_proto's render_replica() output (the file stems it writes).
@@ -75,6 +81,33 @@ def _diff_curve(measured_pts, replica_pts, x_key, y_key):
     return deltas
 
 
+def _family_thd_by_level(block):
+    """{input_level_db: thd_percent} from a SPEC §13 nonlinear_family block.
+
+    Each entry may carry several tones; the loudest THD at that level is the
+    one the family is characterised by.
+    """
+    family = (block or {}).get("family") or []
+    out = {}
+    for entry in family:
+        level = entry.get("input_level_db")
+        if level is None:
+            continue
+        thds = [tone.get("thd_percent") for tone in entry.get("tones") or []
+                if tone.get("thd_percent") is not None]
+        if thds:
+            out[round(float(level), 3)] = max(float(t) for t in thds)
+    return out
+
+
+def _diff_family(measured_block, replica_block):
+    """Per-level THD deltas (percentage points) on the shared level grid."""
+    measured = _family_thd_by_level(measured_block)
+    replica = _family_thd_by_level(replica_block)
+    shared = sorted(set(measured) & set(replica))
+    return [abs(measured[level] - replica[level]) for level in shared]
+
+
 def _stats(deltas):
     if not deltas:
         return {"mean_abs": 0.0, "mean": 0.0, "worst_abs": 0.0, "n": 0}
@@ -85,15 +118,15 @@ def _stats(deltas):
 
 
 def _verdict(stats, limit=MATCH_LIMIT_DB):
-    """match when the whole curve sits inside tolerance.
+    """match when mean_abs < limit — compare_all.verdict()'s exact semantics.
 
-    Judged on the worst point, not the mean: a mean would let a single large
-    deviation hide behind many matching points — exactly the gap this report
-    exists to surface.
+    Deliberately the mean and strictly less-than (compare_all.py:306-309), so
+    a gap report and a compare_all run never disagree about the same data.
+    worst_abs is still reported alongside, for the reader.
     """
     if stats["n"] == 0:
         return "match"
-    return "match" if stats["worst_abs"] <= limit else "mismatch"
+    return "match" if stats["mean_abs"] < limit else "mismatch"
 
 
 def build_report(measured, replica):
@@ -131,9 +164,15 @@ def build_report(measured, replica):
             stats = _stats(deltas)
             stats["verdict"] = _verdict(stats)
         elif key == "nonlinear_family":
-            same = (measured_block.get("verdict") == replica_block.get("verdict"))
-            per_type[key] = {"verdict": "match" if same else "mismatch",
-                             "mean_abs": 0.0, "mean": 0.0, "worst_abs": 0.0, "n": 1}
+            # SPEC.md §13 has no top-level verdict: compare the per-level THD
+            # the family actually carries, keyed by input_level_db.
+            deltas = _diff_family(measured_block, replica_block)
+            if not deltas:
+                per_type[key] = {"verdict": "not-measured", "mean_abs": 0.0,
+                                 "mean": 0.0, "worst_abs": 0.0, "n": 0}
+                continue
+            stats = _stats(deltas)
+            stats["verdict"] = _verdict(stats)
             continue
         else:
             # stereo_width: width_db is a per-frequency curve (SPEC stereo_width).
@@ -148,7 +187,7 @@ def build_report(measured, replica):
                     continue
                 deltas = [abs(float(a) - float(b))]
             stats = _stats(deltas)
-            stats["verdict"] = _verdict(stats)
+            stats["verdict"] = _verdict(stats, MATCH_LIMIT_THD_PCT)
             continue
 
         per_type[key] = stats
@@ -198,9 +237,21 @@ def main(argv=None):
     parser.add_argument("--md-out", help="write the report markdown here")
     args = parser.parse_args(argv)
 
-    measured = json.loads(Path(args.measured).read_text(encoding="utf-8"))
-    chain_doc = json.loads(Path(args.chain_doc).read_text(encoding="utf-8"))
-    replica = rp.render(chain_doc)
+    try:
+        measured = json.loads(Path(args.measured).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        sys.stderr.write("error: cannot read %s: %s\n" % (args.measured, exc))
+        return 2
+    try:
+        chain_doc = json.loads(Path(args.chain_doc).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        sys.stderr.write("error: cannot read %s: %s\n" % (args.chain_doc, exc))
+        return 2
+    try:
+        replica = rp.render_replica(chain_doc)
+    except ValueError as exc:
+        sys.stderr.write("error: %s\n" % exc)
+        return 2
     report = build_report(measured, replica)
 
     if args.json_out:
