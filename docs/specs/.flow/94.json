@@ -2,7 +2,7 @@
   "issue": 94,
   "grade": "standard",
   "stage": "ci",
-  "updatedAt": "2026-11-27T13:18:00.000Z",
+  "updatedAt": "2026-11-27T13:40:00.000Z",
   "tickets": [
     {
       "id": 1,
@@ -21,13 +21,18 @@
     }
   ],
   "ci": {
-    "run": 2,
+    "run": 3,
     "max": 2,
     "status": "running"
   },
   "review": {
-    "state": "not-started",
-    "axes": 2
+    "state": "done",
+    "axes": 2,
+    "findings": [
+      "axis-1 medium: _measured_eq_fit 未透传 nyquist（已由 lead 提交 97972ba 修复）",
+      "axis-2 medium: docstring 未写直通守卫顺序（已由 97972ba 修复）",
+      "axis-2 low: 直通守卫缺锁定用例（已由 97972ba 补）"
+    ]
   },
   "merge": {
     "authorized": false
