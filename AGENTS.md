@@ -104,7 +104,7 @@ ctest --test-dir build -C Release --timeout 180
 - 错误处理：生产路径不用 C++ 异常——IPC 返回 `{"ok":false,"error":"..."}`；崩溃保护用 `/EHa` + `catch(...)` + CRASH_LOG
 - JSON 手写 raw string literal + `escapeJsonString`（曾因 `juce::JSON` 转义 bug 弃用）
 - Git：Conventional Commits（`feat(ipc): ...`），提交消息英文、文档中文；分支/PR/CI 流程见 WORKFLOW 节
-- 线程铁律：`prepareToPlay/processBlock` 必须在测量线程；编辑器创建必须在消息线程（`callAsync`）；扫描/加载用**专用一次性 `std::thread`**（析构不 join，`release()` 放弃；**禁 `std::thread::detach`**）；UI 刷新用 AsyncUpdater
+- 线程铁律：`prepareToPlay/processBlock` 必须在测量线程；编辑器创建必须在消息线程（`callAsync`）；扫描/加载用**专用一次性 `std::thread`**（析构不 join，`release()` 放弃；**禁 `std::thread::detach`**）；UI 刷新用 AsyncUpdater——逐条不变量契约（含证据 file:line、保证机制与失效后果）见 `docs/adr/0004-thread-identity-invariants.md`
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
