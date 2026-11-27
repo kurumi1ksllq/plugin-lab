@@ -1,0 +1,1 @@
+依据:本机无 cmake(AGENTS.md 声明),C++ 红绿循环裁剪为 CI 验证(build-and-test /W4 /WX + ctest 双跑)。T6a 已批准(ADR-0003 已接受),不构成阻塞。

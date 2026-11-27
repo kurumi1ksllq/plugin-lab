@@ -64,6 +64,7 @@ target_sources(PluginLab PRIVATE
     source/analysis/WavCaptureReader.cpp
     source/analysis/ChildWavAnalyzer.cpp
     source/analysis/MeasurementAnalysis.cpp
+    source/analysis/StereoAnalysis.cpp
     source/ipc/PipeServer.cpp
     source/ipc/CommandParser.cpp
     source/ui/PlotWidget.cpp

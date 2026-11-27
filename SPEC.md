@@ -63,7 +63,8 @@
 | `gr_timeline`        | `grTimelineToJSON`        | time                                      |
 | `compression_family` | `compressionFamilyToJSON` | level × time                              |
 | `nonlinear_family`  | `harmonicFamilyToJSON`   | level（THD 随电平，issue #102）           |
-| `dataset`            | `datasetToJSON`           | param × level × freq × time（聚合，T5.1） |
+| `stereo_width`       | `stereoWidthToJSON`       | stereo（M/S 分离 + 宽度/相关度，#104）    |
+| `dataset`            | `datasetToJSON`           | param × level × freq × time × stereo（聚合，T5.1） |
 
 ---
 
@@ -467,6 +468,7 @@ level × speed 网格（每格：静态曲线 + GR 时间线 + 时间常数）�
 | `compression_family` | object（可选） | 压缩响应族块：`family`（与 §7 条目布局一致）                                                            |
 | `nonlinear_family`  | object（可选） | 非线性族块：`family`（与 §13 条目布局一致，issue #102）                                                 |
 | `gr_timeline`        | object（可选） | GR 块：`gr` + `tau`（与 §6 body 一致，含 valid/details）                                                |
+| `stereo_width`       | object（可选） | 声场块：`mid_response`/`side_response`/`correlation`/`width_db`（与 §14 body 一致，issue #104；需在 `types` 显式请求） |
 
 **可选语义**：`Dataset` 各字段均为"可选测量"——调用方只填已完成的测量，未提供项在 JSON 中**整体省略**（空 dataset 仅含 `type` + `context`）。`grTau` 与 `grTimeline` 同现。
 
@@ -757,6 +759,43 @@ issue #65：`loadPlugin` 是 AI/脚本加载被测插件的唯一入口（GUI �
 **向后兼容**：不请求该块时，单电平 harmonic 激励仍是字面幅度 0.4、分段 3.0 s，既有 `harmonic` 导出字节不变。
 
 ---
+
+
+## 14. stereo_width（声场类测量，ADR-0003 / issue #104）
+
+Mid/Side 双激励测量声场类处理（立体声宽度、M/S 处理器、立体声化）。两次扫频：Run A mid-only（L=R）测 mid→side 交叉，Run B side-only（L=−R）测 side→mid 交叉。
+
+```json
+{
+  "type": "stereo_width",
+  "context": {
+    "plugin": "MyPlugin",
+    "class_id": "com.example.myplugin",
+    "latency_samples": 0,
+    "sample_rate": 48000.0,
+    "measurement": { "sample_rate": 48000.0, "block_size": 512 },
+    "parameter_snapshot": {},
+    "source": { "type": "signal" }
+  },
+  "mid_response": [{ "f": 100.0, "mag": 0.0, "phase": 0.0 }],
+  "side_response": [{ "f": 100.0, "mag": -6.0, "phase": 0.0 }],
+  "correlation": [{ "f": 100.0, "rho": 0.85 }],
+  "width_db": [{ "f": 100.0, "width_db": 6.0 }]
+}
+```
+
+| 字段             | 类型  | 说明                                                          |
+| ---------------- | ----- | ------------------------------------------------------------- |
+| `mid_response`   | array | Mid 分离频响点 `{f, mag, phase}`（dB/度）                    |
+| `side_response`  | array | Side 分离频响点 `{f, mag, phase}`（dB/度）                   |
+| `correlation`    | array | 相关度 `{f, rho}`，ρ(f)=|Sxy|²/(Sxx·Syy)，1.0 = 完全相干     |
+| `width_db`       | array | 宽度 `{f, width_db}`，width_db(f)=20·log10(|M|/|S|)          |
+
+**建模用途**：M/S 处理链拟合（mid/side 增益与滤波、宽度随频率变化、相位关系），覆盖 **stereo** 维度。
+
+**子进程路径（v1 显式拒绝）**：`ChildWavAnalyzer` 未实现 stereo 分析器，子进程测量该类型返回显式错误而非静默 mono 回退——静默回退会污染数据集（ADR-0003）。
+
+**通道约束**：单声道源或左右声道不匹配时返回显式错误，不产出静默 mono 结果。
 
 ## 回归保障
 

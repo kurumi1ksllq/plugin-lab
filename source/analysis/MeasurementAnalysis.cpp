@@ -51,6 +51,21 @@ SignalResult analyzeByType (MeasurementSession& session, int latencySamples)
             break;
         }
 
+        case MeasurementSession::Type::stereoWidth:
+        {
+            // MidSide dual excitation (issue #104): the session recorded two
+            // passes (mid-only and side-only); the analyser decodes M from one
+            // and S from the other and derives rho(f) / width_db(f).
+            StereoAnalysis analyser;
+            result.stereo = analyser.analyze (session.getStereoMidDryBuffer(),
+                                              session.getStereoMidWetBuffer(),
+                                              session.getStereoSideDryBuffer(),
+                                              session.getStereoSideWetBuffer(),
+                                              recorded.getSampleRate(),
+                                              latencySamples);
+            break;
+        }
+
         // Not a signal-source measurement (the parsers reject it for
         // Source::signal); the empty result keeps the enum switch
         // exhaustive — ScanEngine's old switch broke early here, which

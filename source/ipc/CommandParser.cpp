@@ -99,6 +99,7 @@ static bool runAndAnalyze (MeasurementSession* session, juce::AudioPluginInstanc
         results.freq        = std::move (analysed.freq);
         results.harmonic    = std::move (analysed.harmonic);
         results.compression = std::move (analysed.compression);
+        results.stereo      = std::move (analysed.stereo);
     }
     else if (session->getType() == MeasurementSession::Type::grTimeline)
     {
@@ -180,6 +181,9 @@ static juce::String exportResultsToJSON (const MeasurementResults& results, cons
 
         case MeasurementSession::Type::grTimeline:
             return Export::grTimelineToJSON (results.gr, results.tau, ctx);
+
+        case MeasurementSession::Type::stereoWidth:
+            return Export::stereoWidthToJSON (results.stereo, ctx);
     }
 
     // Unreachable — MeasurementSession::Type is exhaustive above.
@@ -805,8 +809,18 @@ juce::String CommandParser::handleMeasurementCommands (const juce::DynamicObject
             session->setMeasurementType (MeasurementSession::Type::compressionCurve);
         else if (t == Protocol::MeasureType::grTimeline)
             session->setMeasurementType (MeasurementSession::Type::grTimeline);
+        else if (t == Protocol::MeasureType::stereoWidth)
+            session->setMeasurementType (MeasurementSession::Type::stereoWidth);
         else
             return Protocol::makeResponse (false, R"("error":"unknown measure type")");
+
+        // stereo_width is NOT implemented on the child path (ADR-0003 point 5:
+        // ChildWavAnalyzer has no stereo analyser). Refuse explicitly — a
+        // silent mono fallback would poison the dataset with mono numbers
+        // labelled stereo_width.
+        if (t == Protocol::MeasureType::stereoWidth && routeToChild)
+            return Protocol::makeResponse (false,
+                R"("error":"stereo_width is not supported on the child-process path, v1")");
 
         // The GR timeline needs a recorded dry/wet pair with dynamics:
         // built-in signal sources have no GR timeline generator. The child
@@ -874,6 +888,14 @@ juce::String CommandParser::handleMeasurementCommands (const juce::DynamicObject
 
             if (! runAndAnalyze (session, plugin, source, sourceStr, results, error))
                 return Protocol::makeResponse (false, error);
+
+            // A stereo_width measurement on a mono plugin cannot be decoded:
+            // report it explicitly instead of exporting an empty (or mono
+            // fallback) stereo_width document (issue #104 acceptance line).
+            if (results.type == MeasurementSession::Type::stereoWidth
+                && ! results.stereo.valid)
+                return Protocol::makeResponse (false,
+                    R"("error":"stereo_width requires a stereo plugin, mono or channel-mismatched output")");
 
             Export::Context ctx = buildExportContext (plugin, *session, source, sourceStr);
 
@@ -1218,13 +1240,19 @@ juce::String CommandParser::handleDatasetExportCommands (const juce::DynamicObje
             const char* sourceStr;  // protocol source string ("signal"/"dynamic")
             MeasurementResults results;
             bool ok = false;
+            bool inDefaultBattery;  // run when the request omits "types"
         };
 
+        // stereo_width (issue #104) is opt-in: it costs two 5 s sweeps and only
+        // makes sense for stereo plugins, so it is NOT part of the default
+        // battery (the 4-type default response stays unchanged) — listing it in
+        // "types" adds the dataset stereo_width block.
         BatteryRun battery[] = {
-            { Protocol::MeasureType::freq,        MeasurementSession::Type::frequencyResponse, MeasurementSession::Source::signal,  Protocol::Source::signal,  {}, false },
-            { Protocol::MeasureType::harmonic,    MeasurementSession::Type::harmonicAnalysis,  MeasurementSession::Source::signal,  Protocol::Source::signal,  {}, false },
-            { Protocol::MeasureType::compression, MeasurementSession::Type::compressionCurve, MeasurementSession::Source::signal,  Protocol::Source::signal,  {}, false },
-            { Protocol::MeasureType::grTimeline,  MeasurementSession::Type::grTimeline,       MeasurementSession::Source::dynamic, Protocol::Source::dynamic, {}, false },
+            { Protocol::MeasureType::freq,        MeasurementSession::Type::frequencyResponse, MeasurementSession::Source::signal,  Protocol::Source::signal,  {}, false, true },
+            { Protocol::MeasureType::harmonic,    MeasurementSession::Type::harmonicAnalysis,  MeasurementSession::Source::signal,  Protocol::Source::signal,  {}, false, true },
+            { Protocol::MeasureType::compression, MeasurementSession::Type::compressionCurve, MeasurementSession::Source::signal,  Protocol::Source::signal,  {}, false, true },
+            { Protocol::MeasureType::grTimeline,  MeasurementSession::Type::grTimeline,       MeasurementSession::Source::dynamic, Protocol::Source::dynamic, {}, false, true },
+            { Protocol::MeasureType::stereoWidth, MeasurementSession::Type::stereoWidth,       MeasurementSession::Source::signal,  Protocol::Source::signal,  {}, false, false },
         };
 
         // Locates a battery entry by protocol key (nullptr when the key is
@@ -1246,7 +1274,8 @@ juce::String CommandParser::handleDatasetExportCommands (const juce::DynamicObje
         if (! typesVar.isArray())
         {
             for (const auto& b : battery)
-                requestedTypes.push_back (juce::String (b.key));
+                if (b.inDefaultBattery)
+                    requestedTypes.push_back (juce::String (b.key));
         }
         else
         {
@@ -1587,6 +1616,7 @@ juce::String CommandParser::handleDatasetExportCommands (const juce::DynamicObje
             auto* freqRun = batteryRunFor (Protocol::MeasureType::freq);
             auto* harmRun = batteryRunFor (Protocol::MeasureType::harmonic);
             auto* compRun = batteryRunFor (Protocol::MeasureType::compression);
+            auto* stereoRun = batteryRunFor (Protocol::MeasureType::stereoWidth);
 
             Export::Dataset dataset;
             dataset.scan = scanOk ? &scanResult : nullptr;
@@ -1598,6 +1628,7 @@ juce::String CommandParser::handleDatasetExportCommands (const juce::DynamicObje
             dataset.freq = freqRun->ok ? &freqRun->results.freq : nullptr;
             dataset.harmonic = harmRun->ok ? &harmRun->results.harmonic : nullptr;
             dataset.compression = compRun->ok ? &compRun->results.compression : nullptr;
+            dataset.stereo = stereoRun->ok ? &stereoRun->results.stereo : nullptr;
 
             // Context source: the last successful battery type (dynamic when
             // the GR timeline ran, signal otherwise).

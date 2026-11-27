@@ -192,6 +192,20 @@ bool MeasurementSession::run()
                     break;
                 }
 
+                case Type::stereoWidth:
+                {
+                    // MidSide dual excitation (issue #104 / ADR-0003): the same
+                    // sweep twice — mid-only then side-only — with the channel
+                    // polarity set per pass below. Deterministic phase restart
+                    // comes from runner.run() calling generator->reset().
+                    auto sweep = std::make_unique<SineSweep>();
+                    sweep->setFrequencyRange (20.0, 20000.0);
+                    sweep->setDuration (5.0);
+                    sweep->setAmplitude (0.5);
+                    gen = std::move (sweep);
+                    break;
+                }
+
                 // grTimeline has no signal-source generator — the CommandParser
                 // rejects gr_timeline for Source::signal, so this is defensive
                 // (also keeps the enum switch exhaustive).
@@ -292,8 +306,45 @@ bool MeasurementSession::run()
     // Capture the parameter snapshot before running
     captureParameterSnapshot();
 
-    // Run
-    const bool runOk = runner.run();
+    // Run. stereo_width is the one type that needs TWO passes: the same sweep
+    // once mid-only (L = R) and once side-only (L = -R), so the analyser can
+    // read the M response from one and the S response from the other
+    // (issue #104 / ADR-0003). Every other type runs exactly one pass.
+    const auto runPass = [this] { return runner.run(); };
+    bool runOk = false;
+
+    if (type == Type::stereoWidth && source == Source::signal)
+    {
+        auto* sweep = dynamic_cast<SineSweep*> (gen.get());
+        if (sweep == nullptr)
+            return false;
+
+        // Run A: mid-only excitation.
+        sweep->setChannelMode (SignalGenerator::ChannelMode::mid);
+        if (! runPass())
+            return false;
+
+        const auto& midCapture = runner.getResult();
+        stereoMidDry.makeCopyOf (midCapture.getDryBuffer());
+        stereoMidWet.makeCopyOf (midCapture.getWetBuffer());
+
+        // Run B: side-only excitation. runner.run() prepares + resets the
+        // generator, so this is a deterministic phase restart (same sweep from
+        // sample 0), not a continuation.
+        sweep->setChannelMode (SignalGenerator::ChannelMode::side);
+        if (! runPass())
+            return false;
+
+        const auto& sideCapture = runner.getResult();
+        stereoSideDry.makeCopyOf (sideCapture.getDryBuffer());
+        stereoSideWet.makeCopyOf (sideCapture.getWetBuffer());
+
+        runOk = true;
+    }
+    else
+    {
+        runOk = runPass();
+    }
 
     // R2: restore the parameters the playback timeline touched — also on a
     // failed/cancelled run, so the host never keeps the playback values.

@@ -27,7 +27,10 @@ void SineSweep::prepare (double sr, int bs)
 
 int64_t SineSweep::getTotalLength() const
 {
-    return static_cast<int64_t> (sampleRate * durationSec);
+    // Always finite: the frozen SweepRunner falls back to 10 s of silence on a
+    // non-positive length, so a degenerate duration must still yield >= 1
+    // sample (issue #104 acceptance line: never return -1).
+    return juce::jmax<int64_t> (1, static_cast<int64_t> (sampleRate * durationSec));
 }
 
 void SineSweep::reset()
@@ -40,7 +43,6 @@ void SineSweep::generate (juce::AudioBuffer<float>& buffer,
                           int numSamples)
 {
     const auto totalLen = getTotalLength();
-    const auto numChannels = buffer.getNumChannels();
 
     for (int s = 0; s < numSamples; ++s)
     {
@@ -50,8 +52,7 @@ void SineSweep::generate (juce::AudioBuffer<float>& buffer,
         if (samplePos >= totalLen)
         {
             // Fill remaining with silence
-            for (int ch = 0; ch < numChannels; ++ch)
-                buffer.getWritePointer (ch)[startSample + s] = 0.0f;
+            writeSample (buffer, startSample + s, 0.0f);
             continue;
         }
 
@@ -61,8 +62,8 @@ void SineSweep::generate (juce::AudioBuffer<float>& buffer,
                        * (std::exp (t / sweepRate) - 1.0);
         float sample = static_cast<float> (amplitude * std::sin (phase));
 
-        for (int ch = 0; ch < numChannels; ++ch)
-            buffer.getWritePointer (ch)[startSample + s] = sample;
+        // Channel-polarity mode (mid/side) is applied here - issue #104.
+        writeSample (buffer, startSample + s, sample);
     }
 
     currentSample += numSamples;

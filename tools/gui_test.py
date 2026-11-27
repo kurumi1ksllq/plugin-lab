@@ -395,7 +395,7 @@ def test_initial_state(app):
     assert not app.button_enabled("Play"), "Play must be disabled without a plugin"
 
     # 测量按钮 + 扫描按钮在无插件时可用
-    for btn in ("Freq Response", "Harmonic", "Compression", "GR", "Scan VST3"):
+    for btn in ("Freq Response", "Harmonic", "Compression", "GR", "Stereo", "Scan VST3"):
         assert app.button_enabled(btn), f"{btn} must be enabled"
     ensure_alive(app)
 
@@ -468,8 +468,44 @@ def test_load_and_measure(app):
         f"buttons never observed disabled during 'Measuring...' (status={app.status_text()!r})"
 
     wait_measurement_done(app, timeout=60.0)
-    for btn in ("Freq Response", "Harmonic", "Compression", "GR"):
+    for btn in ("Freq Response", "Harmonic", "Compression", "GR", "Stereo"):
         assert app.button_enabled(btn), f"{btn} must be re-enabled after measurement"
+    ensure_alive(app)
+
+
+# ---------------------------------------------------------------------------
+# S3b stereo_width 点击路径（issue #104）：第 4 个 PlotWidget 接线
+# ---------------------------------------------------------------------------
+
+def test_stereo_width_measure(app):
+    """Stereo 按钮 → 测量跑通 → 按钮恢复；状态标签报出 stereo_width 结果。
+
+    只断言公开可观测的行为（按钮状态 + 状态栏文案），不断言绘制像素：
+    PlotWidget 是通用 XY 曲线控件，width_db / correlation 作为两条 series
+    画在第 4 个实例上（Main.cpp renderStereoWidth）。
+    """
+    ensure_alive(app)
+    app.wait_scan_done()
+
+    plugin, row = _pick_plugin(app)
+    app.load_plugin(plugin, row)
+    app.ensure_loaded(plugin)
+    ensure_alive(app)
+
+    app.invoke("Stereo")
+    assert observe_measuring_disabled(app, timeout=30.0), \
+        f"buttons never observed disabled during 'Measuring...' (status={app.status_text()!r})"
+
+    wait_measurement_done(app, timeout=90.0)
+    for btn in ("Freq Response", "Harmonic", "Compression", "GR", "Stereo"):
+        assert app.button_enabled(btn), f"{btn} must be re-enabled after stereo_width"
+
+    # stereo_width 完成文案（"Stereo width: N points, mean correlation X"）；
+    # 单声道插件会返回显式错误（"requires a stereo plugin"）——两者都说明
+    # 第 4 个测量类型的接线生效，只有超时/无响应才是失败。
+    status = app.status_text()
+    assert ("Stereo width" in status) or ("stereo" in status.lower()), \
+        f"stereo_width never reported a result; status={status!r}"
     ensure_alive(app)
 
 

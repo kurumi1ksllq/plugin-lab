@@ -4,6 +4,7 @@
 #include "FreqResponse.h"
 #include "HarmonicAnalysis.h"
 #include "CompressionCurve.h"
+#include "StereoAnalysis.h"
 
 /**
  * Single mapping between the session measurement type and the analyzer
@@ -31,6 +32,7 @@ namespace MeasurementAnalysis
         FreqResponse::Result freq;
         HarmonicAnalysis::Result harmonic;
         CompressionCurve::Result compression;
+        StereoAnalysis::Result stereo;   // populated for Type::stereoWidth
     };
 
     /** Runs the analyzer matching session.getType() over the session's

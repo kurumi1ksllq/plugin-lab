@@ -17,6 +17,7 @@
 #include "TestPlugin.h"
 #include "TestCompressorPlugin.h"
 #include "TestSaturatorPlugin.h"
+#include "TestStereoPlugin.h"
 #include "../source/ipc/CommandParser.h"
 #include "../source/ipc/Protocol.h"
 #include "../source/capture/MeasurementSession.h"
@@ -3986,3 +3987,180 @@ TEST_CASE ("CommandParser: dataset nonlinear_family uses the default level grid"
     tempDir.deleteRecursively();
 }
 
+
+//==============================================================================
+// stereo_width (issue #104 / ADR-0003): protocol type mapping.
+//
+// The measure/dataset commands map the "stereo_width" protocol string onto
+// MeasurementSession::Type::stereoWidth. These tests pin the mapping itself
+// (accept + reject) through the public command surface.
+//==============================================================================
+
+TEST_CASE ("CommandParser: measure accepts the stereo_width type and exports its schema",
+           "[commandparser][measure-stereo]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestStereoPlugin>();
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    std::atomic<bool> callbackFired { false };
+    MeasurementResults capturedResult;
+    parser.setMeasurementCompleteCallback ([&] (const MeasurementResults& r) {
+        callbackFired.store (true);
+        capturedResult = r;
+    });
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_measure_stereo_width.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+
+    // ---- Act ----
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"measure","source":"signal","type":"stereo_width","path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    // 1. Response: success, and NOT the unknown-type rejection.
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE_FALSE (response.contains ("unknown measure type"));
+    REQUIRE_FALSE (response.contains ("\"error\""));
+
+    // 2. The session ran the stereo type and the callback carried its result.
+    REQUIRE (session.getType() == MeasurementSession::Type::stereoWidth);
+    REQUIRE (callbackFired.load());
+    REQUIRE (capturedResult.type == MeasurementSession::Type::stereoWidth);
+    REQUIRE (capturedResult.stereo.valid);
+    REQUIRE_FALSE (capturedResult.stereo.midResponse.empty());
+    REQUIRE_FALSE (capturedResult.stereo.sideResponse.empty());
+    REQUIRE_FALSE (capturedResult.stereo.correlation.empty());
+    REQUIRE_FALSE (capturedResult.stereo.widthDB.empty());
+
+    // 3. Export file carries the stereo_width schema with all four arrays.
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    REQUIRE (exportedJson["type"].toString() == "stereo_width");
+    REQUIRE (exportedJson["mid_response"].size() > 0);
+    REQUIRE (exportedJson["side_response"].size() > 0);
+    REQUIRE (exportedJson["correlation"].size() > 0);
+    REQUIRE (exportedJson["width_db"].size() > 0);
+
+    // Cleanup
+    exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+}
+
+TEST_CASE ("CommandParser: measure rejects an unknown measure type", "[commandparser][measure-stereo]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestStereoPlugin>();
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // A near-miss spelling must NOT be silently coerced onto stereo_width.
+    auto response = parser.handleCommand (R"({"cmd":"measure","source":"signal","type":"stereo"})");
+
+    REQUIRE (response.contains ("\"ok\":false"));
+    REQUIRE (response.contains ("unknown measure type"));
+}
+
+TEST_CASE ("CommandParser: dataset maps stereo_width into the stereo_width block",
+           "[commandparser][dataset-stereo]")
+{
+    ensureMessageManager();
+
+    // ---- Arrange ----
+    auto plugin = std::make_unique<TestStereoPlugin>();
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    const juce::String exportPath =
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("test_dataset_stereo_width.json")
+            .getFullPathName();
+    juce::File (exportPath).deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+
+    // ---- Act ----
+    // stereo_width is opt-in (not part of the default 4-type battery).
+    const juce::String jsonCmd =
+        juce::String (R"({"cmd":"dataset","types":["stereo_width"],"path":)")
+        + juce::JSON::toString (exportPath) + "}";
+    auto response = parser.handleCommand (jsonCmd);
+
+    flushMessageManager (200);
+
+    // ---- Assert ----
+    REQUIRE (response.contains ("\"ok\":true"));
+    REQUIRE (response.contains ("\"stereo_width\":true"));
+
+    juce::File exportFile (exportPath);
+    REQUIRE (exportFile.existsAsFile());
+    auto exportedJson = juce::JSON::parse (exportFile.loadFileAsString());
+    REQUIRE (exportedJson["type"].toString() == "dataset");
+    REQUIRE (exportedJson.hasProperty ("stereo_width"));
+    REQUIRE (exportedJson["stereo_width"]["mid_response"].size() > 0);
+    REQUIRE (exportedJson["stereo_width"]["width_db"].size() > 0);
+
+    // Cleanup
+    exportFile.deleteFile();
+    juce::File (exportPath).withFileExtension (".wav").deleteFile();
+}
+
+TEST_CASE ("CommandParser: default dataset battery stays the 4 types (stereo_width opt-in)",
+           "[commandparser][dataset-stereo]")
+{
+    ensureMessageManager();
+
+    auto plugin = std::make_unique<TestStereoPlugin>();
+    plugin->prepareToPlay (48000.0, 256);
+
+    MeasurementSession session;
+    session.setPluginInstance (plugin.get());
+    session.setSampleRate (48000.0);
+    session.setBlockSize (256);
+
+    CommandParser parser;
+    parser.setPluginInstance (plugin.get());
+    parser.setSession (&session);
+
+    // The response's "types" object lists exactly the battery that ran.
+    auto response = parser.handleCommand (R"({"cmd":"dataset","types":["harmonic"]})");
+
+    REQUIRE (response.contains ("\"types\":{"));
+    REQUIRE_FALSE (response.contains ("\"stereo_width\":true"));
+}

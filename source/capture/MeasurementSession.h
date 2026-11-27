@@ -23,7 +23,8 @@ public:
         frequencyResponse,   // Sine sweep → frequency/phase response
         harmonicAnalysis,    // Sequential single-tone → THD + harmonics
         compressionCurve,    // Tone burst at multiple levels → gain reduction
-        grTimeline           // GR-over-time + attack/release tau (non-signal sources)
+        grTimeline,          // GR-over-time + attack/release tau (non-signal sources)
+        stereoWidth          // MidSide dual excitation → width / correlation (issue #104)
     };
 
     /** Input signal source. The source decides which signal is generated;
@@ -174,6 +175,23 @@ public:
      *  Empty unless the session type is compressionCurve and run() completed. */
     std::vector<double> getInputLevelsDB() const;
 
+    // --- stereo_width configuration (issue #104 / ADR-0003) ---
+    /** The stereo_width run records TWO excitation passes with the same sweep:
+     *  mid-only (L = R) and side-only (L = -R), a deterministic phase restart
+     *  between them. run() keeps all four recordings so the analyser can decode
+     *  M from one and S from the other:
+     *
+     *    Run A (mid)  -> stereoMidDry / stereoMidWet
+     *    Run B (side) -> stereoSideDry / stereoSideWet
+     *
+     *  getResult() still holds the LAST pass (side), so the WAV mirror and the
+     *  capture metadata keep their existing meaning. Empty unless the session
+     *  type is stereoWidth and run() completed. */
+    const juce::AudioBuffer<float>& getStereoMidDryBuffer() const  { return stereoMidDry; }
+    const juce::AudioBuffer<float>& getStereoMidWetBuffer() const  { return stereoMidWet; }
+    const juce::AudioBuffer<float>& getStereoSideDryBuffer() const { return stereoSideDry; }
+    const juce::AudioBuffer<float>& getStereoSideWetBuffer() const { return stereoSideWet; }
+
     /** Get progress (0.0 - 1.0). */
     float getProgress() const { return lastProgress; }
 
@@ -275,6 +293,13 @@ private:
     double harmonicAmplitudeDB = 0.0;
     bool harmonicAmplitudeSet = false;
     double harmonicSegmentDurationSec = 3.0;
+
+    // Stereo_width dual-excitation recordings (issue #104). Filled by run();
+    // empty for every other measurement type.
+    juce::AudioBuffer<float> stereoMidDry;
+    juce::AudioBuffer<float> stereoMidWet;
+    juce::AudioBuffer<float> stereoSideDry;
+    juce::AudioBuffer<float> stereoSideWet;
 
     // Frequency-response excitation selection (default: sine sweep).
     bool freqExcitationMLS = false;
