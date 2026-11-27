@@ -1,0 +1,32 @@
+{
+  "issue": 117,
+  "stage": "implementation-done",
+  "tickets": [
+    {
+      "id": "read",
+      "state": "done",
+      "note": "读全指定文件并定位真实证据行号"
+    },
+    {
+      "id": "adr-0004",
+      "state": "done",
+      "note": "docs/adr/0004-thread-identity-invariants.md，5 条不变量含 file:line/保证/失效"
+    },
+    {
+      "id": "agents-pointer",
+      "state": "done",
+      "note": "AGENTS.md 线程铁律节加一行指向 ADR"
+    },
+    {
+      "id": "commit",
+      "state": "pending",
+      "note": "Conventional Commit 提交"
+    },
+    {
+      "id": "pr-ci",
+      "state": "pending",
+      "note": "push + gh pr create -R kurumi1ksllq/plugin-lab + 查 CI"
+    }
+  ],
+  "updatedAt": "2026-11-27T12:41:36.951Z"
+}
