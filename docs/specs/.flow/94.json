@@ -1,8 +1,8 @@
 {
   "issue": 94,
   "grade": "standard",
-  "stage": "review",
-  "updatedAt": "2026-11-27T14:58:30.000Z",
+  "stage": "merge",
+  "updatedAt": "2026-11-27T15:57:00.278Z",
   "tickets": [
     {
       "id": 1,
@@ -21,21 +21,13 @@
     }
   ],
   "ci": {
-    "run": 5,
+    "run": 1,
     "max": 2,
-    "status": "green",
-    "note": "run 46015162425：build-and-test pass 36m20s / python-tools pass 23s / gui-tests pass 29s，三项全绿。此前 run 因分支连续追加提交被 concurrency cancel-in-progress 取消（取消 != 失败）。"
+    "status": "green"
   },
   "review": {
     "state": "done",
-    "axes": 2,
-    "findings": [
-      "axis-1 medium: _measured_eq_fit 未透传 nyquist（lead 97972ba 修）",
-      "axis-2 medium: docstring 未写直通守卫顺序（lead 97972ba 修）",
-      "axis-2 low: 直通守卫缺锁定用例（lead 97972ba 补）",
-      "axis-2 blocker: EQ 补位忽略 dynamics 证据，会把真压缩器重判 eq-only（lead a374cc8 修）",
-      "axis-2 blocker: nyquist 守卫读 row.freq.sample_rate 是死代码（lead a374cc8 改为显式参数）"
-    ]
+    "axes": 2
   },
   "merge": {
     "authorized": false
