@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；328 个 TEST_CASE（2026-11-18 静态复数：grep 命中 329 − 1 注释提及 = 328 生效；#102 新增 10 条：harmonic-family 6 + export 2 + commandparser 2；历史：2026-08-14 实测 312/312 绿：基线 208 + 块 D 新增 57 + issue #2/#3 并发改造新增 5 + 子进程测量扩展 T1/T2 新增 10 + #60 无限载波日志路径 1 + #52/#53/#58 各波增量，随 PR 逐次同步）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
+Catch2 v3.8.0 单元测试（FetchContent）；`unit_tests` console target（`juce_add_console_app`）；333 个 TEST_CASE（2026-11-27 静态复数：grep 命中 334 − 1 注释提及 = 333 生效；#116 新增 5 条 host/child loadPlugin 契约用例（ChildHostParityTests）；历史 2026-11-18 为 328（grep 329 − 1）；#102 新增 10 条：harmonic-family 6 + export 2 + commandparser 2；历史：2026-08-14 实测 312/312 绿：基线 208 + 块 D 新增 57 + issue #2/#3 并发改造新增 5 + 子进程测量扩展 T1/T2 新增 10 + #60 无限载波日志路径 1 + #52/#53/#58 各波增量，随 PR 逐次同步）。`Catch2::Catch2WithMain` 提供 main()，测试源里没有 main()。
 
 ## RUN
 

@@ -24,6 +24,11 @@
 #include <catch2/catch_approx.hpp>
 
 #include "../source/host/ChildProcessCoordinator.h"
+#include "../source/host/PluginManager.h"
+#include "../source/host/ChildMeasureContract.h"
+#include "../source/capture/MeasurementSession.h"
+#include "../source/ipc/CommandParser.h"
+#include "TestPlugin.h"
 #include "../source/analysis/ChildWavAnalyzer.h"
 #include "../source/capture/SweepRunner.h"
 #include "../source/signal/SineSweep.h"
@@ -44,6 +49,10 @@
 
 #ifndef CHILD_PARITY_PLUGIN
 #error "CHILD_PARITY_PLUGIN must be defined by tests/CMakeLists.txt"
+#endif
+
+#ifndef PLUGINLAB_SOURCE_DIR
+#error "PLUGINLAB_SOURCE_DIR must be defined by tests/CMakeLists.txt"
 #endif
 
 namespace
@@ -833,4 +842,271 @@ TEST_CASE ("ChildHostParity: child-process gr_timeline matches in-process measur
     exportPath.deleteFile();
     wavPath.deleteFile();
     hostWav.deleteFile();
+}
+
+
+//==============================================================================
+// T7 (issue #116) — host/child loadPlugin contract parity.
+//
+// The child's load command (source/child/PluginHostChild.cpp handleLoad) is a
+// deliberate mirror of PluginManager::loadPlugin, aligned by cross-referencing
+// comments only ("Mirror PluginManager::loadPlugin (PluginManager::loadPlugin)"),
+// so either side can drift silently. These cases pin the parts that must stay
+// identical:
+//
+//   * the 30 s creation budget,
+//   * the late-callback guard (alive=false → the callback writes nothing),
+//   * the child's ~500 ms progress heartbeat inside the host's 3 s watchdog,
+//   * the "plugin not found" / "load timeout" error vocabulary,
+//   * the 48 kHz / 512 defaults.
+//
+// What is deliberately NOT shared, and therefore asserted in its own shape
+// instead of as "equal": the threading model (the child's main thread IS its
+// message thread, so it pumps runDispatchLoopUntil; the host waits on a
+// dedicated thread) and the failure SEMANTICS (the host answers nullptr +
+// preventive blacklist + CRASH_LOG; the child answers
+// {"ok":false,"error":"load timeout"} and never blacklists).
+//
+// The child's constants live in an anonymous namespace inside a separate
+// executable, so no link-time symbol ties them to PluginManager's — the
+// contract is read from the source text. That is the only way a unit test can
+// compare the two sides without changing production code (the alternative,
+// extracting a shared helper, was rejected for the threading/semantics split
+// above — see the issue).
+
+namespace
+{
+    //==============================================================================
+    juce::File sourceRoot()
+    {
+        return juce::File (juce::String (PLUGINLAB_SOURCE_DIR));
+    }
+
+    /** Whitespace-stripped source text: value drift (30000 → 20000) still
+        fails, pure re-alignment/reformatting does not. */
+    juce::String squashedSource (const juce::String& relativePath)
+    {
+        auto text = sourceRoot().getChildFile (relativePath).loadFileAsString();
+        return text.removeCharacters (" \t\r\n");
+    }
+
+    /** Unmodified source text — for assertions on string LITERALS (squashing
+        would also eat the spaces inside "load timeout"). */
+    juce::String sourceText (const juce::String& relativePath)
+    {
+        return sourceRoot().getChildFile (relativePath).loadFileAsString();
+    }
+
+    /** Throwaway cache directory: PluginManager::loadPlugin persists the
+        blacklist on timeout, and the test must never touch the real
+        %APPDATA%/PluginLab cache. */
+    struct TempCacheDir
+    {
+        juce::File dir;
+
+        TempCacheDir()
+            : dir (juce::File::getSpecialLocation (juce::File::SpecialLocationType::tempDirectory)
+                       .getNonexistentChildFile ("pluginlab_parity_contract_", "_dir"))
+        {
+            dir.createDirectory();
+        }
+
+        ~TempCacheDir() { dir.deleteRecursively(); }
+
+        juce::File cacheFile() const { return dir.getChildFile ("pluginlist.xml"); }
+    };
+
+    juce::PluginDescription fakeDescription (const juce::String& name,
+                                             const juce::String& fileOrIdentifier,
+                                             int uid)
+    {
+        juce::PluginDescription d;
+        d.name = name;
+        d.descriptiveName = name;
+        d.fileOrIdentifier = fileOrIdentifier;
+        d.pluginFormatName = "VST3";
+        d.uniqueId = uid;
+        return d;
+    }
+}  // namespace
+
+//==============================================================================
+// T7a — creation budget + late-callback guard.
+//==============================================================================
+
+TEST_CASE ("ChildHostParity: load timeout budget is 30 s on both paths and late callbacks are discarded",
+           "[childparity][contract][load]")
+{
+    // ---- Contract: same creation budget on both sides ----
+    REQUIRE (PluginManager::kLoadTimeoutMs == 30000);
+    REQUIRE (squashedSource ("host/PluginManager.h").contains ("kLoadTimeoutMs=30000"));
+    REQUIRE (squashedSource ("child/PluginHostChild.cpp").contains ("kLoadTimeoutMs=30000"));
+
+    // ---- Contract: the late-callback guard is the same in both TUs ----
+    // alive=false on the timeout path plus the callback's early return: the
+    // creation callback can still arrive after the timeout and must write
+    // neither the instance nor the error into the state.
+    const auto hostText = squashedSource ("host/PluginManager.cpp");
+    const auto childText = squashedSource ("child/PluginHostChild.cpp");
+    REQUIRE (hostText.contains ("state->alive=false"));
+    REQUIRE (hostText.contains ("if(!state->alive.load())return;"));
+    REQUIRE (childText.contains ("state->alive=false"));
+    REQUIRE (childText.contains ("if(!state->alive.load())return;"));
+
+    // ---- Contract: only the child answers a timeout with a protocol error;
+    //      the host reports nullptr + CRASH_LOG + blacklist (see the
+    //      behavioural half below) ----
+    REQUIRE (sourceText ("child/PluginHostChild.cpp").contains (R"("error":"load timeout")"));
+
+    // ---- Behaviour (host side): timeout → nullptr + blacklist, and the
+    //      stale callback is dropped without touching the state ----
+    TempCacheDir tmp;
+    PluginManager mgr;
+    mgr.setCacheFile (tmp.cacheFile());   // saveCache on timeout must not touch the real cache
+    mgr.setLoadTimeoutMs (50);
+
+    PluginManager::PluginCreationCallback stale;
+    mgr.setAsyncCreateOverride ([&] (const juce::PluginDescription&, double, int,
+                                     PluginManager::PluginCreationCallback cb)
+    {
+        if (! stale)                      // keep only the first (timed-out) callback
+            stale = std::move (cb);
+    });
+
+    auto instance = mgr.loadPlugin (fakeDescription ("Fake", "C:\\fake\\fake.vst3", 9101),
+                                    48000.0, 512);
+    REQUIRE (instance == nullptr);
+    REQUIRE (mgr.getKnownPlugins().getBlacklistedFiles().contains ("C:\\fake\\fake.vst3"));
+
+    // The late callback arrives after loadPlugin already returned (timed out):
+    // the alive=false guard drops it — no crash, nothing written.
+    REQUIRE (stale != nullptr);
+    REQUIRE_NOTHROW (stale (std::make_unique<TestPlugin>(), juce::String()));
+}
+
+//==============================================================================
+// T7b — progress heartbeat interval vs the host watchdog budget.
+//==============================================================================
+
+TEST_CASE ("ChildHostParity: child progress heartbeat stays inside the host watchdog budget",
+           "[childparity][contract][heartbeat]")
+{
+    // The host's watchdog treats silence as death (default 3 s) and the child
+    // keeps itself alive with progress lines while a blocking load/measure
+    // runs. Both values are pinned: the child's interval is TU-local and the
+    // watchdog's budget is a constructor default argument, so neither is
+    // reachable as a link-time symbol from the test.
+    constexpr int kExpectedProgressIntervalMs = 500;
+    constexpr int kCoordinatorHeartbeatMs = 3000;
+
+    REQUIRE (squashedSource ("child/PluginHostChild.cpp")
+                 .contains (juce::String ("lastProgressMs>=") + juce::String (kExpectedProgressIntervalMs)));
+    REQUIRE (squashedSource ("host/ChildProcessCoordinator.h")
+                 .contains (juce::String ("heartbeatTimeoutMs=") + juce::String (kCoordinatorHeartbeatMs)));
+
+    // Two consecutive missed progress lines still fit inside the budget — the
+    // two constants above are pinned to the real values, so this is a
+    // documented relationship, not an assertion about the code.
+}
+
+//==============================================================================
+// T7c — "plugin not found" wording, both paths, same literal.
+//==============================================================================
+
+TEST_CASE ("ChildHostParity: 'plugin not found' wording is identical on both paths",
+           "[childparity][contract][errors]")
+{
+    const juce::String kNotFound ("plugin not found");
+
+    // ---- Host path: CommandParser resolves against knownPlugins (empty here)
+    //      and then against the blacklist (empty too) ----
+    ensureMessageManager();
+    PluginManager mgr;
+    CommandParser parser;
+    parser.setPluginManager (&mgr);
+
+    const auto hostResponse = parser.handleCommand (
+        R"({"cmd":"loadPlugin","path":"C:\\fake\\NoSuchPlugin.vst3"})");
+    REQUIRE (hostResponse.contains ("\"ok\":false"));
+    REQUIRE (hostResponse.contains (kNotFound));
+
+    // ---- Child path: the real child scans the file and finds no types ----
+    // Same SKIP policy as the other real-process cases in this file: a missing
+    // child exe must not red the whole binary.
+    if (! realChildExe().existsAsFile())
+        SKIP ("PLUGIN_HOST_CHILD_EXE not present: " + realChildExe().getFullPathName());
+    PluginHostChildCoordinator coord (realChildExe().getFullPathName());
+    std::atomic<bool> crashed { false };
+    coord.setOnCrash ([&] (const juce::String&) { crashed.store (true); });
+    REQUIRE (coord.start());
+
+    REQUIRE (coord.sendLine (R"({"cmd":"load","path":"C:\\fake\\NoSuchPlugin.vst3"})"));
+    const auto childResponse = popUntil (coord, "\"error\"", 10000);
+    coord.stop();
+
+    REQUIRE_FALSE (crashed.load());
+    REQUIRE (childResponse.contains ("\"ok\":false"));
+    REQUIRE (childResponse.contains (kNotFound));
+}
+
+//==============================================================================
+// T7d — 48 kHz / 512 defaults on both paths.
+//==============================================================================
+
+TEST_CASE ("ChildHostParity: sampleRate/blockSize defaults are 48000/512 on both paths",
+           "[childparity][contract][defaults]")
+{
+    // Host-side default: the child measure contract is what the host forwards
+    // when the caller omits fields. (MeasurementSession's own defaults are the
+    // in-process measurement path — out of scope for a loadPlugin parity test.)
+    const ChildMeasureContract::ChildMeasureRequest request;
+    REQUIRE (request.sampleRate == 48000.0);
+    REQUIRE (request.blockSize == 512);
+
+    // Child-side defaults: applied when a load/measure request omits the
+    // fields (DynamicObject::getProperty has no default overload in JUCE 9).
+    const auto childText = squashedSource ("child/PluginHostChild.cpp");
+    REQUIRE (childText.contains ("kDefaultSampleRate=48000.0"));
+    REQUIRE (childText.contains ("kDefaultBlockSize=512"));
+}
+
+//==============================================================================
+// T7e — the child really applies those defaults when the request omits them
+// (real plugin; SKIPs when absent, like the other parity cases).
+//==============================================================================
+
+TEST_CASE ("ChildHostParity: child load applies the 48k/512 defaults when the request omits them",
+           "[childparity][contract][defaults]")
+{
+    // A .vst3 is a DIRECTORY, so exists() (not existsAsFile()) is the check.
+    const auto pluginFile = realPluginFile();
+    if (! pluginFile.exists())
+        SKIP ("CHILD_PARITY_PLUGIN not present: " + pluginFile.getFullPathName());
+    if (! realChildExe().existsAsFile())
+        SKIP ("PLUGIN_HOST_CHILD_EXE not present: " + realChildExe().getFullPathName());
+
+    ensureMessageManager();
+
+    PluginHostChildCoordinator coord (realChildExe().getFullPathName());
+    std::atomic<bool> crashed { false };
+    coord.setOnCrash ([&] (const juce::String&) { crashed.store (true); });
+    REQUIRE (coord.start());
+
+    REQUIRE (coord.sendLine (R"({"cmd":"start"})"));
+    REQUIRE (popUntil (coord, "\"pid\":", 5000).isNotEmpty());
+
+    // Only "path" — no sample_rate / block_size: the child must fall back to
+    // 48000/512 and still create the instance.
+    juce::DynamicObject req;
+    req.setProperty ("cmd", "load");
+    req.setProperty ("path", pluginFile.getFullPathName());
+    const auto reqVar = juce::var (new juce::DynamicObject (req));
+    REQUIRE (coord.sendLine (juce::JSON::toString (reqVar, true)));
+
+    const auto loadLine = popUntil (coord, "\"name\"", 40000);
+    coord.stop();
+
+    REQUIRE_FALSE (crashed.load());
+    REQUIRE (loadLine.contains ("\"ok\":true"));
+    REQUIRE (jsonField (loadLine, "name").isNotEmpty());
 }
