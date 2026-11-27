@@ -1,0 +1,45 @@
+{
+  "issue": 118,
+  "grade": "standard",
+  "stage": "pr",
+  "updatedAt": "2026-11-27T21:05:00+08:00",
+  "branch": "chore/issue-118-eha-build-guard",
+  "worktree": "/root/pl-wt-118",
+  "tickets": [
+    {
+      "id": 1,
+      "title": "CMake /EHa 属性断言守卫（MSVC-only，FATAL_ERROR）",
+      "state": "done"
+    },
+    {
+      "id": 2,
+      "title": "双编译清单一致性守卫（root target_sources vs tests 清单覆盖）",
+      "state": "done"
+    },
+    {
+      "id": 3,
+      "title": "反向破坏验证（本地模拟 + CI 补验）+ PR",
+      "state": "in_progress"
+    },
+    {
+      "id": 4,
+      "title": "反向破坏模拟（JS 等价逻辑，真配置阶段验证靠 CI）",
+      "state": "done"
+    }
+  ],
+  "ci": {
+    "run": 0,
+    "max": 2,
+    "status": "unknown"
+  },
+  "review": {
+    "state": "todo",
+    "axes": 2,
+    "note": ""
+  },
+  "merge": {
+    "authorized": false
+  },
+  "pr": "",
+  "notes": "守卫写入根 CMakeLists.txt（MSVC-only Guard1 计数 5/3；Guard2 关键模块双清单校验）。本地模拟：健康 root=5/tests=3/missing=[]；删 EditorCrashGuard /EHa→4 触发；改名 SineSweep 清单项→missing 触发。本机无 cmake，配置阶段与反向破坏真实验证需 CI/Windows，PR 写明。"
+}

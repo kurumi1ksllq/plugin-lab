@@ -221,6 +221,80 @@ set_source_files_properties(source/capture/SweepRunner.cpp PROPERTIES
     COMPILE_FLAGS "/EHa"
 )
 
+# ── Build-time guards (issue #118) ──────────────────────────────────────────
+# These checks fail the CONFIGURE step loudly when the crash-protection wiring
+# above is silently lost (e.g. a refactor drops a set_source_files_properties
+# block or a translation unit from one of the dual-compile manifests).
+# MSVC-only: /EHa is an MSVC flag; on other platforms there is nothing to
+# assert, so both guards are skipped.
+
+# Guard 1: the /EHa crash-protection blocks must all still be present.
+# /EHa is wired via per-source COMPILE_FLAGS on 5 call sites in this file
+# (PluginManager.cpp / EditorCrashGuard.cpp / SweepRunner.cpp for the PluginLab
+# target, PluginHostChild.cpp / SweepRunner.cpp again for PluginHostChild — the
+# property is directory-scoped, so SweepRunner.cpp must be repeated per target)
+# and 3 sites in tests/CMakeLists.txt (SweepRunner.cpp / EditorCrashGuard.cpp /
+# ChildHostParityTests.cpp). The regex matches only real call lines
+# (name immediately followed by an open paren), never comment mentions.
+if(MSVC)
+    file(STRINGS "${CMAKE_CURRENT_LIST_FILE}" CMAKE_EHA_CALLS
+         REGEX "set_source_files_properties\\(")
+    list(LENGTH CMAKE_EHA_CALLS CMAKE_EHA_COUNT)
+    if(NOT CMAKE_EHA_COUNT EQUAL 5)
+        message(FATAL_ERROR
+            "[EHa guard] Root CMakeLists.txt: expected 5 set_source_files_properties"
+            " /EHa call sites (PluginManager.cpp, EditorCrashGuard.cpp and"
+            " SweepRunner.cpp for PluginLab; PluginHostChild.cpp and SweepRunner.cpp"
+            " for PluginHostChild), found ${CMAKE_EHA_COUNT}. A /EHa block was"
+            " removed — crash protection (/EHa + catch(...) + CRASH_LOG) would be"
+            " silently lost. Restore it.")
+    endif()
+    file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/tests/CMakeLists.txt" TESTS_EHA_CALLS
+         REGEX "set_source_files_properties\\(")
+    list(LENGTH TESTS_EHA_CALLS TESTS_EHA_COUNT)
+    if(NOT TESTS_EHA_COUNT EQUAL 3)
+        message(FATAL_ERROR
+            "[EHa guard] tests/CMakeLists.txt: expected 3 set_source_files_properties"
+            " /EHa call sites (SweepRunner.cpp, EditorCrashGuard.cpp,"
+            " ChildHostParityTests.cpp), found ${TESTS_EHA_COUNT}. Restore it.")
+    endif()
+endif()
+
+# Guard 2: dual-compile manifest consistency for the key modules
+# (capture / analysis / ipc / signal / scan / host). Every production .cpp in
+# these modules must also appear in tests/CMakeLists.txt's unit_tests
+# target_sources — with no static library each new .cpp has to be added to
+# BOTH lists; missing one side silently changes the compile context (flags,
+# defines) between the app and the tests. Entry point (Main.cpp), the
+# standalone child executable (source/child/) and UI code are intentionally
+# not covered by the test manifest and are excluded here.
+set(GUARD_MODULES capture analysis ipc signal scan host)
+set(DUAL_COMPILE_MISSING "")
+foreach(_mod IN LISTS GUARD_MODULES)
+    file(GLOB _mod_cpps
+         "${CMAKE_CURRENT_SOURCE_DIR}/source/${_mod}/*.cpp")
+    foreach(_cpp IN LISTS _mod_cpps)
+        file(RELATIVE_PATH _rel "${CMAKE_CURRENT_SOURCE_DIR}" "${_cpp}")
+        file(TO_CMAKE_PATH "${_rel}" _rel)
+        file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/tests/CMakeLists.txt" _hit
+             REGEX "${_rel}")
+        list(LENGTH _hit _hits)
+        if(_hits EQUAL 0)
+            list(APPEND DUAL_COMPILE_MISSING "${_rel}")
+        endif()
+        unset(_hit)
+        unset(_hits)
+    endforeach()
+    unset(_mod_cpps)
+endforeach()
+if(DUAL_COMPILE_MISSING)
+    message(FATAL_ERROR
+        "[Dual-compile guard] The following production sources are in"
+        " PluginLab's target_sources but MISSING from tests/CMakeLists.txt's"
+        " unit_tests target_sources (dual-compile contract, AGENTS.md"
+        " CONVENTIONS): ${DUAL_COMPILE_MISSING}. Add them to both lists.")
+endif()
+
 # ── Tests ───────────────────────────────────────────────────────────────────
 option(BUILD_TESTS "Build PluginLab unit tests" OFF)
 if(BUILD_TESTS)
