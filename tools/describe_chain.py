@@ -230,17 +230,15 @@ def _measured_dynamics_evidence(row):
     if not isinstance(row, dict):
         return False
     compression = row.get("compression")
-    if isinstance(compression, dict):
-        if compression.get("status") in _DEGENERATE_STATUSES:
-            pass
-        else:
-            ratio = compression.get("ratio")
-            if ratio is not None and abs(ratio - 1.0) / 1.0 * 100.0 > LOCKED_TOLERANCES["ratio_pct"]:
-                return True
+    if (isinstance(compression, dict)
+            and compression.get("status") not in _DEGENERATE_STATUSES):
+        ratio = compression.get("ratio")
+        if (ratio is not None
+                and abs(ratio - 1.0) / 1.0 * 100.0
+                > LOCKED_TOLERANCES["ratio_pct"]):
+            return True
     gr = row.get("gr")
-    if isinstance(gr, dict) and gr.get("valid") is True:
-        return True
-    return False
+    return isinstance(gr, dict) and gr.get("valid") is True
 
 
 def _measured_eq_fit(row, nyquist=None):
@@ -286,17 +284,20 @@ def classify_plugin_type(snapshot, row=None, sample_rate=None):
 
     Issue #94: the generic words Gain and Power belong to every family (an EQ
     band level, a makeup level, a mains switch), so they never decide a type
-    on their own. Two fallbacks follow the keyword rules, in this order:
+    on their own. When the names leave nothing but generic keys, three
+    measurement checks follow the keyword rules, in this order:
 
       1. passthrough row (row.status == "not-exercised"): stay unknown. A
          plugin that did nothing under measurement carries no discriminative
          data, so the measurement must not type it either.
-      2. measurement fallback: a plausible EQ peak in the row's freq section
+      2. measured dynamics evidence (a usable compression fit away from unity,
+         or a valid GR edge): dynamics-only. Abstaining on the names must not
+         turn a working compressor into an EQ plugin.
+      3. measured EQ evidence: a plausible EQ peak in the row's freq section
          marks an EQ plugin (eq-only, low confidence, basis names the curve).
 
-    The passthrough check comes first on purpose: a passthrough row can still
-    contain a stale freq section, and typing from it would contradict the
-    measurement that says nothing happened.
+    The order is the constraint: a passthrough row can still contain a stale
+    freq section, and a compressor can coincidentally fit an EQ peak.
 
     Hybrid disambiguator: bands + dynamics keys alone would be ambiguous
     (multiband compressors expose the same band keys). A Ratio key
