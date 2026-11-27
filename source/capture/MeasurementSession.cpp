@@ -323,16 +323,16 @@ bool MeasurementSession::run()
         stereoSideWet.setSize (0, 0);
 
         // No early returns in here: the R2 restore below must run on every
-        // exit path, so a failure only clears runOk.
-        auto* sweep = dynamic_cast<SineSweep*> (gen.get());
-        if (sweep == nullptr)
+        // exit path, so a failure only clears runOk. setChannelMode lives on
+        // the SignalGenerator base, so no downcast is needed.
+        if (gen == nullptr)
         {
             runOk = false;
         }
         else
         {
             // Run A: mid-only excitation.
-            sweep->setChannelMode (SignalGenerator::ChannelMode::mid);
+            gen->setChannelMode (SignalGenerator::ChannelMode::mid);
             runOk = runPass();
 
             if (runOk)
@@ -344,7 +344,7 @@ bool MeasurementSession::run()
                 // Run B: side-only excitation. runner.run() prepares + resets
                 // the generator, so this is a deterministic phase restart
                 // (same sweep from sample 0), not a continuation.
-                sweep->setChannelMode (SignalGenerator::ChannelMode::side);
+                gen->setChannelMode (SignalGenerator::ChannelMode::side);
                 runOk = runPass();
 
                 if (runOk)

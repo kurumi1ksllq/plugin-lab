@@ -175,8 +175,9 @@ public:
         stereoPlot->setVisible (false);
 
         // Measurement control row (right panel, above the plots).
-        // All four measurement types are wired end-to-end (freq, harmonic,
-        // compression, GR timeline) — rendered in handleAsyncUpdate.
+        // All five measurement types are wired end-to-end (freq, harmonic,
+        // compression, GR timeline, stereo width) — rendered in
+        // handleAsyncUpdate.
         measureFreqButton.reset (new juce::TextButton ("Freq Response"));
         measureFreqButton->onClick = [this]
         {

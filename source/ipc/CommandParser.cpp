@@ -1673,8 +1673,8 @@ juce::String CommandParser::handleDatasetExportCommands (const juce::DynamicObje
                 return Protocol::makeResponse (false, R"("error":"export write failed")");
             }
 
-            // Response "types" object always carries all 4 keys (true/false),
-            // derived from the battery table in protocol order.
+            // Response "types" object always carries one key per battery entry
+            // (true/false), derived from the battery table in protocol order.
             const int numBattery = static_cast<int> (sizeof (battery) / sizeof (battery[0]));
             juce::String d = R"("export_path":")" + escapeJsonString (path) + "\""
                            + R"(,"types":{)";
