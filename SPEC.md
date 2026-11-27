@@ -754,7 +754,7 @@ issue #65：`loadPlugin` 是 AI/脚本加载被测插件的唯一入口（GUI �
 | `levels_db`            | array  | `[-60,-48,-36,-24,-12,-6,0]`                  | 电平网格（dBFS）；非数组/空/非数值 → 该块跳过                 |
 | `segment_duration_sec` | number | 3.0                                             | 每音分段时长（秒）；`<=0` 或省略 → 保持会话默认             |
 
-响应中带 `"nonlinear_family": true/false`（与 `"compression_family"` 同构）。**本块不进 `battery`、不进 `types`**（`types` 仍恒为 4 个测量类型），也不下发子进程：`nonlinear_family` 不是 `Protocol::MeasureType` 的 4 类测量之一，dataset 的可选块从不经子进程路径；`ChildWavAnalyzer` 没有对应分析器（若将来要支持，需另开票补 WAV 多轨解析）。
+响应中带 `"nonlinear_family": true/false`（与 `"compression_family"` 同构）。**本块不进 `battery`、不进 `types`**（`types` 恒含全部 battery 键，当前 5 个：freq/harmonic/compression/gr_timeline/stereo_width），也不下发子进程：`nonlinear_family` 不是 `Protocol::MeasureType` 的测量类型之一，dataset 的可选块从不经子进程路径；`ChildWavAnalyzer` 没有对应分析器（若将来要支持，需另开票补 WAV 多轨解析）。
 
 **向后兼容**：不请求该块时，单电平 harmonic 激励仍是字面幅度 0.4、分段 3.0 s，既有 `harmonic` 导出字节不变。
 

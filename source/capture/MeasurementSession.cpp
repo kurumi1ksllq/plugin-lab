@@ -322,10 +322,19 @@ bool MeasurementSession::run()
         stereoSideDry.setSize (0, 0);
         stereoSideWet.setSize (0, 0);
 
+        // The capture buffer is always allocated as a stereo pair (SweepRunner
+        // prepares 2 channels), so StereoAnalysis cannot tell a mono plugin
+        // from a stereo one by looking at the buffers — ch1 would just be
+        // silence. Ask the plugin itself; without this a mono plugin exports
+        // mono data under a stereo_width label.
+        const bool stereoCapable = plugin != nullptr
+            && plugin->getTotalNumInputChannels() >= 2
+            && plugin->getTotalNumOutputChannels() >= 2;
+
         // No early returns in here: the R2 restore below must run on every
         // exit path, so a failure only clears runOk. setChannelMode lives on
         // the SignalGenerator base, so no downcast is needed.
-        if (gen == nullptr)
+        if (gen == nullptr || ! stereoCapable)
         {
             runOk = false;
         }

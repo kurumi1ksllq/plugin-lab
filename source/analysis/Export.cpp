@@ -504,6 +504,11 @@ juce::String scanToJSON (const ScanEngine::ScanResult& scan,
             // gr_timeline) — defensive case to keep the enum switch exhaustive.
             case MeasurementSession::Type::grTimeline:
                 break;
+
+            // Scans never produce stereo_width either (the scan command
+            // rejects it) — same defensive case, keeps /W4 C4062 quiet.
+            case MeasurementSession::Type::stereoWidth:
+                break;
         }
 
         json = json.dropLastCharacters (2);  // remove trailing ",\n"
@@ -553,6 +558,11 @@ static void appendDatasetScanFamily (juce::String& json,
             // Scans never produce a GR timeline (the scan command rejects
             // gr_timeline) — defensive case to keep the enum switch exhaustive.
             case MeasurementSession::Type::grTimeline:
+                break;
+
+            // Scans never produce stereo_width either (the scan command
+            // rejects it) — same defensive case, keeps /W4 C4062 quiet.
+            case MeasurementSession::Type::stereoWidth:
                 break;
         }
 
