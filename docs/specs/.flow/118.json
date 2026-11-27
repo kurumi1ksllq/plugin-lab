@@ -1,0 +1,44 @@
+{
+  "issue": 118,
+  "grade": "standard",
+  "stage": "merge",
+  "updatedAt": "2026-11-27T15:57:00.276Z",
+  "branch": "chore/issue-118-eha-build-guard",
+  "worktree": "/root/pl-wt-118",
+  "tickets": [
+    {
+      "id": 1,
+      "title": "CMake /EHa 属性断言守卫（MSVC-only，FATAL_ERROR）",
+      "state": "done"
+    },
+    {
+      "id": 2,
+      "title": "双编译清单一致性守卫（root target_sources vs tests 清单覆盖）",
+      "state": "done"
+    },
+    {
+      "id": 3,
+      "title": "反向破坏模拟（JS 等价逻辑）+ PR #129（真配置阶段验证靠 CI）",
+      "state": "done"
+    },
+    {
+      "id": 4,
+      "title": "反向破坏模拟（JS 等价逻辑，真配置阶段验证靠 CI）",
+      "state": "done"
+    }
+  ],
+  "ci": {
+    "run": 1,
+    "max": 2,
+    "status": "green"
+  },
+  "review": {
+    "state": "done",
+    "axes": 2
+  },
+  "merge": {
+    "authorized": false
+  },
+  "pr": "https://github.com/kurumi1ksllq/plugin-lab/pull/129",
+  "notes": "guards rewritten twice after review; the recorded green run predates the rewrite — CI must re-run on the new head"
+}
