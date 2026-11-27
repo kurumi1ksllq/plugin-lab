@@ -234,8 +234,9 @@ set_source_files_properties(source/capture/SweepRunner.cpp PROPERTIES
 # target, PluginHostChild.cpp / SweepRunner.cpp again for PluginHostChild — the
 # property is directory-scoped, so SweepRunner.cpp must be repeated per target)
 # and 3 sites in tests/CMakeLists.txt (SweepRunner.cpp / EditorCrashGuard.cpp /
-# ChildHostParityTests.cpp). The regex matches only real call lines
-# (name immediately followed by an open paren), never comment mentions.
+# ChildHostParityTests.cpp). The guard collects (file, COMPILE_FLAGS "/EHa")
+# pairs from uncommented blocks and compares the resulting file list against
+# the authorized table above, multiplicity included.
 if(MSVC)
     # A bare call count is not enough: /EHa could be swapped for /EHsc, a block
     # could be commented out, or the source file could change — all silently.
@@ -284,18 +285,24 @@ if(MSVC)
             "changed or dropped — crash protection (/EHa + catch(...) + "
             "CRASH_LOG) would be silently lost. Restore it.")
     endif()
-    set(_root_missing "")
-    foreach(_want IN LISTS EHA_ROOT_AUTHORIZED)
-        list(FIND ROOT_EHA "${_want}" _idx)
-        if(_idx EQUAL -1)
-            list(APPEND _root_missing "${_want}")
-        endif()
-    endforeach()
-    if(_root_missing)
+    # Multiset comparison, not set membership: SweepRunner.cpp must appear
+    # TWICE in the root file (the property is directory-scoped, so it has to be
+    # repeated for the PluginHostChild target). A list(FIND) subset check would
+    # pass with one of the two blocks deleted, silently dropping SEH
+    # protection from the child process. Sorted copies compare both the
+    # membership and the multiplicity; an extra unauthorized TU also fails.
+    set(_root_want ${EHA_ROOT_AUTHORIZED})
+    set(_root_have ${ROOT_EHA})
+    list(SORT _root_want)
+    list(SORT _root_have)
+    if(NOT "${_root_want}" STREQUAL "${_root_have}")
         message(FATAL_ERROR
-            "[EHa guard] Root CMakeLists.txt: these authorized translation units "
-            "no longer carry a /EHa block: ${_root_missing}. Crash protection "
-            "would be silently lost. Restore it.")
+            "[EHa guard] Root CMakeLists.txt: authorized /EHa files are"
+            " [${_root_want}] but found [${_root_have}]. A block was removed,"
+            " duplicated or added for an unauthorized translation unit — crash"
+            " protection (/EHa + catch(...) + CRASH_LOG) would be silently lost."
+            " Note SweepRunner.cpp must appear once per target (PluginLab and"
+            " PluginHostChild).")
     endif()
 
     pluginlab_collect_eha_blocks("${CMAKE_CURRENT_LIST_DIR}/tests/CMakeLists.txt"
@@ -305,17 +312,15 @@ if(MSVC)
             "[EHa guard] tests/CMakeLists.txt: ${TESTS_EHA_CALLS} blocks but "
             "${TESTS_EHA_FLAGS} COMPILE_FLAGS \"/EHa\" lines. Restore them.")
     endif()
-    set(_tests_missing "")
-    foreach(_want IN LISTS EHA_TESTS_AUTHORIZED)
-        list(FIND TESTS_EHA "${_want}" _idx)
-        if(_idx EQUAL -1)
-            list(APPEND _tests_missing "${_want}")
-        endif()
-    endforeach()
-    if(_tests_missing)
+    set(_tests_want ${EHA_TESTS_AUTHORIZED})
+    set(_tests_have ${TESTS_EHA})
+    list(SORT _tests_want)
+    list(SORT _tests_have)
+    if(NOT "${_tests_want}" STREQUAL "${_tests_have}")
         message(FATAL_ERROR
-            "[EHa guard] tests/CMakeLists.txt: these authorized translation units "
-            "no longer carry a /EHa block: ${_tests_missing}. Restore them.")
+            "[EHa guard] tests/CMakeLists.txt: authorized /EHa files are"
+            " [${_tests_want}] but found [${_tests_have}]. Restore the missing"
+            " block(s).")
     endif()
 endif()
 
@@ -330,6 +335,9 @@ endif()
 # /EHa property blocks and commented-out entries, which is how the first
 # version of this guard passed while a real manifest entry was deleted.
 set(GUARD_MODULES capture analysis ipc signal scan host)
+# Exclusions and why: child/ and ui/ are compiled into their own targets with
+# no unit_tests counterpart by design; utils/ is excluded because the tests
+# stub CrashLog via CommandParserStubs.cpp (tests/AGENTS.md).
 set(GUARD_EXCLUDED_DIRS child ui utils)
 
 # Slice tests/CMakeLists.txt down to the unit_tests target_sources block.
@@ -342,7 +350,12 @@ foreach(_line IN LISTS _tests_lines)
         continue()
     endif()
     if(_in_block)
-        if(_line MATCHES "^[ \t]*\\)")
+        # The closing paren usually shares a line with the last file
+        # ("ChildMeasureOrchestratorTests.cpp)"), so a line-anchored "\)"
+        # never fires and the slice would swallow the rest of the file —
+        # including the /EHa property blocks, which is how a deleted manifest
+        # entry still matched. Accept a trailing paren anywhere on the line.
+        if(_line MATCHES "\\)[ \t]*$")
             set(_in_block FALSE)
             continue()
         endif()
@@ -358,6 +371,15 @@ if(_tests_manifest STREQUAL "")
         " tests/CMakeLists.txt — the guard cannot verify the dual-compile"
         " contract. Fix the guard rather than removing it.")
 endif()
+# Self-check: if the slice ran past the block it would contain the /EHa
+# property calls below it, and every path would match itself. Refuse to
+# report success on a slice that swallowed them.
+if(_tests_manifest MATCHES "set_source_files_properties")
+    message(FATAL_ERROR
+        "[Dual-compile guard] The target_sources(unit_tests ...) slice contains"
+        " set_source_files_properties lines — the slice ran past the closing"
+        " paren and the guard would pass on any path. Fix the guard.")
+endif()
 
 # Same slice for the root PluginLab target_sources, to check the other direction.
 file(STRINGS "${CMAKE_CURRENT_LIST_FILE}" _root_lines)
@@ -369,7 +391,7 @@ foreach(_line IN LISTS _root_lines)
         continue()
     endif()
     if(_in_block)
-        if(_line MATCHES "^[ \t]*\\)")
+        if(_line MATCHES "\\)[ \t]*$")
             set(_in_block FALSE)
             continue()
         endif()
@@ -381,7 +403,10 @@ endforeach()
 
 set(DUAL_COMPILE_MISSING "")
 foreach(_mod IN LISTS GUARD_MODULES)
-    file(GLOB _mod_cpps "${CMAKE_CURRENT_SOURCE_DIR}/source/${_mod}/*.cpp")
+    # CONFIGURE_DEPENDS: a newly added .cpp must re-run configure, otherwise
+    # the "new file missing from a manifest" case is never checked locally.
+    file(GLOB _mod_cpps CONFIGURE_DEPENDS
+         "${CMAKE_CURRENT_SOURCE_DIR}/source/${_mod}/*.cpp")
     foreach(_cpp IN LISTS _mod_cpps)
         file(RELATIVE_PATH _rel "${CMAKE_CURRENT_SOURCE_DIR}" "${_cpp}")
         file(TO_CMAKE_PATH "${_rel}" _rel)
