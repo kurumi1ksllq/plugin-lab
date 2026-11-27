@@ -2,7 +2,7 @@
   "issue": 94,
   "grade": "standard",
   "stage": "ci",
-  "updatedAt": "2026-11-27T14:00:00.000Z",
+  "updatedAt": "2026-11-27T14:20:00.000Z",
   "tickets": [
     {
       "id": 1,
@@ -21,10 +21,10 @@
     }
   ],
   "ci": {
-    "run": 4,
+    "run": 5,
     "max": 2,
     "status": "running",
-    "note": "python-tools job 全绿；build-and-test 为 Windows/MSVC C++ 构建，单次约 15-20 分钟。此前几次 run 因分支连续追加提交被 concurrency 取消（cancel-in-progress），非失败。"
+    "note": "python-tools job 每轮全绿（21-34s）。build-and-test 是 Windows/MSVC C++ 构建（单次约 40 分钟，与本改动无关）；分支连续追加提交触发 concurrency cancel-in-progress，前几次 run 因此被取消（取消 ≠ 失败）。最终一次 run 不再追加提交。"
   },
   "review": {
     "state": "done",
