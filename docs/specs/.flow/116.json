@@ -1,8 +1,8 @@
 {
   "issue": 116,
   "grade": "standard",
-  "stage": "dev",
-  "updatedAt": "2026-11-27T20:55:00+08:00",
+  "stage": "ci",
+  "updatedAt": "2026-11-27T21:05:00+08:00",
   "branch": "refactor/issue-116-loadplugin-parity",
   "tickets": [
     {
@@ -44,5 +44,6 @@
   "merge": {
     "authorized": false
   },
-  "notes": "生产逻辑零改动；只新增测试 + 一个测试编译定义。为何不抽 helper：child 主线程即消息线程（runDispatchLoopUntil 泵）vs host 专用线程 WaitableEvent 等待；失败语义不同（host: nullptr + 预防性黑名单 + 持久化；child: {\"ok\":false,\"error\":\"load timeout\"} 且不黑名单）。共享的只剩常量与文案，抽 helper 会引入跨进程/跨 TU 的新耦合面，收益低于契约测试。"
+  "notes": "生产逻辑零改动；只新增测试 + 一个测试编译定义。为何不抽 helper：child 主线程即消息线程（runDispatchLoopUntil 泵）vs host 专用线程 WaitableEvent 等待；失败语义不同（host: nullptr + 预防性黑名单 + 持久化；child: {\"ok\":false,\"error\":\"load timeout\"} 且不黑名单）。共享的只剩常量与文案，抽 helper 会引入跨进程/跨 TU 的新耦合面，收益低于契约测试。",
+  "pr": "https://github.com/kurumi1ksllq/plugin-lab/pull/132"
 }
