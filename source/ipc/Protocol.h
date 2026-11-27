@@ -52,6 +52,7 @@ namespace Protocol
         constexpr auto harmonic    = "harmonic";
         constexpr auto compression = "compression";
         constexpr auto grTimeline  = "gr_timeline";
+        constexpr auto stereoWidth = "stereo_width";  // MidSide 双激励（issue #104）
     }
 
     //==============================================================================

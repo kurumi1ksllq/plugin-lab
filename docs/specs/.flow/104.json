@@ -1,0 +1,65 @@
+{
+  "issue": 104,
+  "grade": "standard",
+  "stage": "ci-green",
+  "updatedAt": "2026-11-27T17:26:08.000Z",
+  "tickets": [
+    {
+      "id": 1,
+      "title": "TestStereoPlugin + signal 层声道极性(mono/mid/side)",
+      "state": "done"
+    },
+    {
+      "id": 2,
+      "title": "MeasurementSession stereoWidth + StereoAnalysis(MS 解码/ρ(f)/width)",
+      "state": "done"
+    },
+    {
+      "id": 3,
+      "title": "Export stereoWidthToJSON + dataset 块 + SPEC §14 schema",
+      "state": "done"
+    },
+    {
+      "id": 4,
+      "title": "IPC measure 类型 + 子进程 v1 显式拒绝",
+      "state": "done"
+    },
+    {
+      "id": 5,
+      "title": "GUI 第 5 个 PlotWidget(width/correlation 曲线)",
+      "state": "done"
+    },
+    {
+      "id": 6,
+      "title": "测试 StereoAnalysisTests/ExportTests/CommandParserTests",
+      "state": "done"
+    },
+    {
+      "id": 7,
+      "title": "PR + CI",
+      "state": "done"
+    }
+  ],
+  "ci": {
+    "run": 1,
+    "max": 2,
+    "status": "green"
+  },
+  "review": {
+    "state": "not-started",
+    "axes": 2
+  },
+  "merge": {
+    "authorized": false
+  },
+  "changes": [
+    {
+      "point": "本机无 cmake/MSVC，C++ 红绿循环裁剪为 CI 验证",
+      "reason": "AGENTS.md 已声明本机无 Windows 工具链；改动经自查(括号平衡/CMake 双登记/pragma once/U+FFFD=0)，编译与测试由 CI build-and-test 承担。"
+    },
+    {
+      "point": "GUI 用第 5 个 PlotWidget 实例而非新建 widget 类",
+      "reason": "复用既有 PlotWidget（Series/log X/autoFit 已够用），避免为单一类型新增 widget 类。改动只在 Main.cpp 装配层。"
+    }
+  ]
+}
