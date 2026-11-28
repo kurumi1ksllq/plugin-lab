@@ -1,0 +1,55 @@
+{
+  "issue": 106,
+  "grade": "standard",
+  "stage": "ci",
+  "updatedAt": "2026-11-27T13:50:55.824Z",
+  "tickets": [
+    {
+      "id": 1,
+      "title": "replica_proto.py 五类合成导出(SPEC schema)",
+      "state": "done"
+    },
+    {
+      "id": 2,
+      "title": "gap_report.py 差距报告 JSON+markdown+阶段归因",
+      "state": "done"
+    },
+    {
+      "id": 3,
+      "title": "测试 test_replica_proto / test_gap_report",
+      "state": "done"
+    },
+    {
+      "id": 4,
+      "title": "pytest 全绿(327 passed)",
+      "state": "done"
+    },
+    {
+      "id": 5,
+      "title": "PR #131 + CI",
+      "state": "done"
+    }
+  ],
+  "ci": {
+    "run": 1,
+    "max": 2,
+    "status": "unknown"
+  },
+  "review": {
+    "state": "running",
+    "axes": 2
+  },
+  "merge": {
+    "authorized": false
+  },
+  "changes": [
+    {
+      "point": "compare_all 扩展(compare_nonlinearity/compare_stereo)未做",
+      "reason": "轴1 指出 issue 要求此项。裁决:延后——gap_report 已覆盖同样的比较语义(按 SPEC 形状逐类型 diff + 归因),在 compare_all 里再实现一套会造成两处容差定义。建议另开 issue 统一 compare_all 与 gap_report 的容差来源。"
+    },
+    {
+      "point": "THD 容差 0.5 vs compare_all 的 20%",
+      "reason": "有意更严:replica 的 THD 是解析推导,不是测量,允许偏差应远小于实测对比。"
+    }
+  ]
+}
